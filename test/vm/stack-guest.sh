@@ -326,10 +326,15 @@ session_run() {
   printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin %s --noclear %%I $TERM\n' "$(id -un)" |
     sudo tee "$DROPIN" >/dev/null
   # Hyprland's own config, data and cache go to the work folder, not $HOME.
+  # dconf writes go through dconf-service, which D-Bus starts with the user's
+  # default environment, so XDG_CONFIG_HOME does not redirect them; an empty
+  # dconf profile (no user database) keeps the session from creating
+  # ~/.config/dconf/user. The Motanka session uses its own profile instead.
+  : >"$T/dconf-profile"
   cat >"$PROFILE" <<EOF
 if [ "\$(tty)" = /dev/tty1 ] && [ -x $PREFIX/bin/start-hyprland ]; then
   export XDG_CONFIG_HOME=$T/xdg/config XDG_DATA_HOME=$T/xdg/data XDG_STATE_HOME=$T/xdg/state XDG_CACHE_HOME=$T/xdg/cache
-  export PATH=$PREFIX/bin:\$PATH
+  export PATH=$PREFIX/bin:\$PATH DCONF_PROFILE=$T/dconf-profile
   exec $PREFIX/bin/start-hyprland --path $PREFIX/bin/Hyprland >$T/logs/start-hyprland.log 2>&1
 fi
 EOF
