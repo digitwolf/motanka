@@ -11,6 +11,7 @@ Build-Depends: debhelper-compat (= 13),
                pkgconf,
                binutils,
                libcli11-dev,
+               libdeflate-dev,
                libdrm-dev,
                libegl-dev,
                libgbm-dev,
@@ -25,6 +26,7 @@ Build-Depends: debhelper-compat (= 13),
                libunwind-dev,
                libwayland-dev,
                libxcb1-dev,
+               libxkbcommon-dev,
                libzstd-dev,
                motanka-qt6-dev,
                spirv-tools,
@@ -38,14 +40,21 @@ Vcs-Git: https://github.com/digitwolf/motanka.git
 Package: motanka-stack-shell
 Architecture: amd64
 Depends: motanka-qt6,
+         tesseract-ocr,
+         tesseract-ocr-eng,
+         wl-clipboard,
+         xdg-utils,
          ${shlibs:Depends},
          ${misc:Depends},
-Description: Hyprland stack for Motanka - desktop shell
+Description: Hyprland stack for Motanka - desktop shell and screenshot tool
  Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
  the Hyprland compositor with its companion programs and libraries at the
  versions upstream Omarchy expects, installed under /opt/motanka.
  .
  This package holds Quickshell, the QML desktop shell upstream Omarchy uses
- for its bar and menus, and the cpptrace library its crash handler needs.
- It runs on the Qt 6.12 in motanka-qt6 on both Ubuntu 24.04 and 26.04 and
- never loads Ubuntu's own Qt.
+ for its bar and menus, and the cpptrace library its crash handler needs;
+ omasnap, the screenshot and annotation tool upstream Omarchy runs for the
+ Print key, with layer-shell-qt, the Qt library it draws its capture overlay
+ with. They run on the Qt 6.12 in motanka-qt6 on both Ubuntu 24.04 and 26.04
+ and never load Ubuntu's own Qt. omasnap's menu entry is visible only in
+ the Motanka session.

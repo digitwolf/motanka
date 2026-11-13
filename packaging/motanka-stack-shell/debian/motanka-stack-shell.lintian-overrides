@@ -1,9 +1,11 @@
 # The Stack lives in /opt/motanka by design (DESIGN.md, "Linux practices"),
 # so it never shadows a host package.
 dir-or-file-in-opt
-# Quickshell finds libcpptrace and the Stack's Qt (and, on 24.04, GCC 16's
-# C++ runtime) through RUNPATH /opt/motanka/lib instead of ld.so.conf.d or
+# Quickshell, omasnap and layer-shell-qt's plugins find libcpptrace,
+# libLayerShellQtInterface and the Stack's Qt (and, on 24.04, GCC 16's C++
+# runtime) through RUNPATH /opt/motanka/lib instead of ld.so.conf.d or
 # LD_LIBRARY_PATH, which would leak into programs outside the Stack.
 custom-library-search-path
-# libcpptrace is a private library of the shell, not a library package.
+# libcpptrace and libLayerShellQtInterface are private libraries of the
+# shell and of omasnap, not library packages.
 package-name-doesnt-match-sonames

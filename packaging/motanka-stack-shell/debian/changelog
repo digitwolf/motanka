@@ -6,5 +6,13 @@ motanka-stack-shell (0.1.0-1) UNRELEASED; urgency=medium
   * Build and run against motanka-qt6 (Qt 6.12) on both 24.04 and 26.04;
     drop the 26.04 Conflicts on motanka-qt6 and the archive Qt packages.
     Depend on exactly the motanka-qt6 version built against.
+  * Add omasnap 1.26.2, Upstream's screenshot tool, and layer-shell-qt 6.8.3
+    built against motanka-qt6, with extra-cmake-modules 6.32.0 and, on
+    24.04, CMake 4.5.0 at build time only. omasnap takes its ext-image
+    protocol files from the staged wayland-protocols 1.50 (new patch
+    omasnap-wayland-protocols-dir.patch) and runs its smoke suite offscreen
+    during the build. Its menu entry and icon go under /opt/motanka/share,
+    the font and icon licences to /usr/share/doc/motanka-stack-shell/omasnap.
+    Depend on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and xdg-utils.
 
  -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

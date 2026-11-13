@@ -1,7 +1,8 @@
 # The orig-<component> tarballs are upstream release tarballs and tag
 # archives, used unmodified and pinned by SHA-256 in
-# stack/shell-components.tsv. Their test data and documentation are not
-# rebuilt from source because nothing from them is built or shipped.
+# stack/shell-components.tsv. Their test data, documentation and bundled
+# third-party trees (for example CMake's test suite) are not rebuilt from
+# source because nothing from them is built or shipped.
 source-is-missing
 source-contains-prebuilt-binary
 source-contains-prebuilt-windows-binary
@@ -9,3 +10,10 @@ source-contains-prebuilt-javascript-object
 source-contains-prebuilt-wasm-binary
 source-contains-prebuilt-doxygen-documentation
 very-long-line-length-in-source-file
+# The CMake tarball (built at build time only, for noble) carries the same
+# prebuilt test and documentation files as in motanka-stack, whose source
+# overrides list them too, and CMakeCache.txt files as test fixtures.
+source-contains-prebuilt-java-object
+source-contains-prebuilt-ms-help-file
+source-contains-prebuilt-sphinx-documentation
+source-contains-cmake-cache-file [cmake/Tests/*]

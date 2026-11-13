@@ -4,6 +4,7 @@
 # chroot. Structured like packaging/motanka-stack/debian/stack-build.sh.
 #
 # Usage: bash debian/shell-build.sh build   <suite>
+#        bash debian/shell-build.sh test    <suite>
 #        bash debian/shell-build.sh install <suite>
 #        bash debian/shell-build.sh shlibs  <suite> <debian-version>
 #
@@ -11,7 +12,9 @@
 #          order, with GCC 16 and prefix /opt/motanka: wayland (noble,
 #          build time only), wayland-protocols (build time only), cpptrace
 #          (shared, libunwind, with the bundled libdwarf-lite source
-#          instead of a git fetch) and Quickshell.
+#          instead of a git fetch), Quickshell, CMake (noble, build time
+#          only, into debian/shell-build/tools), extra-cmake-modules (build
+#          time only), layer-shell-qt and omasnap.
 #          Each is configured out of tree in debian/shell-build/build/<name>,
 #          installed with DESTDIR into debian/shell-build/dest/<name> and
 #          merged into the staging tree debian/shell-build/stage, where the
@@ -21,12 +24,24 @@
 #          both suites; the build stops if the archive's Qt development
 #          files are in the chroot. Installed binaries carry only RUNPATH
 #          /opt/motanka/lib (from LDFLAGS; CMake's rpath handling is off).
-#          A finished component leaves a stamp.
-# install  copies the shipped files of cpptrace and Quickshell into
-#          debian/motanka-stack-shell/opt/motanka, leaving out headers, .pc
-#          and CMake files, static libraries and build-only data, and
-#          checks that every Qt library they load resolves from
-#          /opt/motanka/lib.
+#          A finished component leaves a stamp. extra-cmake-modules,
+#          layer-shell-qt and omasnap are configured with the CMake built
+#          into debian/shell-build/tools when it exists (noble) and with
+#          the archive's CMake otherwise (resolute); cpptrace and Quickshell
+#          always use the archive's CMake.
+# test     runs omasnap's smoke suite (ctest in its build folder) as
+#          Upstream's PKGBUILD check() does: QT_QPA_PLATFORM=offscreen, a
+#          private XDG_RUNTIME_DIR, and HOME, XDG_* and TMPDIR in a
+#          throwaway folder. A failing test fails the build. The suite's
+#          clang-tidy test (omasnap_lint) exists only when run-clang-tidy
+#          is installed, which the chroot does not have.
+# install  copies the shipped files of cpptrace, Quickshell, layer-shell-qt
+#          and omasnap into debian/motanka-stack-shell/opt/motanka, leaving
+#          out headers, .pc and CMake files, static libraries and build-only
+#          data, puts omasnap's font and icon licence files in
+#          /usr/share/doc/motanka-stack-shell/omasnap, and checks that
+#          every Qt library the shipped programs, libraries and plugins
+#          load resolves from /opt/motanka/lib.
 # shlibs   writes debian/shlibs.local: the libraries this package ships
 #          (libcpptrace) and every library that installed Motanka packages
 #          put in /opt/motanka/lib (motanka-qt6; on noble also
@@ -44,6 +59,7 @@ PREFIX=/opt/motanka
 TOP=$(pwd)
 W=$TOP/debian/shell-build
 STAGE=$W/stage
+TOOLS=$W/tools
 PCDIR=$W/pkgconfig
 BUILD=$W/build
 DEST=$W/dest
@@ -52,6 +68,31 @@ TSV=$TOP/stack/shell-components.tsv
 PKG=motanka-stack-shell
 PKG_QT=motanka-qt6
 TRIPLET_LIBDIR=/usr/lib/x86_64-linux-gnu
+# Components configured with the CMake from the cmake component when it is
+# built (noble): extra-cmake-modules needs CMake 3.30.
+NEW_CMAKE_COMPONENTS=(extra-cmake-modules layer-shell-qt omasnap)
+# The wayland-protocols files omasnap generates code from.
+OMASNAP_PROTOCOLS=(
+  staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml
+  staging/ext-image-capture-source/ext-image-capture-source-v1.xml
+  staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml
+)
+# Shipped files the package must contain (relative to /opt/motanka), and
+# the ELF files whose Qt libraries must resolve from /opt/motanka/lib.
+REQUIRED_FILES=(
+  bin/quickshell
+  bin/omasnap
+  lib/libLayerShellQtInterface.so.6
+  lib/qt6/plugins/wayland-shell-integration/liblayer-shell.so
+  lib/qt6/qml/org/kde/layershell/qmldir
+  share/applications/omasnap.desktop
+  share/icons/hicolor/scalable/apps/omasnap.svg
+)
+QT_CHECKED_FILES=(
+  bin/quickshell
+  bin/omasnap
+  lib/qt6/plugins/wayland-shell-integration/liblayer-shell.so
+)
 
 C_NAME=()
 C_VERSION=()
@@ -156,11 +197,33 @@ check_no_archive_qt() {
   done
 }
 
+# cmake_for <name>: prints the cmake program that configures the component.
+# A component of NEW_CMAKE_COMPONENTS gets the CMake built into $TOOLS when
+# it exists; on noble it must exist, because noble's CMake 3.28 is too old.
+# Every other component gets the archive's CMake.
+cmake_for() {
+  local c
+  for c in "${NEW_CMAKE_COMPONENTS[@]}"; do
+    [[ $c == "$1" ]] || continue
+    if [[ -x $TOOLS/bin/cmake ]]; then
+      printf '%s\n' "$TOOLS/bin/cmake"
+      return 0
+    fi
+    if [[ $SUITE == noble ]]; then
+      die "$1 needs the CMake of the cmake component on noble, but $TOOLS/bin/cmake is missing; the cmake line must come before $1 in stack/shell-components.tsv"
+    fi
+    break
+  done
+  command -v cmake || die "cmake is missing (Build-Depends)"
+}
+
 # build_cmake <name> <src> [cmake args...]
 build_cmake() {
-  local name=$1 src=$2
+  local name=$1 src=$2 cm
   shift 2
-  cmake -S "$src" -B "$BUILD/$name" -G Ninja \
+  cm=$(cmake_for "$name")
+  log "$name: configuring with $cm ($("$cm" --version | head -n 1))"
+  "$cm" -S "$src" -B "$BUILD/$name" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -175,8 +238,39 @@ build_cmake() {
     -DBUILD_TESTING=OFF \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
     "$@"
-  cmake --build "$BUILD/$name" -j "$JOBS"
-  DESTDIR="$DEST/$name" cmake --install "$BUILD/$name"
+  "$cm" --build "$BUILD/$name" -j "$JOBS"
+  DESTDIR="$DEST/$name" "$cm" --install "$BUILD/$name"
+}
+
+# build_cmake_tool <name> <src>: CMake itself, with the release's CMake and
+# compiler, into the build-only prefix debian/shell-build/tools (as in
+# packaging/motanka-stack/debian/stack-build.sh).
+build_cmake_tool() {
+  local name=$1 src=$2
+  env -u LDFLAGS -u LD_LIBRARY_PATH CC=gcc CXX=g++ CFLAGS=-O2 CXXFLAGS=-O2 \
+    /usr/bin/cmake -S "$src" -B "$BUILD/$name" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$TOOLS" \
+    -DBUILD_TESTING=OFF \
+    -DCMAKE_USE_OPENSSL=OFF \
+    -DBUILD_CursesDialog=OFF \
+    -DBUILD_QtDialog=OFF \
+    -DSPHINX_MAN=OFF -DSPHINX_HTML=OFF
+  env -u LD_LIBRARY_PATH ninja -C "$BUILD/$name" -j "$JOBS"
+  env -u LD_LIBRARY_PATH ninja -C "$BUILD/$name" install
+  "$TOOLS/bin/cmake" --version | head -n 1 >&2
+}
+
+# check_omasnap_sources: the protocol-folder patch is applied to omasnap's
+# CMake file and the staged wayland-protocols has every XML file omasnap
+# generates code from.
+check_omasnap_sources() {
+  local dir=$STAGE$PREFIX/share/wayland-protocols p
+  grep -q 'OMASNAP_WAYLAND_PROTOCOLS_DIR' "$TOP/omasnap/CMakeLists.txt" ||
+    die "omasnap/CMakeLists.txt has no OMASNAP_WAYLAND_PROTOCOLS_DIR; debian/patches/omasnap-wayland-protocols-dir.patch is not applied"
+  for p in "${OMASNAP_PROTOCOLS[@]}"; do
+    [[ -f $dir/$p ]] || die "$dir/$p is missing; wayland-protocols must be staged before omasnap"
+  done
 }
 
 # build_meson <name> <src> [meson args...]
@@ -261,6 +355,33 @@ build_one() {
         -DINSTALL_QML_PREFIX=lib/qt6/qml \
         -DSERVICE_GREETD=OFF
       ;;
+    cmake)
+      # noble only, build time only: not staged, not shipped.
+      [[ $build == cmake-tool ]] || die "cmake must have build 'cmake-tool'"
+      build_cmake_tool "$name" "$src"
+      return 0
+      ;;
+    extra-cmake-modules)
+      build_cmake "$name" "$src" -DBUILD_DOC=OFF
+      ;;
+    layer-shell-qt)
+      # Qt's own plugin and QML folders below /opt/motanka/lib/qt6, where
+      # motanka-qt6's Qt looks (relative to libQt6Core), named explicitly
+      # instead of asking qtpaths.
+      build_cmake "$name" "$src" \
+        -DKDE_INSTALL_USE_QT_SYS_PATHS=OFF \
+        -DKDE_INSTALL_LIBDIR=lib \
+        -DKDE_INSTALL_QTPLUGINDIR=lib/qt6/plugins \
+        -DKDE_INSTALL_QMLDIR=lib/qt6/qml
+      ;;
+    omasnap)
+      check_omasnap_sources
+      # The version comes from -DOMASNAP_VERSION: the source folder is
+      # omasnap/, not omasnap-<version>/, and has no .git.
+      build_cmake "$name" "$src" \
+        -DOMASNAP_VERSION="$version" \
+        -DOMASNAP_WAYLAND_PROTOCOLS_DIR="$STAGE$PREFIX/share/wayland-protocols"
+      ;;
     *) die "no recipe for component $name" ;;
   esac
   post_install "$name"
@@ -301,7 +422,37 @@ cmd_build() {
     touch "$STAMPS/${C_NAME[$i]}"
   done
   [[ -x $STAGE$PREFIX/bin/quickshell ]] || die "Quickshell installed no bin/quickshell"
+  [[ -x $STAGE$PREFIX/bin/omasnap ]] || die "omasnap installed no bin/omasnap"
   log "all components built for $SUITE"
+}
+
+# cmd_test: omasnap's smoke suite, as in Upstream's PKGBUILD check().
+cmd_test() {
+  local cm ct t=$W/test rc=0
+  [[ -e $STAMPS/omasnap && -d $BUILD/omasnap ]] || die "omasnap was not built; run the build step first"
+  set_env
+  cm=$(cmake_for omasnap)
+  ct=${cm%/*}/ctest
+  [[ -x $ct ]] || die "$ct is missing (it comes with $cm)"
+  if ! command -v run-clang-tidy >/dev/null; then
+    log "omasnap_lint (clang-tidy static analysis) is not part of this run: run-clang-tidy is not installed in the chroot"
+  fi
+  rm -rf -- "$t"
+  mkdir -p "$t/home" "$t/tmp" "$t/runtime"
+  chmod 0700 "$t/runtime"
+  # The suite fsyncs its working files and waits at most 5 s for them; flush
+  # the build's dirty pages first, as the PKGBUILD does.
+  sync
+  log "running omasnap's smoke suite with $ct"
+  env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+    HOME="$t/home" XDG_CONFIG_HOME="$t/home/.config" XDG_DATA_HOME="$t/home/.local/share" \
+    XDG_STATE_HOME="$t/home/.local/state" XDG_CACHE_HOME="$t/home/.cache" \
+    TMPDIR="$t/tmp" XDG_RUNTIME_DIR="$t/runtime" \
+    QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 \
+    "$ct" --test-dir "$BUILD/omasnap" --output-on-failure --no-tests=error || rc=$?
+  rm -rf -- "$t"
+  ((rc == 0)) || die "omasnap's smoke suite failed (ctest exit $rc)"
+  log "omasnap's smoke suite passed"
 }
 
 # --- packaging --------------------------------------------------------------
@@ -311,6 +462,7 @@ excluded() {
   local r=$1
   case $r in
     include/* | lib/pkgconfig/* | share/pkgconfig/* | lib/cmake/* | share/cmake/*) return 0 ;;
+    lib/qt6/metatypes/* | lib/qt6/modules/* | share/ECM/*) return 0 ;;
     *.a | *.la) return 0 ;;
     share/wayland-protocols/* | share/doc/* | share/man/* | share/licenses/*) return 0 ;;
     */__pycache__/* | *.pyc) return 0 ;;
@@ -327,33 +479,75 @@ is_elf() {
 
 # check_qt_resolution: every Qt library that a shipped ELF loads, directly
 # or through another library, resolves from /opt/motanka/lib (motanka-qt6,
-# installed in the chroot), never from the archive.
+# installed in the chroot), never from the archive. ldd gets the package's
+# own lib folder in LD_LIBRARY_PATH, so libraries of this package
+# (libLayerShellQtInterface, libcpptrace), which are not installed in the
+# chroot, resolve too and the Qt libraries they load are checked as well;
+# libLayerShellQt* must resolve from the package. Qt libraries are not in
+# that folder, so for them ldd falls through to RUNPATH /opt/motanka/lib.
+# Every file of QT_CHECKED_FILES must be among the checked ones, and so must
+# a file of the org.kde.layershell QML module.
 check_qt_resolution() {
-  local f dyn line target n=0 bad=0
+  local f dyn line lib target want rel pkglib=$TOP/debian/$PKG$PREFIX/lib n=0 bad=0 qml=0
+  local -A seen=()
   while IFS= read -r -d '' f; do
     is_elf "$f" || continue
     dyn=$(readelf -d "$f" 2>/dev/null || true)
-    grep -q '(NEEDED).*\[libQt6' <<<"$dyn" || continue
+    grep -qE '\(NEEDED\).*\[lib(Qt6|LayerShellQt)' <<<"$dyn" || continue
+    rel=${f#"$TOP/debian/$PKG$PREFIX/"}
+    seen["$rel"]=1
+    if [[ $rel == lib/qt6/qml/org/kde/layershell/* ]]; then
+      qml=$((qml + 1))
+    fi
     n=$((n + 1))
     while IFS= read -r line; do
-      [[ $line == *libQt6* ]] || continue
+      [[ $line == *libQt6* || $line == *libLayerShellQt* ]] || continue
+      lib=${line%%=>*}
+      lib=${lib//[[:space:]]/}
       if [[ $line == *"not found"* ]]; then
-        log "${f#"$TOP"/}: Qt library not found: ${line//[[:space:]]/ }"
+        log "$rel: library not found: $lib"
         bad=$((bad + 1))
         continue
       fi
       [[ $line == *" => "* ]] || continue
       target=${line#*=> }
       target=${target%% (*}
-      if [[ $target != "$PREFIX/lib/"* ]]; then
-        log "${f#"$TOP"/}: loads ${line%% =>*} from $target, not from $PREFIX/lib"
+      if [[ $lib == libLayerShellQt* ]]; then
+        want=$pkglib/
+      else
+        want=$PREFIX/lib/
+      fi
+      if [[ $target != "$want"* ]]; then
+        log "$rel: loads $lib from $target, not from ${want%/}"
         bad=$((bad + 1))
       fi
-    done < <(env -u LD_LIBRARY_PATH ldd "$f" 2>&1 || true)
+    done < <(env LD_LIBRARY_PATH="$pkglib" ldd "$f" 2>&1 || true)
   done < <(find "$TOP/debian/$PKG$PREFIX" -type f -print0)
-  ((n > 0)) || die "no shipped ELF loads a Qt library; expected at least bin/quickshell"
-  ((bad == 0)) || die "$bad Qt librar(y/ies) of $PKG resolve outside $PREFIX/lib"
+  for rel in "${QT_CHECKED_FILES[@]}"; do
+    [[ -n ${seen["$rel"]:-} ]] || die "$rel is missing from $PKG or loads no Qt library, so its Qt libraries were not checked"
+  done
+  ((qml > 0)) || die "no ELF of the org.kde.layershell QML module (lib/qt6/qml/org/kde/layershell) loads Qt"
+  ((bad == 0)) || die "$bad librar(y/ies) of $PKG resolve from the wrong place"
   log "$n ELF files load Qt, all of it from $PREFIX/lib"
+}
+
+# install_omasnap_licences: omasnap's CMake installs the licences of the
+# fonts and icons built into its binary (Neucha, JetBrains Mono and Inter
+# under OFL-1.1, Lucide under ISC) in share/licenses/omasnap, which
+# excluded() leaves out of /opt/motanka; they go to the package's doc folder
+# instead (debian/copyright points there).
+install_omasnap_licences() {
+  local src=$DEST/omasnap$PREFIX/share/licenses/omasnap doc=$TOP/debian/$PKG/usr/share/doc/$PKG/omasnap f n=0
+  rm -rf -- "$doc"
+  [[ -d $src ]] || die "omasnap installed no licence files in $PREFIX/share/licenses/omasnap"
+  install -d "$doc"
+  for f in "$src"/*; do
+    [[ -f $f ]] || continue
+    install -m 0644 "$f" "$doc/"
+    n=$((n + 1))
+  done
+  ((n > 0)) || die "$src holds no licence file"
+  log "omasnap: $n licence files in /usr/share/doc/$PKG/omasnap"
 }
 
 cmd_install() {
@@ -376,8 +570,12 @@ cmd_install() {
     done < <(cd "$d$PREFIX" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\0' | LC_ALL=C sort -z)
     log "$name: $n files"
   done
-  [[ -x $TOP/debian/$PKG$PREFIX/bin/quickshell ]] || die "$PKG would not ship bin/quickshell"
+  for rel in "${REQUIRED_FILES[@]}"; do
+    f=$TOP/debian/$PKG$PREFIX/$rel
+    [[ -e $f || -L $f ]] || die "$PKG would not ship $PREFIX/$rel"
+  done
   compgen -G "$TOP/debian/$PKG$PREFIX/lib/libcpptrace.so.*" >/dev/null || die "$PKG would not ship libcpptrace"
+  install_omasnap_licences
 
   while IFS= read -r -d '' f; do
     is_elf "$f" || continue
@@ -451,7 +649,7 @@ cmd_shlibs() {
 }
 
 main() {
-  (($# >= 2)) || die "usage: bash debian/shell-build.sh <build|install|shlibs> <suite> [version]"
+  (($# >= 2)) || die "usage: bash debian/shell-build.sh <build|test|install|shlibs> <suite> [version]"
   local cmd=$1
   SUITE=$2
   case $SUITE in
@@ -461,10 +659,14 @@ main() {
   read_components
   case $cmd in
     build) cmd_build ;;
+    test) cmd_test ;;
     install) cmd_install ;;
     shlibs) cmd_shlibs "${3:-}" ;;
     *) die "unknown command '$cmd'" ;;
   esac
 }
 
-main "$@"
+# Sourced by test/unit/shell-build.bats for its functions; run otherwise.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

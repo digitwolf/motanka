@@ -203,6 +203,57 @@ cfield() {
   [[ $(cfield "$SHELL_TSV_REL" wayland 7) == - ]]
 }
 
+@test "the shell builds omasnap 1.26.2, layer-shell-qt 6.8.3 and extra-cmake-modules 6.32.0 from pinned tarballs" {
+  [[ $(cfield "$SHELL_TSV_REL" omasnap 2) == 1.26.2 ]]
+  [[ $(cfield "$SHELL_TSV_REL" omasnap 3) == https://github.com/omacom/omasnap/archive/refs/tags/v1.26.2.tar.gz ]]
+  [[ $(cfield "$SHELL_TSV_REL" omasnap 4) == e173edd4f2e797273c967513f24c360b6f00733792b9708757a82c39fbc43bf9 ]]
+  [[ $(cfield "$SHELL_TSV_REL" layer-shell-qt 2) == 6.8.3 ]]
+  [[ $(cfield "$SHELL_TSV_REL" layer-shell-qt 3) == https://download.kde.org/stable/plasma/6.8.3/layer-shell-qt-6.8.3.tar.xz ]]
+  [[ $(cfield "$SHELL_TSV_REL" layer-shell-qt 4) == af3e56be10eb95a5993600449d6c811a08d491f7905c40a1203040b5baf98f9e ]]
+  [[ $(cfield "$SHELL_TSV_REL" extra-cmake-modules 2) == 6.32.0 ]]
+  [[ $(cfield "$SHELL_TSV_REL" extra-cmake-modules 3) == https://download.kde.org/stable/frameworks/6.32/extra-cmake-modules-6.32.0.tar.xz ]]
+  [[ $(cfield "$SHELL_TSV_REL" extra-cmake-modules 4) == 305f4e2b82eb073be6ac3e50ace85578b3c0c409be262ccc51d445449e3d9312 ]]
+  local c
+  for c in extra-cmake-modules layer-shell-qt omasnap; do
+    [[ $(cfield "$SHELL_TSV_REL" "$c" 5) == cmake ]] || fail "$c is not a cmake build"
+    [[ $(cfield "$SHELL_TSV_REL" "$c" 6) == both ]] || fail "$c is not built for both releases"
+  done
+  [[ $(cfield "$SHELL_TSV_REL" omasnap 7) == motanka-stack-shell ]]
+  [[ $(cfield "$SHELL_TSV_REL" layer-shell-qt 7) == motanka-stack-shell ]]
+  [[ $(cfield "$SHELL_TSV_REL" extra-cmake-modules 7) == - ]]
+}
+
+@test "the noble shell build compiles the Stack's CMake, build time only" {
+  local c
+  for c in 2 3 4 5; do
+    [[ $(cfield "$SHELL_TSV_REL" cmake "$c") == "$(field cmake "$c")" ]] ||
+      fail "column $c differs from stack/components.tsv"
+  done
+  [[ $(cfield "$SHELL_TSV_REL" cmake 5) == cmake-tool ]]
+  [[ $(cfield "$SHELL_TSV_REL" cmake 6) == noble ]]
+  [[ $(cfield "$SHELL_TSV_REL" cmake 7) == - ]]
+}
+
+# sline_of <name>: line number of a component in shell-components.tsv.
+sline_of() {
+  awk -F'\t' -v n="$1" '$1 == n { print NR }' "$REPO/$SHELL_TSV_REL"
+}
+
+@test "omasnap's build dependencies come before it in shell-components.tsv" {
+  local -a chain=(cmake extra-cmake-modules layer-shell-qt omasnap)
+  local i
+  for ((i = 1; i < ${#chain[@]}; i++)); do
+    (($(sline_of "${chain[i - 1]}") < $(sline_of "${chain[i]}"))) || fail "${chain[i - 1]} is listed after ${chain[i]}"
+  done
+  (($(sline_of wayland-protocols) < $(sline_of layer-shell-qt))) || fail "wayland-protocols is listed after layer-shell-qt"
+  (($(sline_of wayland) < $(sline_of layer-shell-qt))) || fail "wayland is listed after layer-shell-qt"
+}
+
+@test "the Package_Map gives omasnap to motanka-stack-shell" {
+  run grep -A1 -x 'omasnap:' "$REPO/packages.yaml"
+  assert_output --partial '  all: {motanka: motanka-stack-shell, reason: "'
+}
+
 @test "--tsv is still accepted as the old name of --components" {
   run python3 "$FETCH" --tsv "$REPO/$QT6_TSV_REL" --check
   assert_success

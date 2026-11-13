@@ -47,7 +47,12 @@
 #            that environment, "fc-match monospace" (the family the bar asks
 #            for) gives JetBrainsMono Nerd Font from /opt/motanka/share/fonts;
 #            "hyprctl layers" has the wallpaper layer omarchy-background and
-#            the theme's background link points to an image; then a
+#            the theme's background link points to an image; "omasnap
+#            --capture-fullscreen --save", run as alice against her running
+#            compositor (no clicks: the fullscreen quick output skips the
+#            overlay), exits 0 and writes a PNG of the focused monitor's
+#            size, with its configuration, state and output in $AT/omasnap,
+#            outside her home folder; then a
 #            screenshot; "fc-list" of bob and of alice outside the session
 #            still has no JetBrainsMono Nerd Font; bob's home folder is
 #            unchanged and holds no Motanka file (6.8).
@@ -674,6 +679,76 @@ print(" ".join(sorted(set(walk(data)))))' <<<"$out")
   fi
 }
 
+# png_size <file>: prints "<width> <height>" from a PNG's IHDR chunk, or
+# fails when the file is not a PNG.
+png_size() {
+  local hex
+  hex=$(head -c 24 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  [[ ${hex:0:16} == 89504e470d0a1a0a && ${hex:24:8} == 49484452 ]] || return 1
+  printf '%d %d\n' "$((16#${hex:32:8}))" "$((16#${hex:40:8}))"
+}
+
+# check_omasnap_capture: omasnap captures alice's screen without any input.
+# --capture-fullscreen with --save is omasnap's instant output: it grabs the
+# focused monitor through ext-image-copy-capture before any overlay exists
+# and saves a PNG to [output] directory of omasnap.conf. XDG_CONFIG_HOME,
+# XDG_STATE_HOME, XDG_CACHE_HOME, XDG_DATA_HOME and OMASNAP_RECENT_DIR
+# point into $AT/omasnap, so nothing is written into alice's home folder.
+# PATH has only hyprctl from the Stack (for the monitor lookup) and the
+# system folders: omarchy-notification-send is not found, so no
+# notification is sent; omasnap only logs that.
+check_omasnap_capture() {
+  local sig sock o=$AT/omasnap rc=0 shot size want mon
+  sig=$(alice_sig)
+  sock=$(sudo find "$ART" -maxdepth 1 -type s -name 'wayland-*' -printf '%f\n' 2>/dev/null | sort | head -n 1)
+  if [[ -z $sig || -z $sock ]]; then
+    fail "omasnap: no Hyprland instance or Wayland socket for alice (signature '${sig:-none}', socket '${sock:-none}')"
+    return 0
+  fi
+  sudo rm -rf -- "$o"
+  sudo -u alice mkdir -p "$o/config/omasnap" "$o/state" "$o/cache" "$o/data" "$o/recent" "$o/out" "$o/bin"
+  sudo -u alice ln -s "$PREFIX/bin/hyprctl" "$o/bin/hyprctl"
+  printf '[output]\ndirectory=%s\n' "$o/out" | sudo -u alice tee "$o/config/omasnap/omasnap.conf" >/dev/null
+  as_alice env WAYLAND_DISPLAY="$sock" HYPRLAND_INSTANCE_SIGNATURE="$sig" \
+    PATH="$o/bin:/usr/bin:/bin" QT_QPA_PLATFORM=wayland LANG=C.UTF-8 \
+    XDG_CONFIG_HOME="$o/config" XDG_STATE_HOME="$o/state" XDG_CACHE_HOME="$o/cache" \
+    XDG_DATA_HOME="$o/data" OMASNAP_RECENT_DIR="$o/recent" \
+    timeout 60 "$PREFIX/bin/omasnap" --capture-fullscreen --save \
+    >"$L/omasnap-capture.log" 2>&1 || rc=$?
+  shot=$(sudo find "$o/out" -maxdepth 1 -type f -name '*.png' -print 2>/dev/null | head -n 1)
+  if ((rc != 0)); then
+    fail "omasnap --capture-fullscreen --save exited $rc in alice's session:"
+    tail -n 20 "$L/omasnap-capture.log" | show
+    return 0
+  fi
+  if [[ -z $shot ]]; then
+    fail "omasnap exited 0 but saved no PNG in $o/out:"
+    tail -n 20 "$L/omasnap-capture.log" | show
+    return 0
+  fi
+  sudo cp -f "$shot" "$L/omasnap-alice.png"
+  sudo chown "$(id -u):$(id -g)" "$L/omasnap-alice.png"
+  if ! size=$(png_size "$L/omasnap-alice.png"); then
+    fail "omasnap saved ${shot##*/}, which is not a PNG"
+    return 0
+  fi
+  mon=$(as_alice env HYPRLAND_INSTANCE_SIGNATURE="$sig" "$PREFIX/bin/hyprctl" -j monitors 2>/dev/null || true)
+  want=$(python3 -c 'import json, sys
+try:
+    mons = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+focused = [m for m in mons if m.get("focused")] or mons
+if focused:
+    m = focused[0]
+    print(m.get("width", 0), m.get("height", 0))' <<<"$mon")
+  if [[ -n $want && ($size == "$want" || $size == "${want#* } ${want%% *}") ]]; then
+    pass "omasnap captured alice's screen without input: ${shot##*/}, ${size/ /x}, the focused monitor's size (copy: omasnap-alice.png)"
+  else
+    fail "omasnap's ${shot##*/} is ${size/ /x}, but the focused monitor is '${want:-unknown}'"
+  fi
+}
+
 phase_login() {
   mkdir -p "$L"
   start_alice_session || return 0
@@ -692,6 +767,7 @@ phase_login() {
   check_default_theme
   check_session_fonts
   check_wallpaper
+  check_omasnap_capture
   screenshot_alice
   echo "shell integration decision: $(sudo cat "$AHOME/.local/state/motanka/shell-integration" 2>/dev/null || echo 'none yet')"
   check_fonts_hidden after-login

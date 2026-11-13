@@ -1,6 +1,7 @@
 #!/usr/bin/make -f
-# Builds the components of stack/shell-components.tsv (cpptrace and
-# Quickshell, with wayland-protocols and libdwarf-lite at build time) for
+# Builds the components of stack/shell-components.tsv (cpptrace, Quickshell,
+# layer-shell-qt and omasnap, with wayland-protocols, libdwarf-lite,
+# extra-cmake-modules and, on noble, wayland and CMake at build time) for
 # the suite in the changelog (noble or resolute, stamped by
 # packaging/build.sh) with prefix /opt/motanka, into motanka-stack-shell.
 # The work is done by debian/shell-build.sh; see the comment at its top.
@@ -23,7 +24,11 @@ override_dh_auto_configure:
 override_dh_auto_build:
 	bash debian/shell-build.sh build $(DIST)
 
+# omasnap's smoke suite, offscreen (Upstream's PKGBUILD check()).
 override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	bash debian/shell-build.sh test $(DIST)
+endif
 
 override_dh_auto_install:
 	bash debian/shell-build.sh install $(DIST)
@@ -32,14 +37,14 @@ override_dh_dwz:
 
 # Libraries in /opt/motanka/lib are outside the ldconfig path: no ldconfig
 # trigger, no shipped shlibs file. debian/shlibs.local covers libcpptrace,
-# the libraries of motanka-qt6 (exact version: Qt private API) and, on
-# noble, those of motanka-stack-libs.
+# libLayerShellQtInterface, the libraries of motanka-qt6 (exact version: Qt
+# private API) and, on noble, those of motanka-stack-libs.
 override_dh_makeshlibs:
 	bash debian/shell-build.sh shlibs $(DIST) $(VERSION)
 
-# -x: no self-dependency for libcpptrace. -S: look in this package's tree
-# first. -l: the staging folder, so a staged but unshipped library fails
-# with "no dependency information".
+# -x: no self-dependency for libcpptrace and libLayerShellQtInterface. -S:
+# look in this package's tree first. -l: the staging folder, so a staged but
+# unshipped library fails with "no dependency information".
 override_dh_shlibdeps:
 	dh_shlibdeps -- -xmotanka-stack-shell \
 		-Sdebian/motanka-stack-shell -l$(STAGE_LIB)

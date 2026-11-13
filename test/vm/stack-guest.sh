@@ -3,7 +3,7 @@
 # user tester (passwordless sudo in the VM). Never run it on a real machine:
 # it installs and purges packages and configures tty1 autologin.
 #
-# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version>
+# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version>
 #
 # Work folder /tmp/motanka-stack-test (T): debs/ holds the Stack .debs
 # (motanka-stack, motanka-qt6 and motanka-stack-shell), debcheck is
@@ -22,7 +22,15 @@
 #            libstdc++ the Stack and its Qt use; the Stack's Qt is
 #            <qt-version> and has the WebP plugin; quickshell --version,
 #            and every Qt library ldd resolves for it comes from
-#            /opt/motanka; Ubuntu's hyprland and Qt packages unchanged.
+#            /opt/motanka; /opt/motanka/bin/omasnap exists, its --version
+#            (offscreen) prints "omasnap <omasnap-version>", every Qt
+#            library ldd resolves for it and for layer-shell-qt's plugin and
+#            QML module comes from /opt/motanka and libLayerShellQtInterface
+#            from /opt/motanka/lib; its menu entry and icon are under
+#            /opt/motanka/share and not in /usr/share; motanka-stack-shell
+#            depends on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and
+#            xdg-utils, which are installed; Ubuntu's hyprland and Qt
+#            packages unchanged.
 #   session  start /opt/motanka/bin/start-hyprland on tty1 through getty
 #            autologin; Hyprland runs from /opt/motanka, hyprctl lists
 #            Virtual-1, grim takes a screenshot, no process has
@@ -431,6 +439,100 @@ check_shell_install() {
   fi
 }
 
+# ldd_targets <elf>: prints every absolute path ldd resolves for the ELF.
+ldd_targets() {
+  local line target
+  while IFS= read -r line; do
+    [[ $line == *" => "* ]] || continue
+    target=${line#*=> }
+    target=${target%% (*}
+    if [[ $target == /* ]]; then
+      printf '%s\n' "$target"
+    fi
+  done < <(ldd "$1" 2>&1 || true)
+}
+
+# check_omasnap_install: omasnap and layer-shell-qt from motanka-stack-shell.
+check_omasnap_install() {
+  local bin=$PREFIX/bin/omasnap rt v rc=0 f d deps lsq
+  local plugin=$PREFIX/lib/qt6/plugins/wayland-shell-integration/liblayer-shell.so
+  local qml=$PREFIX/lib/qt6/qml/org/kde/layershell
+  local desktop=share/applications/omasnap.desktop icon=share/icons/hicolor/scalable/apps/omasnap.svg
+  local -a envs elves=()
+  if [[ -x $bin ]]; then
+    pass "$bin is installed"
+  else
+    fail "$bin is missing or not executable"
+    return
+  fi
+  mkdir -p "$T/xdg/config" "$T/xdg/data" "$T/xdg/state" "$T/xdg/cache"
+  : >"$T/dconf-profile"
+  mapfile -t envs < <(qs_env)
+  # --version exits while parsing the command line, after QApplication
+  # exists, so it needs a Qt platform: offscreen, with a private runtime
+  # folder.
+  rt=$(mktemp -d "$T/omasnap-runtime.XXXXXX")
+  v=$(env -i "${envs[@]}" XDG_RUNTIME_DIR="$rt" QT_QPA_PLATFORM=offscreen \
+    timeout 30 "$bin" --version 2>"$L/omasnap-version.err") || rc=$?
+  rm -rf -- "$rt"
+  if ((rc == 0)) && grep -qxF "omasnap $OMASNAP_VERSION" <<<"$v"; then
+    pass "omasnap --version prints 'omasnap $OMASNAP_VERSION'"
+  else
+    fail "omasnap --version printed '$v' (exit $rc), expected 'omasnap $OMASNAP_VERSION'"
+    show "$L/omasnap-version.err"
+  fi
+
+  for f in "$plugin" "$qml/qmldir"; do
+    if [[ -f $f ]]; then
+      pass "layer-shell-qt installed $f"
+    else
+      fail "$f is missing"
+    fi
+  done
+  elves=("$bin")
+  if [[ -f $plugin ]]; then
+    elves+=("$plugin")
+  fi
+  while IFS= read -r -d '' f; do
+    if is_elf "$f"; then
+      elves+=("$f")
+    fi
+  done < <(find "$qml" -type f -name '*.so' -print0 2>/dev/null)
+  ldd "$bin" >"$L/ldd-omasnap.txt" 2>&1 || true
+  for f in "${elves[@]}"; do
+    ldd_targets "$f"
+  done | LC_ALL=C sort -u >"$L/ldd-omasnap.paths"
+  check_qt_origin "ldd of omasnap and of layer-shell-qt's plugin and QML module (${#elves[@]} files)" "$L/ldd-omasnap.paths"
+  lsq=$(awk '$1 ~ /^libLayerShellQtInterface\.so/ { print $3 }' "$L/ldd-omasnap.txt")
+  if [[ $lsq == "$PREFIX/lib/"* ]]; then
+    pass "omasnap loads libLayerShellQtInterface from $lsq"
+  else
+    fail "omasnap resolves libLayerShellQtInterface to '${lsq:-nothing}', not from $PREFIX/lib"
+  fi
+
+  for f in "$desktop" "$icon"; do
+    if [[ -f $PREFIX/$f && $(dpkg-query -S "$PREFIX/$f" 2>/dev/null) == motanka-stack-shell:* ]]; then
+      pass "motanka-stack-shell ships $PREFIX/$f"
+    else
+      fail "$PREFIX/$f is missing or not owned by motanka-stack-shell"
+    fi
+    if [[ -e /usr/$f || -e /usr/local/$f ]]; then
+      fail "/usr/$f or /usr/local/$f exists; omasnap's entry must stay out of the system's data folders"
+    fi
+  done
+
+  # shellcheck disable=SC2016 # dpkg-query field
+  deps=$(dpkg-query -W -f='${Depends}' motanka-stack-shell 2>/dev/null || true)
+  for d in tesseract-ocr tesseract-ocr-eng wl-clipboard xdg-utils; do
+    # shellcheck disable=SC2016 # dpkg-query field
+    if [[ ", $deps," =~ ,\ ${d}[\ ,] && $(dpkg-query -W -f='${db:Status-Abbrev}' "$d" 2>/dev/null) == "ii " ]]; then
+      pass "motanka-stack-shell depends on $d, which is installed"
+    else
+      fail "motanka-stack-shell does not depend on $d, or it is not installed (Depends: $deps)"
+    fi
+  done
+}
+
 phase_install() {
   local p rc=0 v
   mkdir -p "$L"
@@ -463,6 +565,7 @@ phase_install() {
   check_cxx_runtime
   check_stack_qt
   check_shell_install
+  check_omasnap_install
   v=$("$PREFIX/bin/Hyprland" --version 2>&1 | head -n 3 || true)
   if grep -qF "$HYPR_VERSION" <<<"$v"; then
     pass "Hyprland --version reports $HYPR_VERSION"
@@ -862,8 +965,8 @@ set_pkgs() {
 }
 
 main() {
-  (($# == 5)) || {
-    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version>" >&2
+  (($# == 6)) || {
+    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version>" >&2
     exit 2
   }
   PHASE=$1
@@ -871,6 +974,7 @@ main() {
   HYPR_VERSION=$3
   QS_VERSION=$4
   QT_VERSION=$5
+  OMASNAP_VERSION=$6
   case $RELEASE in
     noble | resolute) ;;
     *)

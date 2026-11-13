@@ -45,6 +45,13 @@
 #     every Qt library ldd resolves for it, and every Qt library and plugin
 #     the running Quickshell maps, is under /opt/motanka on both releases
 #     (none is /usr/lib/x86_64-linux-gnu/libQt6*)
+#   - /opt/motanka/bin/omasnap --version reports the version in
+#     stack/shell-components.tsv; every Qt library ldd resolves for omasnap
+#     and for layer-shell-qt's library, plugin and QML module is under
+#     /opt/motanka, and libLayerShellQtInterface comes from /opt/motanka/lib;
+#     omasnap's menu entry is under /opt/motanka/share/applications, and
+#     motanka-stack-shell depends on tesseract-ocr, tesseract-ocr-eng,
+#     wl-clipboard and xdg-utils
 #   - in the running Hyprland session, Quickshell loads a config whose
 #     panel namespace comes from a function declaring `var native` (the
 #     Qt 6.10 grammar problem) and shows a magenta PanelWindow: hyprctl
@@ -108,6 +115,10 @@ qt_version=$(awk -F'\t' '$1 == "qtbase" { print $2 }' "$MV_REPO/stack/qt6-compon
 if [[ -z $qt_version ]]; then
   mv_die "stack/qt6-components.tsv has no qtbase line"
 fi
+omasnap_version=$(awk -F'\t' '$1 == "omasnap" { print $2 }' "$MV_REPO/stack/shell-components.tsv")
+if [[ -z $omasnap_version ]]; then
+  mv_die "stack/shell-components.tsv has no omasnap line"
+fi
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 # --- 1. the .debs -------------------------------------------------------------
@@ -164,7 +175,7 @@ mv_copy_to_vm "$tvm" "$stage" "$GUEST_T"
 # phase <name>: runs one guest phase, logs it and counts its checks.
 phase() {
   local name=$1 rc=0 f p
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" \
+  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" "$omasnap_version" \
     </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)

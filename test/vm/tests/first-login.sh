@@ -5,8 +5,9 @@
 # in a multiuser VM with a virgl GPU, log user alice into the Motanka
 # session through tty1 autologin, check her per-user setup, the Hyprland
 # configuration, the session's desktop names, the default theme, the
-# session's fonts and wallpaper, that the fonts stay invisible outside the
-# session, and that user bob's home folder did not change.
+# session's fonts and wallpaper, that omasnap captures her screen without
+# input, that the fonts stay invisible outside the session, and that user
+# bob's home folder did not change.
 #
 # Usage: test/vm/tests/first-login.sh     (test/run-all runs it)
 #

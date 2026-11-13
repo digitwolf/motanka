@@ -1,6 +1,8 @@
 Source of motanka-stack-shell: Quickshell 0.3.2, the desktop shell of
 upstream Omarchy v4.5.0, and cpptrace 1.0.4 (shared, with libunwind and a
-bundled libdwarf-lite), under /opt/motanka, for both suites.
+bundled libdwarf-lite); omasnap 1.26.2, Upstream's screenshot tool, and
+layer-shell-qt 6.8.3, the Qt library omasnap draws its capture overlay
+with. All under /opt/motanka, for both suites.
 
 The upstream tarballs are listed in stack/shell-components.tsv (imported by
 build-imports); test/vm/build fetches them with stack/fetch-sources
@@ -12,13 +14,46 @@ later, and both archives carry 6.10 (design.md, "Qt for both releases").
 motanka-qt6 and motanka-qt6-dev are locally built .debs, given to sbuild
 with --extra-package (sbuild-local), so packaging/motanka-qt6 must be built
 for the suite first. The build stops if the archive's Qt development files
-are in the chroot, and the packaged quickshell must resolve every Qt
-library from /opt/motanka/lib.
+are in the chroot, and every Qt library that quickshell, omasnap,
+libLayerShellQtInterface and layer-shell-qt's plugins load must resolve
+from /opt/motanka/lib.
   noble     also gets motanka-stack-libs (GCC 16's C++ runtime, which
             motanka-qt6 depends on there), so packaging/motanka-stack is
             built first too. GCC 16 comes from the toolchain PPA
-            (sbuild-repos).
-  resolute  the archive's GCC 16 and C++ runtime.
+            (sbuild-repos). extra-cmake-modules needs CMake 3.30 and noble
+            has 3.28, so the build first compiles the Stack's CMake 4.5.0
+            into debian/shell-build/tools and configures
+            extra-cmake-modules, layer-shell-qt and omasnap with it.
+  resolute  the archive's GCC 16, C++ runtime and CMake.
 
-Quickshell uses Qt's private API, so the package depends on exactly the
-motanka-qt6 version it was built against (debian/shell-build.sh shlibs).
+Quickshell and layer-shell-qt use Qt's private API, so the package depends
+on exactly the motanka-qt6 version it was built against
+(debian/shell-build.sh shlibs). The archive's layer-shell-qt cannot be used
+for the same reason: it is built against the archive's Qt.
+
+omasnap:
+  - debian/patches/omasnap-wayland-protocols-dir.patch makes the folder of
+    the wayland-protocols XML files a cache variable; the build points it
+    at the staged wayland-protocols 1.50 on both suites (24.04's 1.34 has
+    no ext-image-capture-source or ext-image-copy-capture).
+  - Its smoke suite (ctest) runs during the build with
+    QT_QPA_PLATFORM=offscreen and a private XDG_RUNTIME_DIR, as Upstream's
+    PKGBUILD does; DEB_BUILD_OPTIONS=nocheck skips it. Its clang-tidy test
+    is not run: the chroot has no run-clang-tidy.
+  - Installed files: /opt/motanka/bin/omasnap, its menu entry
+    /opt/motanka/share/applications/omasnap.desktop and icon
+    /opt/motanka/share/icons/hicolor/scalable/apps/omasnap.svg. Only the
+    Motanka session has /opt/motanka/share in XDG_DATA_DIRS, so other
+    sessions never list the entry. The licences of the fonts and icons
+    built into the binary are in /usr/share/doc/motanka-stack-shell/omasnap.
+  - At run time it calls hyprctl (motanka-stack-hyprland), wl-copy and
+    wl-paste, tesseract, xdg-open and omarchy-notification-send; the
+    package depends on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and
+    xdg-utils, as Upstream's package does. It captures the screen through
+    the compositor's ext-image-copy-capture-v1.
+
+layer-shell-qt ships libLayerShellQtInterface in /opt/motanka/lib, the Qt
+Wayland shell integration plugin in
+/opt/motanka/lib/qt6/plugins/wayland-shell-integration and the QML module
+org.kde.layershell in /opt/motanka/lib/qt6/qml, where motanka-qt6's Qt
+looks. Headers, CMake files and tests are not shipped.

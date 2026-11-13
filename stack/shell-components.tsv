@@ -1,7 +1,8 @@
 #@source motanka-stack-shell
 #@packages motanka-stack-shell
 # Upstream components of motanka-stack-shell: Quickshell, the desktop shell
-# of upstream Omarchy v4.5.0, and cpptrace, which its crash handler needs.
+# of upstream Omarchy v4.5.0, and cpptrace, which its crash handler needs;
+# omasnap, Upstream's screenshot tool, and layer-shell-qt, which it needs.
 #
 # Same format as stack/components.tsv (see the comment there). Built by
 # packaging/motanka-stack-shell/debian/shell-build.sh in file order, for
@@ -20,7 +21,9 @@
 #   wayland-protocols  build time only, the Stack's version (1.50, same
 #                      tarball and checksum as stack/components.tsv), so
 #                      Quickshell sees the same protocols as Hyprland on
-#                      both releases.
+#                      both releases. omasnap takes its ext-image-capture-
+#                      source and ext-image-copy-capture XML from here too:
+#                      noble's archive (1.34) has neither.
 #   libdwarf-lite      build "source": not built on its own. cpptrace's
 #                      CMake fetches it from git at configure time, which
 #                      the network-less sbuild chroot cannot do, so the
@@ -32,6 +35,30 @@
 #                      refuses it otherwise); libcpptrace ships in
 #                      motanka-stack-shell.
 #   quickshell         the GitHub mirror's tag; no git submodules.
+#   cmake              noble only, build time only, the Stack's CMake
+#                      (4.5.0, same tarball and checksum as
+#                      stack/components.tsv), built with noble's CMake 3.28
+#                      into debian/shell-build/tools. extra-cmake-modules
+#                      needs CMake 3.30. Only extra-cmake-modules,
+#                      layer-shell-qt and omasnap are configured with it;
+#                      cpptrace and Quickshell keep the archive's CMake.
+#                      resolute's own CMake is new enough.
+#   extra-cmake-modules  KDE's CMake modules (ECM), build time only:
+#                      layer-shell-qt needs ECM 6.30 or later.
+#   layer-shell-qt     KDE's Qt client library for wlr-layer-shell, built
+#                      against motanka-qt6: the archive's layer-shell-qt
+#                      uses Qt's private API of the archive's Qt (6.4 or
+#                      6.10) and cannot load with Qt 6.12. Ships
+#                      libLayerShellQtInterface, the Qt Wayland shell
+#                      integration plugin and the org.kde.layershell QML
+#                      module, all under /opt/motanka/lib.
+#   omasnap            Upstream's screenshot and annotation tool
+#                      (omacom/omasnap); Upstream's
+#                      bin/omarchy-capture-screenshot runs it. Its CMake
+#                      file names /usr/share/wayland-protocols; the patch
+#                      debian/patches/omasnap-wayland-protocols-dir.patch
+#                      makes that folder a cache variable, which the build
+#                      points at the staged wayland-protocols.
 #
 # Download, verify and pin: stack/fetch-sources --components stack/shell-components.tsv
 #
@@ -41,3 +68,7 @@ wayland-protocols	1.50	https://gitlab.freedesktop.org/wayland/wayland-protocols/
 libdwarf-lite	2.1.0	https://github.com/jeremy-rifkin/libdwarf-lite/archive/5dfb2cd2aacf2bf473e5bfea79e41289f88b3a5f.tar.gz	ba0f0325e671e5010acbff4a897cedfe29c7f71202a905ca4b10085cbb839e51	source	both	-
 cpptrace	1.0.4	https://github.com/jeremy-rifkin/cpptrace/archive/refs/tags/v1.0.4.tar.gz	5c9f5b301e903714a4d01f1057b9543fa540f7bfcc5e3f8bd1748e652e24f9ea	cmake	both	motanka-stack-shell
 quickshell	0.3.2	https://github.com/quickshell-mirror/quickshell/archive/refs/tags/v0.3.2.tar.gz	946a27e2a276917a03c1079e5c60971af84ece73088c3661dee455d92eb420f7	cmake	both	motanka-stack-shell
+cmake	4.5.0	https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0.tar.gz	424352d6133e8455e020da787008e8dc67abb18820af3532572ab35657e49213	cmake-tool	noble	-
+extra-cmake-modules	6.32.0	https://download.kde.org/stable/frameworks/6.32/extra-cmake-modules-6.32.0.tar.xz	305f4e2b82eb073be6ac3e50ace85578b3c0c409be262ccc51d445449e3d9312	cmake	both	-
+layer-shell-qt	6.8.3	https://download.kde.org/stable/plasma/6.8.3/layer-shell-qt-6.8.3.tar.xz	af3e56be10eb95a5993600449d6c811a08d491f7905c40a1203040b5baf98f9e	cmake	both	motanka-stack-shell
+omasnap	1.26.2	https://github.com/omacom/omasnap/archive/refs/tags/v1.26.2.tar.gz	e173edd4f2e797273c967513f24c360b6f00733792b9708757a82c39fbc43bf9	cmake	both	motanka-stack-shell

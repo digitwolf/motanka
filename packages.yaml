@@ -309,7 +309,7 @@ omarchy-nvim:
 omarchy-power-profiles-daemon:
   all: {skip: "Upstream repository package; port pending"}
 omasnap:
-  all: {skip: "Upstream repository package; port pending"}
+  all: {motanka: motanka-stack-shell, reason: "Stack build of omasnap with layer-shell-qt on the Stack's Qt 6.12 (motanka-qt6)"}
 omawrite:
   all: {skip: "Upstream repository package; port pending"}
 owe:
