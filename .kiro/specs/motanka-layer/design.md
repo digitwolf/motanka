@@ -163,14 +163,18 @@ flowchart TD
   B -->|held| X1[exit 9]
   B --> C{source suite == running release?}
   C -->|no| X2[exit 10, print 'sudo motanka doctor --fix']
-  C --> D[snapshot: Config_Archive, snapper pre if configured]
-  D --> E[apt-get update, simulate upgrade of motanka-*]
+  C --> E[apt-get update, simulate upgrade of motanka-*]
   E -->|Foreign change and no --system| X3[exit 5]
-  E --> F[apt-get install upgrades, ledger]
-  F --> G[per user at next login or now: run pending migrations]
+  E --> Y{--yes or confirmed?}
+  Y -->|no| X5[exit, nothing changed, no snapshot]
+  Y --> D[snapshot: Config_Archive, snapper pre if configured]
+  D --> F[apt-get install upgrades, ledger]
+  F --> G[invoking user now: run pending migrations]
   G -->|failure| X4[exit 8, name migration, keep snapshot]
   G --> I[snapper post, restart changed session units, exit 0]
 ```
+
+The snapshot is taken after the simulation and the confirmation (decided in task 21), so a refused or declined update leaves no snapshot and does not push an older one out of the three that are kept. The order 9.1 requires (snapshot, upgrade, migrations) holds. Only the invoking user's migrations run; other users' run when they run `sudo motanka update`, which the `omarchy-update` override makes Upstream's update menu item do. The system lock is held while migrations run, which is what makes 9.11 hold; migrations that would install packages through the Helper are therefore classified `n/a`.
 
 ## Components and Interfaces
 
@@ -232,7 +236,7 @@ motanka rollback [--dry-run] [--yes]
 motanka doctor   [--json] [--fix]
 ```
 
-`--i-know-this-is-not-a-vm` is accepted by `install`, `remove`, `update` and `rollback` on a Dev_Build only. `NO_COLOR` is honoured. The first install uses `install.sh`, published at the root of the Motanka_Repo together with `motanka-cli.tar.gz`, `SHA256SUMS` and `SHA256SUMS.gpg` (signed with the archive key, which the bootstrap embeds). It verifies the CLI tarball and then runs the same Installer code. `--dry-run` also needs root because it uses `/run/motanka`. A Host with no display manager installed gets a warning, not a failure (2.7 applies to a display manager that is present but cannot start Wayland sessions).
+`--i-know-this-is-not-a-vm` is accepted by `install`, `remove`, `update`, `rollback` and `doctor --fix` on a Dev_Build only (decided in task 24: `doctor --fix` changes the system, and testing.md requires the flag for every command that does). `NO_COLOR` is honoured. The first install uses `install.sh`, published at the root of the Motanka_Repo together with `motanka-cli.tar.gz`, `SHA256SUMS` and `SHA256SUMS.gpg` (signed with the archive key, which the bootstrap embeds). It verifies the CLI tarball and then runs the same Installer code. `--dry-run` also needs root because it uses `/run/motanka`. A Host with no display manager installed gets a warning, not a failure (2.7 applies to a display manager that is present but cannot start Wayland sessions).
 
 | Exit code | Meaning |
 |---|---|
@@ -337,16 +341,27 @@ sequenceDiagram
 
 ### Updater, snapshots and rollback
 
-- Snapshot: `/var/lib/motanka/snapshots/<id>/` holds `manifest.tsv` (package, version), the installed Motanka .debs copied from the apt cache or rebuilt with `dpkg-repack`, and `user-<uid>.tar.zst` per user with a ledger. The last 3 snapshots are kept (9.10).
+- Snapshot: `/var/lib/motanka/snapshots/<id>/` (root, 0700; `<id>` is the update's run ID) holds:
+  - `manifest.tsv`: every installed Motanka_Package as `<package> TAB <version> TAB <architecture> TAB debs/<file>`;
+  - `debs/<file>`: the .deb of that version, copied from apt's cache, else fetched with `apt-get download <package>=<version>`, else rebuilt with `dpkg-repack` when installed; its Package and Version fields are checked, and when none of the three works the update stops before changing anything;
+  - `users.tsv`: one line per user (uid 1000–59999) with a User_Ledger: `<uid> TAB <gid> TAB <name> TAB <archive> TAB <paths-file>`;
+  - `user-<uid>.tar.zst` (`.tar.gz` where zstd is not installed; no new dependency) with that user's Namespaced_Paths roots (`.config/dconf/motanka`, `.config/omarchy`, `.local/share/omarchy`, `.local/state/omarchy`) and the existing files the User_Ledger records Motanka writing, read as the user through `setpriv`; `user-<uid>.paths` lists what the archive holds (`root TAB <path> TAB present|absent`, `file TAB <path>`);
+  - `snapper`: `<config> TAB <pre-number>` when the Updater made a snapper pre snapshot.
+
+  A snapshot is built as `<id>.partial` and renamed after `manifest.tsv` is written and every file is fsynced, so an interrupted one is never used; the next snapshot deletes it. The last 3 complete snapshots are kept (9.10). `~/.local/state/motanka` (the User_Ledger) and the caches are not archived.
 - If `snapper list-configs` shows a config for `/`, the Updater runs `snapper create --type pre` and `--type post` (9.12).
 - Migrations run per user through the migrate override, which reads `migrations.tsv`: `ok` runs the Upstream script through a Wrapper, `override` runs the file of the same name from `overrides/migrations/`, `n/a` is recorded as done without running. State is written in Upstream's format under `~/.local/state/omarchy/migrations/` (9.6, 9.7).
-- `motanka rollback` installs the .debs of the latest snapshot with `apt-get install ./…deb` and restores the user archive for the invoking user (9.9).
+- `motanka rollback` reinstalls the packages that changed from the latest snapshot's own .debs (offline), staged in `/var/lib/motanka/rollback.*` because a Stack .deb can be larger than `/run` allows, and purges Motanka_Packages the update added. It exits 5 if a package Motanka does not own would change. Then it restores the invoking user's archive: each root is replaced whole, each file restored; ledgered files that did not exist at the snapshot are left as they are. The User_Ledger is not restored, so every file Motanka wrote stays known to the Remover (9.9). The System_Ledger records a rollback as a `run-begin update` run, because its format has no rollback kind.
+- Packages that were marked automatically installed are marked so again after an upgrade or rollback, because `apt-get install <name>` marks them manual.
 
 ### Doctor
 
 - Reports release, Motanka version, channel, Upstream_Pin, Stack versions, GPU driver, display manager, snapshot method, features unavailable on this release with reasons, ledgered paths missing or changed, unplanned entries, and unsupported shim calls from the journal for the last 30 days (1.7, 12.1–12.3, 12.8).
 - `--json` prints one JSON document with the same fields (12.7).
 - `--fix` is the only mode that changes anything. Its one system action is switching the suite: purge the installed `motanka-source-<old suite>` package (its conffile was modified by the release upgrader, spike S4), then install the `motanka-source-<suite>` package that matches the running release (11.2, 12.4).
+  - It needs root (exit 11), then the guards (7) and the lock (9); an unsupported release exits 3. It downloads `motanka-source-<running suite>` from `MOTANKA_APT_URI`, else the URI in the existing `motanka.sources`, and verifies it against the signed `SHA256SUMS` (exit 6 on a mismatch).
+  - It uses dpkg directly (decided in task 24): `dpkg --force-depends --purge` of every `motanka-source-*` package dpkg knows, then `dpkg --install --force-confnew`. `--force-depends` is needed because the `motanka` metapackage depends on the source package; dpkg also works when the release upgrader left other dependencies broken.
+- Without `--fix` the Doctor writes nothing and takes no lock. As a normal user, the snapshot part and other users' journal entries (unless the user is in `systemd-journal` or `adm`) are listed under "Skipped" with the reason; as root, `SUDO_USER`'s home folder is read as that user through `setpriv`. Motanka packages built for the other release are reported as a problem with the fix `sudo motanka update`. Invalid UTF-8 in `--json` output becomes U+FFFD.
 
 ### Guards
 
