@@ -7,6 +7,16 @@
 # packaging/motanka-stack-shell/debian/shell-build.sh in file order, for
 # both suites, against the Stack's Qt 6.12 (motanka-qt6) on both.
 #
+#   wayland            noble only, build time only, the Stack's version
+#                      (1.24.0, same tarball and checksum as
+#                      stack/components.tsv). Qt 6.12's generated private
+#                      header QtWaylandClient/private/wayland-wayland-client-
+#                      protocol.h uses the include guard of the system's
+#                      wayland-client-protocol.h, so noble's 1.22 header,
+#                      included first, hides wl_fixes and Quickshell fails to
+#                      compile. The staged 1.24 headers come first instead;
+#                      at run time Quickshell loads the Stack's libwayland
+#                      from motanka-stack-libs.
 #   wayland-protocols  build time only, the Stack's version (1.50, same
 #                      tarball and checksum as stack/components.tsv), so
 #                      Quickshell sees the same protocols as Hyprland on
@@ -26,6 +36,7 @@
 # Download, verify and pin: stack/fetch-sources --components stack/shell-components.tsv
 #
 # name	version	url	sha256	build	suites	package
+wayland	1.24.0	https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.24.0/downloads/wayland-1.24.0.tar.xz	82892487a01ad67b334eca83b54317a7c86a03a89cfadacfef5211f11a5d0536	meson	noble	-
 wayland-protocols	1.50	https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.50/downloads/wayland-protocols-1.50.tar.xz	4460c20cfcf68b994a5ee206ed15fc19ad312f16c96075186e83b0e3f4aa48a5	meson	both	-
 libdwarf-lite	2.1.0	https://github.com/jeremy-rifkin/libdwarf-lite/archive/5dfb2cd2aacf2bf473e5bfea79e41289f88b3a5f.tar.gz	ba0f0325e671e5010acbff4a897cedfe29c7f71202a905ca4b10085cbb839e51	source	both	-
 cpptrace	1.0.4	https://github.com/jeremy-rifkin/cpptrace/archive/refs/tags/v1.0.4.tar.gz	5c9f5b301e903714a4d01f1057b9543fa540f7bfcc5e3f8bd1748e652e24f9ea	cmake	both	motanka-stack-shell

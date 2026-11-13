@@ -8,9 +8,10 @@
 #        bash debian/shell-build.sh shlibs  <suite> <debian-version>
 #
 # build    builds the components of stack/shell-components.tsv in file
-#          order, with GCC 16 and prefix /opt/motanka: wayland-protocols
-#          (build time only), cpptrace (shared, libunwind, with the bundled
-#          libdwarf-lite source instead of a git fetch) and Quickshell.
+#          order, with GCC 16 and prefix /opt/motanka: wayland (noble,
+#          build time only), wayland-protocols (build time only), cpptrace
+#          (shared, libunwind, with the bundled libdwarf-lite source
+#          instead of a git fetch) and Quickshell.
 #          Each is configured out of tree in debian/shell-build/build/<name>,
 #          installed with DESTDIR into debian/shell-build/dest/<name> and
 #          merged into the staging tree debian/shell-build/stage, where the
@@ -233,6 +234,10 @@ build_one() {
       [[ $build == source ]] || die "libdwarf-lite must have build 'source'"
       log "libdwarf-lite: source only; cpptrace builds it"
       return 0
+      ;;
+    wayland)
+      # noble only, build time only (stack/shell-components.tsv).
+      build_meson "$name" "$src" -Ddocumentation=false -Dtests=false -Ddtd_validation=false
       ;;
     wayland-protocols)
       build_meson "$name" "$src" -Dtests=false

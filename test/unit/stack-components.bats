@@ -193,6 +193,16 @@ cfield() {
   done
 }
 
+@test "the noble shell build stages the Stack's wayland headers, build time only" {
+  local c
+  for c in 2 3 4 5; do
+    [[ $(cfield "$SHELL_TSV_REL" wayland "$c") == "$(field wayland "$c")" ]] ||
+      fail "column $c differs from stack/components.tsv"
+  done
+  [[ $(cfield "$SHELL_TSV_REL" wayland 6) == noble ]]
+  [[ $(cfield "$SHELL_TSV_REL" wayland 7) == - ]]
+}
+
 @test "--tsv is still accepted as the old name of --components" {
   run python3 "$FETCH" --tsv "$REPO/$QT6_TSV_REL" --check
   assert_success
