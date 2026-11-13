@@ -174,3 +174,115 @@ fpdiff() {
   run python3 "$FPDIFF" "$BEFORE"
   assert_failure 2
 }
+
+# --- the desktop class of compat/home-paths.tsv (part of the Allowlist) -------
+
+# add_home_dir <path>: adds a folder entry to alice's home in AFTER.
+add_home_dir() {
+  printf '%s\td\t0755\t1001:1001\t-\n' "$1" >>"$AFTER/home-alice.sha256"
+}
+
+@test "desktop paths of compat/home-paths.tsv are allowlisted, with the folders that only hold them" {
+  add_home_dir /home/alice/.local
+  add_home_dir /home/alice/.local/share
+  add_home_dir /home/alice/.local/share/keyrings
+  add_home_entry /home/alice/.local/share/keyrings/login.keyring
+  add_home_entry /home/alice/.local/share/keyrings/user.keystore
+  add_home_dir /home/alice/Downloads
+  add_home_dir /home/alice/Music
+  add_home_entry /home/alice/.config/user-dirs.dirs
+  add_home_entry /home/alice/.config/user-dirs.locale
+  add_home_dir /home/alice/.config/gtk-3.0
+  add_home_entry /home/alice/.config/gtk-3.0/bookmarks
+  add_home_dir /home/alice/.local/state
+  add_home_dir /home/alice/.local/state/wireplumber
+  add_home_entry /home/alice/.local/state/wireplumber/default-routes
+  fpdiff
+  assert_success
+  assert_output ''
+}
+
+@test "a path whose first matching glob is not desktop is reported next to allowlisted ones" {
+  add_home_dir /home/alice/.config/gtk-3.0
+  add_home_entry /home/alice/.config/gtk-3.0/bookmarks
+  add_home_entry /home/alice/.config/gtk-3.0/settings.ini
+  add_home_dir /home/alice/Downloads
+  add_home_entry /home/alice/Downloads/report.pdf
+  add_home_entry /home/alice/.config/btop/themes/current.theme
+  fpdiff
+  assert_failure 1
+  assert_line --partial 'home-alice.sha256: added /home/alice/.config/gtk-3.0/settings.ini'
+  assert_line --partial 'home-alice.sha256: added /home/alice/Downloads/report.pdf'
+  assert_line --partial 'home-alice.sha256: added /home/alice/.config/btop/themes/current.theme'
+  refute_line --partial 'bookmarks'
+  refute_line --partial '/home/alice/Downloads ('
+  assert_line 'fpdiff: 3 difference(s)'
+}
+
+@test "a folder that holds no allowlisted path is still reported" {
+  add_home_dir /home/alice/.local
+  add_home_dir /home/alice/.local/share
+  fpdiff
+  assert_failure 1
+  assert_line --partial 'home-alice.sha256: added /home/alice/.local '
+  assert_line --partial 'home-alice.sha256: added /home/alice/.local/share '
+}
+
+@test "a holder folder that became a file is reported" {
+  printf '/home/alice/.local\tf\t0644\t1001:1001\t%s\n' "$SHA_A" >>"$BEFORE/home-alice.sha256"
+  add_home_dir /home/alice/.local
+  add_home_dir /home/alice/.local/share
+  add_home_dir /home/alice/.local/share/keyrings
+  fpdiff
+  assert_failure 1
+  assert_line --partial 'home-alice.sha256: changed /home/alice/.local: f 0644'
+  refute_line --partial 'keyrings'
+}
+
+@test "the home folder itself is never allowlisted" {
+  printf '# root /home/alice\n/home/alice\td\t0700\t1001:1001\t-\n/home/alice/.bashrc\tf\t0644\t1001:1001\t%s\n' "$SHA_A" >"$AFTER/home-alice.sha256"
+  add_home_dir /home/alice/Downloads
+  fpdiff
+  assert_failure 1
+  assert_line --partial 'home-alice.sha256: changed /home/alice: d 0750'
+}
+
+@test "desktop paths are not allowlisted in system tree files" {
+  printf '/etc/Downloads\td\t0755\t0:0\t-\n' >>"$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  assert_output --partial 'etc.sha256: added /etc/Downloads'
+}
+
+@test "--home-paths reads the classes from the given file, first match first" {
+  local hp=$BATS_TEST_TMPDIR/home-paths.tsv
+  printf '# test\nnotes/keep.txt\tapp\nnotes/**\tdesktop\n' >"$hp"
+  add_home_dir /home/alice/notes
+  add_home_entry /home/alice/notes/a.txt
+  add_home_entry /home/alice/notes/keep.txt
+  add_home_dir /home/alice/Downloads
+  run python3 "$FPDIFF" --home-paths "$hp" "$BEFORE" "$AFTER"
+  assert_failure 1
+  assert_line --partial 'home-alice.sha256: added /home/alice/notes/keep.txt'
+  assert_line --partial 'home-alice.sha256: added /home/alice/Downloads'
+  refute_line --partial 'notes/a.txt'
+  refute_line --partial '/home/alice/notes '
+}
+
+@test "an unreadable or malformed home-paths file is an input error" {
+  run python3 "$FPDIFF" --home-paths "$BATS_TEST_TMPDIR/missing.tsv" "$BEFORE" "$AFTER"
+  assert_failure 2
+  assert_output --partial 'cannot read the home paths'
+  printf 'no-tab-here\n' >"$BATS_TEST_TMPDIR/bad.tsv"
+  run python3 "$FPDIFF" --home-paths "$BATS_TEST_TMPDIR/bad.tsv" "$BEFORE" "$AFTER"
+  assert_failure 2
+  assert_output --partial 'expected <glob> TAB <class>'
+}
+
+@test "the default home-paths file is the repository's compat/home-paths.tsv" {
+  run grep -c $'^Downloads\tdesktop$' "$BATS_TEST_DIRNAME/../../compat/home-paths.tsv"
+  assert_output 1
+  add_home_dir /home/alice/Downloads
+  fpdiff
+  assert_success
+}

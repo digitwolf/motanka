@@ -35,6 +35,8 @@
 #   serve, snapshot "before", Fingerprint "before", install, (multiuser:
 #   a User_Ledger in alice's home folder), login with a theme switch inside
 #   the session (or the headless stand-ins), menu install, web app, logout,
+#   capture check (the session capture was ended at logout and the
+#   User_Ledger records no unplanned path),
 #   'motanka remove --dry-run' (lists the menu package and the web app as
 #   kept, and alice as another user), Fingerprint "pre-remove",
 #   'motanka remove --yes --purge' with /usr/bin/motanka, Fingerprint
@@ -42,7 +44,9 @@
 #   state, and without --purge the menu installs stay by design (10.9); the
 #   dry run checks the listing without --purge. On multiuser, alice's home
 #   folder is compared between "pre-remove" and "after" (unchanged, 10.13)
-#   and left out of the "before"/"after" comparison.
+#   and left out of the "before"/"after" comparison. The comparison applies
+#   the Allowlist and nothing else; tools/fpdiff.py reads the desktop class
+#   of the Allowlist from compat/home-paths.tsv.
 set -euo pipefail
 # shellcheck source=../lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
@@ -261,6 +265,9 @@ run_variant() {
     if ((!logged_in)); then
       mv_log "note: $label: the login phase failed; the round trip continues after logout"
     fi
+    guest_phase "$tvm" "$label" capture-check session || true
+  else
+    guest_phase "$tvm" "$label" capture-check none || true
   fi
   guest_phase "$tvm" "$label" remove-dry installed "${others[@]}" || true
   fp_pre=$(fingerprint "$tvm" "$label-pre-remove")

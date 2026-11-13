@@ -61,6 +61,19 @@ recorded first in ~/.local/state/motanka/ledger, replaced files are backed
 up there, and an interrupted setup resumes at the next login. Later logins
 find the setup complete and skip it.
 
+Session capture
+---------------
+
+At every login, before per-user setup, the launcher lists the paths in
+~/.config, ~/.local and the top of the home folder
+(~/.local/state/motanka/capture/). When the session ends,
+motanka-session-cleanup.service compares the home folder with that list:
+paths the session created are recorded in the User_Ledger by their class
+in home-paths.tsv, as adopted (motanka remove deletes them while they are
+unchanged), as written by Ubuntu's own session components (left alone),
+or as unplanned (left alone and listed by "motanka doctor"). A capture
+that a crash left open is ended at the next login or by "motanka remove".
+
 Shell integration
 -----------------
 

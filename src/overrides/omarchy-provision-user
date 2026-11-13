@@ -1,0 +1,187 @@
+#!/bin/bash
+# shellcheck disable=SC2088 # "~/..." in journal messages is literal text
+# omarchy-provision-user: Motanka override of Upstream
+# bin/omarchy-provision-user, which Upstream's first-run step
+# (omarchy-provision-first-run, started by default/hypr/autostart.lua)
+# runs in the Motanka session.
+#
+# usage (as Upstream): omarchy-provision-user [--force] [--first-install]
+#
+# Upstream's script writes the agent skill links, creates and renames the
+# XDG user folders (xdg-user-dirs-update, rmdir ~/Desktop ...), appends GTK
+# bookmarks, copies its default launchers into ~/.local/share/applications,
+# sets the default browser and mail handler in ~/.config/mimeapps.list, and
+# runs every per-user script of install/user/all.sh. The user folders,
+# bookmarks and mimeapps.list are Shared_Files or desktop paths that other
+# sessions read (compat/home-paths.tsv), and per-user setup already ran the
+# per-user scripts that compat/user-scripts.tsv allows. So this runs
+# Upstream's unmodified script, with the same arguments and exit code, but
+# with HOME and the four XDG base folders set to an empty staging folder
+# outside the home folder, and OMARCHY_INSTALL set to a folder whose
+# user/all.sh is empty. Afterwards it writes into the real home folder,
+# through the User_Ledger (ledgered and backed up first, write-then-rename):
+#   - files and links whose Home_Path_Class is session or app (the agent
+#     skill links in ~/.agents, ~/.claude, ~/.codex, ~/.gemini, ~/.hermes
+#     and ~/.pi), unless the path exists (it is left as it is);
+#   - from ~/.local/share/applications only *.desktop entries, with
+#     OnlyShowIn=Motanka; (5.13), and only those whose name no folder of
+#     XDG_DATA_DIRS has: an entry of the same name would hide that
+#     program's own launcher from other desktops;
+#   - files and links in a Namespaced_Path (Upstream's done marker), unless
+#     they exist.
+# Everything else the script leaves in the staging folder is discarded and
+# named in the journal. With the done marker
+# ~/.local/state/omarchy/done/finalize-user present and without --force or
+# --first-install, it prints Upstream's message and exits 0 without
+# running Upstream's script.
+#
+# Exit codes: Upstream's; 1 when a write through the User_Ledger fails.
+#
+# Test hooks: MOTANKA_ROOT (common.sh) is put in front of the XDG_DATA_DIRS
+# folders; MOTANKA_HOME_PATHS (src/lib/homepaths.sh) replaces
+# home-paths.tsv.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/homepaths.sh
+source "$_base/lib/homepaths.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+readonly APPS_REL=.local/share/applications
+readonly DONE_REL=.local/state/omarchy/done/finalize-user
+
+# /usr/share/omarchy/bin holds the Wrappers (the overlay
+# /opt/motanka/share/omarchy-view), and the Wrapper of this command runs
+# this override, so Upstream's script is taken from the vendored tree.
+omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+omarchy=${omarchy%/}
+if [[ $omarchy == /usr/share/omarchy ]]; then
+  omarchy=/opt/motanka/share/omarchy
+fi
+upstream=$omarchy/bin/omarchy-provision-user
+if [[ ! -x $upstream ]]; then
+  mk_error "Upstream's omarchy-provision-user is missing at $upstream"
+  exit 1
+fi
+
+if ((EUID == 0)); then
+  echo "Error: run omarchy-provision-user as the user being configured, not as root." >&2
+  exit 1
+fi
+
+home=$(mk_oc_home)
+if [[ $home != /* || ! -d $home ]]; then
+  mk_error "the home folder '${home:-unset}' does not exist"
+  exit 1
+fi
+
+force=0
+for a in "$@"; do
+  case $a in
+    --force | --first-install) force=1 ;;
+  esac
+done
+if ((force == 0)) && [[ -f $home/$DONE_REL ]]; then
+  echo "User finalization already complete."
+  exit 0
+fi
+
+hp=$(mk_hp_file)
+if ! mk_hp_load "$hp"; then
+  mk_error "cannot read $hp; reinstall motanka-core"
+  exit 1
+fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/motanka-provision.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+stage=$work/home
+mkdir -m 0700 -- "$stage"
+mkdir -p -- "$work/install/user"
+: >"$work/install/user/all.sh"
+
+rc=0
+env -u OMARCHY_INSTALL_LOG_FILE \
+  HOME="$stage" \
+  XDG_CONFIG_HOME="$stage/.config" \
+  XDG_DATA_HOME="$stage/.local/share" \
+  XDG_STATE_HOME="$stage/.local/state" \
+  XDG_CACHE_HOME="$stage/.cache" \
+  OMARCHY_INSTALL="$work/install" \
+  "$upstream" "$@" || rc=$?
+
+# shadowed <name>: 0 if a folder of XDG_DATA_DIRS has applications/<name>.
+shadowed() {
+  local d
+  local -a dirs=()
+  IFS=: read -r -a dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+  for d in "${dirs[@]}"; do
+    if [[ $d == /* && -e $(mk_path "${d%/}")/applications/$1 ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+imported=0 kept=0
+dropped=()
+limited=$work/entry.desktop
+while IFS= read -r -d '' rel; do
+  src=$stage/$rel
+  if ! mk_field_ok "$rel"; then
+    dropped+=("(a name with control characters)")
+    continue
+  fi
+  if [[ -e $home/$rel || -L $home/$rel ]]; then
+    kept=$((kept + 1))
+    mk_log info "provision-user: left ~/$rel as it is"
+    continue
+  fi
+  if [[ $rel == "$APPS_REL"/* ]]; then
+    name=${rel#"$APPS_REL"/}
+    if [[ $name == */* || $name != *.desktop || -L $src ]]; then
+      dropped+=("~/$rel")
+      continue
+    fi
+    if shadowed "$name"; then
+      dropped+=("~/$rel (would hide the launcher of the same name from other desktops)")
+      continue
+    fi
+    if ! mk_oc_desktop_only_show_in "$src" "$limited"; then
+      dropped+=("~/$rel (no [Desktop Entry] group)")
+      continue
+    fi
+    chmod --reference="$src" -- "$limited"
+    mk_userledger_write app "$rel" "$limited" || exit 1
+    rm -f -- "$limited"
+    imported=$((imported + 1))
+    continue
+  fi
+  class=$(mk_hp_class "$rel") || class=""
+  case $class in
+    namespaced | session | app)
+      if [[ -L $src ]]; then
+        target=$(readlink -n -- "$src")
+        mk_userledger_symlink "$class" "$rel" "$target" || exit 1
+      else
+        mk_userledger_write "$class" "$rel" "$src" || exit 1
+      fi
+      imported=$((imported + 1))
+      ;;
+    *)
+      dropped+=("~/$rel (${class:-unclassified})")
+      ;;
+  esac
+done < <(find "$stage" -mindepth 1 \( -type f -o -type l \) -printf '%P\0' | LC_ALL=C sort -z)
+
+if ((${#dropped[@]} > 0)); then
+  mk_log info "provision-user: not written (Shared_Files, desktop paths or files other sessions would see): ${dropped[*]}"
+fi
+mk_log info "provision-user: Upstream exited $rc; $imported file(s) written through the User_Ledger, $kept existing left, ${#dropped[@]} dropped"
+exit "$rc"

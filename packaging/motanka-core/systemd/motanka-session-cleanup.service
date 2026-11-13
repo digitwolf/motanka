@@ -7,9 +7,13 @@
 # Session_Env_List (/opt/motanka/share/motanka/session-env.list) back the
 # value the user manager had before the session, or unsets it (5.11). The
 # launcher does the same when it ends normally; this unit covers a launcher
-# that was killed.
+# that was killed. After the environment, the same command ends the
+# session capture (design.md, "Session-time home writes"): home-folder
+# paths the session created are adopted, observed or recorded as unplanned
+# in the User_Ledger. A capture that is still pending afterwards is ended
+# at the next login or by 'motanka remove'.
 [Unit]
-Description=Motanka session: remove the session environment from the user manager
+Description=Motanka session: remove the session environment from the user manager and end the session capture
 Documentation=file:///usr/share/doc/motanka-core/README
 PartOf=motanka-session.target
 Before=motanka-session.target
@@ -19,4 +23,4 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/true
 ExecStop=/opt/motanka/libexec/motanka/session cleanup
-TimeoutStopSec=30
+TimeoutStopSec=60

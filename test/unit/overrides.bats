@@ -3,7 +3,8 @@
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # scripts are single-quoted on purpose
 # Unit tests for tasks 13.6 and 13.7: the omarchy-pkg-* and web-app
-# overrides (5.13, 7.3, 7.7), the overrides for Upstream scripts with Arch
+# overrides (5.13, 7.3, 7.7), the provisioning override
+# omarchy-provision-user (6.4, 6.5), the overrides for Upstream scripts with Arch
 # tools or paths (7.8), compat/overrides.tsv and tools/checkoverrides
 # (7.10). The Helper and every system command are stubs
 # (fixtures/compat/stubs).
@@ -476,4 +477,143 @@ checkoverrides() {
   mkdir -p "$T/same/bin"
   run "$REPO/tools/checkoverrides" --old "$T/same" --new "$T/same" --pin "$PIN" --reviewed "$T/none"
   assert_success
+}
+
+# --- omarchy-webapp-install: no silent success --------------------------------
+
+@test "omarchy-webapp-install exits 1 when Upstream exits 0 without writing the named entry" {
+  local up
+  up=$(fake_upstream)
+  export OMARCHY_PATH=$up
+  write_script "$up/bin/omarchy-webapp-install" 'exit 0'
+  run "$O/omarchy-webapp-install" HEY https://hey.com HEY
+  assert_failure 1
+  assert_output --partial "exited 0 but wrote no desktop entry named 'HEY.desktop'"
+  assert_output --partial 'no web app was installed'
+  [[ ! -e $HOME/.local ]]
+  write_script "$up/bin/omarchy-webapp-install" 'mkdir -p "$HOME/.local/share/applications"
+printf "[Desktop Entry]\nName=Other\n" >"$HOME/.local/share/applications/Other.desktop"'
+  run "$O/omarchy-webapp-install" HEY https://hey.com HEY
+  assert_failure 1
+  assert_output --partial '.local/share/applications/Other.desktop'
+  [[ ! -e $HOME/.local ]]
+  run ls -A "$TMPDIR"
+  assert_output ''
+}
+
+@test "omarchy-webapp-install names every entry it installed" {
+  local up
+  up=$(webapp_upstream)
+  export OMARCHY_PATH=$up
+  run "$O/omarchy-webapp-install" 'Motanka Roundtrip' https://example.test/ icon
+  assert_success
+  assert_line 'motanka: installed the web app entry ~/.local/share/applications/Motanka Roundtrip.desktop for the Motanka session'
+  run grep -x 'OnlyShowIn=Motanka;' "$HOME/.local/share/applications/Motanka Roundtrip.desktop"
+  assert_success
+}
+
+# --- omarchy-provision-user -----------------------------------------------------
+
+# provision_upstream: a stand-in for Upstream's omarchy-provision-user that
+# writes what the real script writes (skill links, XDG user folders, GTK
+# bookmarks, launchers, mimeapps.list, its done marker) below $HOME and
+# sources $OMARCHY_INSTALL/user/all.sh. Prints the tree's path.
+provision_upstream() {
+  local up
+  up=$(fake_upstream)
+  mkdir -p "$up/default/agents/skills/omarchy" "$up/install/user"
+  printf 'skill\n' >"$up/default/agents/skills/omarchy/SKILL.md"
+  printf 'touch %q\n' "$T/all-sh-ran" >"$up/install/user/all.sh"
+  write_script "$up/bin/omarchy-provision-user" 'set -euo pipefail
+if [[ -f $HOME/.local/state/omarchy/done/finalize-user ]]; then echo "User finalization already complete."; exit 0; fi
+mkdir -p ~/.agents/skills ~/.claude/skills
+for skill in "$OMARCHY_PATH"/default/agents/skills/*/; do
+  skill=${skill%/}
+  ln -sfn "$skill" ~/.agents/skills/"${skill##*/}"
+  ln -sfn "$skill" ~/.claude/skills/"${skill##*/}"
+done
+mkdir -p ~/Downloads ~/.config/gtk-3.0
+printf "XDG_DESKTOP_DIR=\"\$HOME\"\n" >"${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs"
+echo "file://$HOME/Downloads Downloads" >>~/.config/gtk-3.0/bookmarks
+source "${OMARCHY_INSTALL:-$OMARCHY_PATH/install}/user/all.sh"
+mkdir -p ~/.local/share/applications
+printf "[Desktop Entry]\nName=HEY\nExec=omarchy-launch-webapp x\n" >~/.local/share/applications/HEY.desktop
+printf "[Desktop Entry]\nName=mpv\nExec=mpv\n" >~/.local/share/applications/mpv.desktop
+printf "cache\n" >~/.local/share/applications/mimeinfo.cache
+printf "[Default Applications]\nx-scheme-handler/mailto=HEY.desktop\n" >"${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"
+mkdir -p ~/.local/state/omarchy/done
+touch ~/.local/state/omarchy/done/finalize-user
+echo "User finalization complete."
+exit "${FAKE_PROVISION_RC:-0}"'
+  printf '%s\n' "$up"
+}
+
+@test "omarchy-provision-user writes skill links, launchers and its marker through the ledger and drops Shared_Files" {
+  local up
+  up=$(provision_upstream)
+  export OMARCHY_PATH=$up XDG_DATA_DIRS=/usr/local/share:/usr/share MOTANKA_HOME_PATHS=$REPO/compat/home-paths.tsv
+  mkdir -p "$MOTANKA_ROOT/usr/share/applications"
+  printf '[Desktop Entry]\nName=mpv\n' >"$MOTANKA_ROOT/usr/share/applications/mpv.desktop"
+  mkdir -p "$HOME/.claude/skills"
+  ln -s /my/own/skill "$HOME/.claude/skills/omarchy"
+  run "$O/omarchy-provision-user"
+  assert_success
+  assert_output --partial 'User finalization complete.'
+  assert_equal "$(readlink "$HOME/.agents/skills/omarchy")" "$up/default/agents/skills/omarchy"
+  assert_equal "$(readlink "$HOME/.claude/skills/omarchy")" /my/own/skill
+  run cut -f3,4,5 "$HOME/.local/state/motanka/ledger"
+  assert_line "$(printf 'create\tapp\t.agents/')"
+  assert_line "$(printf 'symlink\tapp\t.agents/skills/omarchy')"
+  assert_line "$(printf 'create\tapp\t.local/share/applications/HEY.desktop')"
+  assert_line "$(printf 'create\tnamespaced\t.local/state/omarchy/done/finalize-user')"
+  refute_line --partial '.claude/skills/omarchy'
+  refute_line --partial 'mpv.desktop'
+  run grep -x 'OnlyShowIn=Motanka;' "$HOME/.local/share/applications/HEY.desktop"
+  assert_success
+  [[ ! -e $HOME/.local/share/applications/mpv.desktop && ! -e $HOME/.local/share/applications/mimeinfo.cache ]]
+  [[ ! -e $HOME/Downloads && ! -e $HOME/.config/gtk-3.0 ]]
+  [[ ! -e $HOME/.config/user-dirs.dirs && ! -e $HOME/.config/mimeapps.list ]]
+  [[ ! -e $T/all-sh-ran ]]
+  run ls -A "$TMPDIR"
+  assert_output ''
+  run cat "$LOGS/journal"
+  assert_output --partial 'would hide the launcher of the same name from other desktops'
+  assert_output --partial '.config/mimeapps.list (shared)'
+  assert_output --partial '.config/user-dirs.dirs (desktop)'
+}
+
+@test "omarchy-provision-user does not run Upstream again once finalization is done, unless --force" {
+  local up
+  up=$(provision_upstream)
+  export OMARCHY_PATH=$up MOTANKA_HOME_PATHS=$REPO/compat/home-paths.tsv
+  run "$O/omarchy-provision-user"
+  assert_success
+  write_script "$up/bin/omarchy-provision-user" 'echo upstream-ran'
+  run "$O/omarchy-provision-user"
+  assert_success
+  assert_output 'User finalization already complete.'
+  run "$O/omarchy-provision-user" --force
+  assert_success
+  assert_output 'upstream-ran'
+}
+
+@test "omarchy-provision-user passes Upstream's failure on after writing what it may" {
+  local up
+  up=$(provision_upstream)
+  export OMARCHY_PATH=$up MOTANKA_HOME_PATHS=$REPO/compat/home-paths.tsv FAKE_PROVISION_RC=4
+  run "$O/omarchy-provision-user"
+  assert_failure 4
+  [[ -L $HOME/.agents/skills/omarchy ]]
+  run ls -A "$TMPDIR"
+  assert_output ''
+}
+
+@test "omarchy-provision-user stops on an unreadable home-paths.tsv before running Upstream" {
+  local up
+  up=$(provision_upstream)
+  export OMARCHY_PATH=$up MOTANKA_HOME_PATHS=$T/missing.tsv
+  run "$O/omarchy-provision-user"
+  assert_failure 1
+  assert_output --partial "cannot read $T/missing.tsv"
+  [[ ! -e $HOME/.local ]]
 }

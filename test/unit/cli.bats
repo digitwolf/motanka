@@ -102,7 +102,7 @@ motanka() {
 @test "valid options parse and the unfinished subcommands exit 2 'not implemented yet'" {
   local -a cmds=(
     'doctor --json --fix'
-    'doctor'
+    'doctor --fix'
   )
   local c
   for c in "${cmds[@]}"; do

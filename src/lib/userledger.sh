@@ -6,15 +6,30 @@
 #   <utc-time> <run-id> <verb> <class> <path> <before> <after> <backup-id>
 #
 #   verb    setup-begin, create, replace, symlink, block, menu-desktop,
-#           unplanned, setup-end
-#   class   namespaced, session, app, shared, or - (setup-*, unplanned)
+#           unplanned, adopt, observed, setup-end
+#   class   namespaced, session, app, shared, or - (setup-*, unplanned);
+#           session or app for adopt; desktop for observed
 #   path    relative to the home folder; a trailing / marks a folder that
-#           Motanka created; - for setup-*
+#           Motanka created (create) or adopted (adopt), or a folder an
+#           Ubuntu session component created (observed); - for setup-*
 #   before  state of the path before the change, after: the state Motanka
 #           wrote. A state is - (absent), the SHA-256 of a regular file's
 #           content, or l:<SHA-256 of the target> for a symbolic link.
 #   backup  ID of the copy of the earlier file or link under
 #           ~/.local/state/motanka/backups/<backup-id>/<path>, or -
+#
+# The session capture (src/lib/capture.sh) writes three verbs for paths
+# that appeared during a Motanka session without a ledger entry:
+#   adopt     <session|app> <path> - <state when adopted> -   (a folder:
+#             <path/> - - -). Upstream or Stack code of the session created
+#             it; a revert deletes it when it still has that state, moves it
+#             aside when it changed, and removes an adopted folder when it is
+#             empty.
+#   observed  desktop <path> - <state or -> -   An Ubuntu session component
+#             created it, as it does for any graphical login; a revert
+#             leaves it and lists it, and so does the Doctor.
+#   unplanned - <path> - <state or -> -   Nothing Motanka knows created or
+#             changed it; a revert lists it and leaves it (6.10, 12.8).
 #
 # Write-ahead (6.2, 6.3, 3.9): a change first creates its missing parent
 # folders (each ledgered before its mkdir), then copies the existing file
@@ -64,6 +79,11 @@ _MK_UL_TARGET=""
 
 # The descriptor of the per-user lock once mk_userledger_lock holds it.
 MK_UL_LOCK_FD=""
+
+# Ledger lines that mk_userledger_revert_plan treats as written after the
+# ledger's last line (the lines a pending session capture end would write,
+# "mk_capture_end --plan"). The revert itself never reads them.
+MK_UL_PLAN_EXTRA=()
 
 # State of one reverse walk (_mk_ul_walk): the mode (apply or plan), the
 # home and state folders, and, in a plan, the simulated effect of the steps
@@ -248,6 +268,19 @@ _mk_ul_valid_line() {
     unplanned)
       [[ ${f[3]} == - ]] && _mk_ul_path_syntax_ok "$f4" && [[ $f4 != */ ]]
       ;;
+    adopt)
+      [[ ${f[3]} == session || ${f[3]} == app ]] || return 1
+      _mk_ul_path_syntax_ok "$f4" || return 1
+      [[ ${f[5]} == - && ${f[7]} == - ]] || return 1
+      if [[ $f4 == */ ]]; then
+        [[ ${f[6]} == - ]]
+      else
+        [[ ${f[6]} != - ]]
+      fi
+      ;;
+    observed)
+      [[ ${f[3]} == desktop ]] && _mk_ul_path_syntax_ok "$f4" && [[ ${f[5]} == - && ${f[7]} == - ]]
+      ;;
     create | replace | symlink | block | menu-desktop)
       case ${f[3]} in
         namespaced | session | app | shared) ;;
@@ -351,6 +384,84 @@ mk_userledger_record_unplanned() {
     dir | other) cur=- ;;
   esac
   _mk_ul_append unplanned - "$rel" - "$cur" -
+}
+
+# mk_userledger_adopt_line <class> <path>: prints the adopt line
+# (without its time and run-ID fields) for a path that exists now: a
+# regular file or link with its current state, or a folder as "<path>/".
+# Returns 1, printing nothing, when the path is missing or another kind of
+# file, or the class is not session or app.
+mk_userledger_adopt_line() {
+  local class=$1 rel=${2%/} home cur
+  case $class in
+    session | app) ;;
+    *) return 1 ;;
+  esac
+  if ! _mk_ul_path_syntax_ok "$rel" || _mk_ul_in_state "$rel"; then
+    return 1
+  fi
+  home=$(_mk_ul_home) || return 1
+  cur=$(_mk_ul_state "$home/$rel") || return 1
+  case $cur in
+    dir)
+      if [[ -L $home/$rel ]]; then
+        return 1
+      fi
+      printf 'adopt\t%s\t%s/\t-\t-\t-\n' "$class" "$rel"
+      ;;
+    - | other) return 1 ;;
+    *) printf 'adopt\t%s\t%s\t-\t%s\t-\n' "$class" "$rel" "$cur" ;;
+  esac
+}
+
+# mk_userledger_adopt <class> <path>: records that Motanka's session
+# created a path it did not ledger beforehand (see adopt at the top).
+mk_userledger_adopt() {
+  local line
+  line=$(mk_userledger_adopt_line "$1" "$2") || {
+    mk_error "cannot adopt '$2' as $1: it is not a file, link or folder in the home folder"
+    return 1
+  }
+  mk_userledger_init || return 1
+  local -a f
+  IFS=$'\t' read -r -a f <<<"$line"
+  _mk_ul_append "${f[@]}"
+}
+
+# mk_userledger_append_lines <file>: appends complete entries (every field,
+# time and run ID included, one per line) to the User_Ledger with one fsync.
+# Every line is checked first; nothing is appended if one is invalid. A
+# torn last line is closed first, as mk_ledger_append does.
+mk_userledger_append_lines() {
+  local src=$1 file line new=0 n=0
+  if [[ ! -s $src ]]; then
+    return 0
+  fi
+  if ! mk_ends_with_newline "$src"; then
+    mk_error "refusing to append $src to the User_Ledger: its last line has no newline"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if ! _mk_ul_valid_line "$line"; then
+      mk_error "refusing to write an invalid User_Ledger line: ${line//$'\t'/ }"
+      return 1
+    fi
+    n=$((n + 1))
+  done <"$src"
+  mk_userledger_init || return 1
+  file=$(mk_userledger_file) || return 1
+  [[ -e $file ]] || new=1
+  if ! mk_ends_with_newline "$file"; then
+    printf '\001\n' >>"$file" || return 1
+  fi
+  if ! cat -- "$src" >>"$file" || ! mk_fsync "$file"; then
+    mk_error "cannot write the User_Ledger $file"
+    return 1
+  fi
+  if ((new)); then
+    mk_fsync "${file%/*}" || return 1
+  fi
+  mk_log info "user ledger: appended $n line(s)"
 }
 
 # --- staging: everything up to and including the ledger line ------------
@@ -911,6 +1022,13 @@ _mk_ul_walk() {
   if [[ -f $ledger ]]; then
     mapfile -t lines < <(mk_userledger_read "$ledger")
   fi
+  if [[ $_MK_UL_MODE == plan ]]; then
+    for d in "${MK_UL_PLAN_EXTRA[@]}"; do
+      if _mk_ul_valid_line "$d"; then
+        lines+=("$d")
+      fi
+    done
+  fi
   for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
     IFS=$'\t' read -r _ _ verb _ rel before after backup <<<"${lines[i]}"
     case $verb in
@@ -919,6 +1037,10 @@ _mk_ul_walk() {
         ;;
       unplanned)
         _mk_ul_say unplanned "$rel"
+        continue
+        ;;
+      observed)
+        _mk_ul_say observed "$rel"
         continue
         ;;
       menu-desktop)
@@ -993,11 +1115,12 @@ _mk_ul_purge_opt() {
 # mk_userledger_revert [--purge]: walks the User_Ledger in reverse and
 # restores every ledgered path. Prints one line per action on stdout,
 # fields separated by tabs:
-#   restored|deleted|kept|block-removed|unplanned <path>
+#   restored|deleted|kept|block-removed|unplanned|observed <path>
 #   moved <path> <new path>
 # menu-desktop entries are kept and listed unless --purge is given (10.9);
-# unplanned entries are listed and left; entries inside a Namespaced_Path
-# are deleted. When every entry was handled, the state folder (ledger and
+# unplanned and observed entries are listed and left; adopted files are
+# deleted when unchanged and moved aside when changed, adopted folders are
+# removed when empty; entries inside a Namespaced_Path are deleted. When every entry was handled, the state folder (ledger and
 # backups) is deleted, then the folders on the way to it that the ledger
 # records as created, if they are empty (no line for these). Returns 1 and
 # keeps the ledger if any entry failed, so the revert can be run again.
@@ -1012,9 +1135,10 @@ mk_userledger_revert() {
 # format, except that a folder Motanka created is printed once as
 # "rmdir <path/>" (where the revert prints deleted or kept, depending on
 # whether the folder is empty by then), and that the folders on the way to
-# the state folder are printed as "rmdir <path/>" too. Changes nothing: no
-# file, no ledger line, no temporary file. Returns 1, after a warning on
-# stderr, when the revert would fail (a missing backup).
+# the state folder are printed as "rmdir <path/>" too. The lines in
+# MK_UL_PLAN_EXTRA count as written after the ledger's last line. Changes
+# nothing: no file, no ledger line, no temporary file. Returns 1, after a
+# warning on stderr, when the revert would fail (a missing backup).
 mk_userledger_revert_plan() {
   local purge
   purge=$(_mk_ul_purge_opt mk_userledger_revert_plan "$@") || return 1

@@ -39,14 +39,21 @@
 #      $XDG_RUNTIME_DIR/motanka/session-env.pre. If the manager still holds
 #      the environment of an earlier Motanka session that did not end
 #      cleanly, that environment is restored first.
-#   7. Per-user setup, /opt/motanka/libexec/motanka/user-setup, when it is
+#   7. The session capture starts (src/lib/capture.sh, mk_capture_start):
+#      a capture an earlier session left open is ended first, then the
+#      paths that exist now in the scanned roots of the home folder are
+#      listed in ~/.local/state/motanka/capture/. It runs in a subshell that
+#      holds the per-user lock $XDG_RUNTIME_DIR/motanka.lock only while it
+#      runs. A failure is logged and the session starts without a capture;
+#      on a Protected_Host nothing is written.
+#   8. Per-user setup, /opt/motanka/libexec/motanka/user-setup, when it is
 #      installed (6.1). It resumes an interrupted setup itself (6.7). If it
 #      fails, the compositor does not start (exit 1).
-#   8. uwsm's unit files (/opt/motanka/lib/systemd/user, from
+#   9. uwsm's unit files (/opt/motanka/lib/systemd/user, from
 #      motanka-stack-tools) are linked into $XDG_RUNTIME_DIR/systemd/user,
 #      the user manager's runtime unit folder, for the length of the
 #      session; /opt/motanka/lib/systemd/user is not on its search path.
-#   9. The compositor starts the way Upstream starts it
+#  10. The compositor starts the way Upstream starts it
 #      (default/wayland-sessions/omarchy.desktop), with the Stack's binaries:
 #        /opt/motanka/bin/uwsm start -U run -g -1 -e -D Motanka:Hyprland \
 #          -N Motanka -C "Omarchy-compatible Hyprland session" -- \
@@ -57,11 +64,14 @@
 #      manager's state would make uwsm's own cleanup keep Motanka's values.
 #      Once graphical-session.target is active, the launcher starts
 #      motanka-session.target (5.4).
-#  10. When uwsm returns: motanka-session.target is stopped, the user
-#      manager's environment is restored from session-env.pre (5.11) and
-#      the unit links are removed. The exit code is uwsm's.
+#  11. When uwsm returns: motanka-session.target is stopped (its cleanup
+#      unit's ExecStop runs "session cleanup", below), the user manager's
+#      environment is restored from session-env.pre (5.11), the session
+#      capture is ended if it is still pending (mk_capture_end, under the
+#      per-user lock) and the unit links are removed. The exit code is
+#      uwsm's.
 #  TERM, HUP or INT while uwsm runs is passed on to uwsm, which stops the
-#  compositor; the launcher then runs step 10.
+#  compositor; the launcher then runs step 11.
 #
 # cleanup: for every Session_Env_List variable, sets the value the user
 # manager had before the session (session-env.pre) or unsets it when it had
@@ -69,10 +79,14 @@
 # their /opt/motanka entries and the other variables are unset. With the
 # reference D-Bus daemon (not dbus-broker) the same values also go to its
 # activation environment, empty for unset ones, because it cannot unset.
+# Then the session capture is ended (mk_capture_end, under the per-user
+# lock), whatever the result of the environment restore; the exit code is
+# that of the environment restore.
 #
 # Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of the
 # /opt/motanka, /sys and /proc paths. loginctl, systemctl, systemd-cat,
 # flock and dbus-update-activation-environment are found through PATH.
+# MOTANKA_HOME_PATHS (src/lib/homepaths.sh) replaces home-paths.tsv.
 #
 # Exit codes: uwsm's when it ran; 0 cleanup done; 1 error; 2 usage;
 # 12 session refused.
@@ -106,6 +120,14 @@ fi
 MK_CMD=session
 # shellcheck source=../lib/common.sh
 source "$_s_base/lib/common.sh"
+# shellcheck source=../lib/guard.sh
+source "$_s_base/lib/guard.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_s_base/lib/userledger.sh"
+# shellcheck source=../lib/homepaths.sh
+source "$_s_base/lib/homepaths.sh"
+# shellcheck source=../lib/capture.sh
+source "$_s_base/lib/capture.sh"
 
 S_UWSM=$(mk_path "$S_PREFIX/bin/uwsm")
 S_START_HYPRLAND=$(mk_path "$S_PREFIX/bin/start-hyprland")
@@ -575,7 +597,7 @@ _s_export_env() {
   export XDG_DATA_DIRS="$S_PREFIX/share${data:+:$data}"
 }
 
-# _s_user_setup: step 7.
+# _s_user_setup: step 8.
 _s_user_setup() {
   local rc=0
   if [[ ! -e $S_USER_SETUP ]]; then
@@ -592,7 +614,38 @@ _s_user_setup() {
   fi
 }
 
-# _s_link_units: step 8.
+# _s_capture <start|end>: steps 7 and 11 (see the top). Never fails the
+# caller.
+_s_capture() {
+  local what=$1 marker rc=0
+  if marker=$(mk_guard_protected_marker); then
+    mk_log notice "no session capture: this machine is a Protected_Host ($marker exists)"
+    return 0
+  fi
+  if [[ $what == end ]] && ! mk_capture_pending; then
+    return 0
+  fi
+  (
+    lrc=0
+    mk_userledger_lock || lrc=$?
+    if ((lrc != 0)); then
+      exit "$lrc"
+    fi
+    "mk_capture_$what"
+  ) || rc=$?
+  case $rc in
+    0) ;;
+    "$MK_EXIT_LOCKED")
+      mk_log warning "session capture $what skipped: another per-user Motanka operation holds the per-user lock; a pending capture is ended at the next login or by 'motanka remove'"
+      ;;
+    *)
+      mk_warn "session capture $what failed (exit $rc); home-folder paths written in this session may stay after 'motanka remove' (details: journalctl -t motanka)"
+      ;;
+  esac
+  return 0
+}
+
+# _s_link_units: step 9.
 _s_link_units() {
   local dst=$XDG_RUNTIME_DIR/systemd/user f name n=0
   local -a units=()
@@ -689,6 +742,7 @@ _s_start() {
   _s_load_list
   _s_export_env
   _s_prepare_manager "$pre"
+  _s_capture start
   _s_user_setup
   _s_link_units
 
@@ -719,6 +773,7 @@ _s_start() {
   wait "$watcher" 2>/dev/null || true
   systemctl --user stop "$S_TARGET" 2>/dev/null || true
   _s_restore "$pre" || true
+  _s_capture end
   _s_unlink_units
   rm -f -- "$pre"
   mk_log info "the Motanka session ended (uwsm exit $rc)"
@@ -726,13 +781,14 @@ _s_start() {
 }
 
 _s_cleanup() {
+  local rc=0
   if [[ -z ${XDG_RUNTIME_DIR:-} ]]; then
     mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set; cannot find the session snapshot"
   fi
   _s_load_list
-  if ! _s_restore "$XDG_RUNTIME_DIR/motanka/session-env.pre"; then
-    exit "$MK_EXIT_ERROR"
-  fi
+  _s_restore "$XDG_RUNTIME_DIR/motanka/session-env.pre" || rc=$MK_EXIT_ERROR
+  _s_capture end
+  exit "$rc"
 }
 
 case ${1:-} in

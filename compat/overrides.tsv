@@ -32,6 +32,7 @@ bin/omarchy-pkg-remove	implemented	a fuzzy finder over the packages this user in
 bin/omarchy-plymouth-set	unsupported	changes the Plymouth boot splash and rebuilds the initramfs
 bin/omarchy-provision-hardware	unsupported	a step of Upstream's Arch installer: pacman keyring, mkinitcpio and Limine setup
 bin/omarchy-provision-owner	unsupported	a step of Upstream's Arch installer: disk encryption re-key, pacman and Limine configuration
+bin/omarchy-provision-user	implemented	runs Upstream's script with a staging home and without the per-user scripts of install/user/all.sh (per-user setup ran those it allows); writes only its session and app files (the agent skill links), its default launchers with OnlyShowIn=Motanka; and its done marker through the User_Ledger, and drops the XDG user folders, GTK bookmarks and default applications it sets, which other sessions read
 bin/omarchy-refresh-limine	unsupported	rewrites /boot/limine.conf
 bin/omarchy-refresh-pacman	unsupported	rewrites /etc/pacman.conf and the mirror list; 'sudo motanka doctor --fix' switches Motanka's apt suite
 bin/omarchy-snapshot	implemented	create exits 127, Upstream's code for "no snapshot tool", because 'sudo motanka update' takes Motanka's snapshot; restore is not available (use 'sudo motanka rollback') and exits 64

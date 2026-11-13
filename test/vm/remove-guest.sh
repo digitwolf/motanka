@@ -51,7 +51,15 @@
 #                         is not installed, installed through the Helper
 #                         (as root with PKEXEC_UID, as pkexec runs it)
 #   webapp                a web app through the omarchy-webapp-install
-#                         override, with a local icon
+#                         override, with a local icon; the override must
+#                         report the entry it installed, which must carry
+#                         OnlyShowIn=Motanka; and a menu-desktop ledger
+#                         line; on failure the Wrapper, override, folder,
+#                         ledger and journal are shown
+#   capture-check [session|none]
+#                         no unplanned entry in tester's User_Ledger, and
+#                         (session, the default) the session capture was
+#                         ended at logout; lists adopted and observed paths
 #   remove-dry <cli> [user...]
 #                         'motanka remove --dry-run' exits 0, prints the
 #                         Plan, lists the menu package and the web app as
@@ -605,21 +613,83 @@ phase_menu_install() {
   fi
 }
 
+# webapp_diagnose: what the web-app phase needs to explain a failure.
+webapp_diagnose() {
+  local w=$PREFIX/bin/omarchy-webapp-install o=$PREFIX/libexec/motanka/overrides/omarchy-webapp-install
+  {
+    echo "--- Wrapper $w:"
+    head -n 4 "$w" 2>&1 || true
+    echo "--- override $o:"
+    ls -l "$o" 2>&1 || true
+    echo "--- Upstream script:"
+    ls -l "$PREFIX/share/omarchy/bin/omarchy-webapp-install" 2>&1 || true
+    echo "--- ~/.local/share/applications:"
+    ls -la "$HOME/.local/share/applications" 2>&1 || true
+    echo "--- User_Ledger, last 15 lines:"
+    tail -n 15 "$HOME/.local/state/motanka/ledger" 2>&1 | cut -f3- || true
+    echo "--- journal (motanka), last 30 lines:"
+    sudo journalctl -b -t motanka -n 30 --no-pager 2>&1 || true
+  } >"$L/webapp-diagnose.log"
+  show "$L/webapp-diagnose.log"
+}
+
 phase_webapp() {
-  local rc=0 f
-  f="$HOME/.local/share/applications/$WEBAPP_NAME.desktop"
+  local rc=0 f rel
+  rel=".local/share/applications/$WEBAPP_NAME.desktop"
+  f="$HOME/$rel"
   printf '\x89PNG\r\n\x1a\n' >"$T/icon.png"
   env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" XDG_RUNTIME_DIR="$RT" \
     PATH="$PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
     "$PREFIX/bin/omarchy-webapp-install" "$WEBAPP_NAME" https://example.test/ "$T/icon.png" \
     </dev/null >"$L/webapp.log" 2>&1 || rc=$?
-  if ((rc == 0)) && grep -qx 'OnlyShowIn=Motanka;' "$f" 2>/dev/null &&
-    grep -q $'\tmenu-desktop\tapp\t.local/share/applications/'"$WEBAPP_NAME"'.desktop\t' "$HOME/.local/state/motanka/ledger"; then
-    pass "the web app override wrote '$f' with OnlyShowIn=Motanka; and ledgered it"
-    printf '%s\n' ".local/share/applications/$WEBAPP_NAME.desktop" >"$S/webapp"
-  else
-    fail "the web app override exited $rc or did not ledger '$f'"
+  if ((rc != 0)); then
+    fail "the web app override exited $rc"
     show "$L/webapp.log"
+    webapp_diagnose
+    return 0
+  fi
+  if ! grep -qF "installed the web app entry ~/$rel" "$L/webapp.log"; then
+    fail "the web app override exited 0 without reporting the entry it installed"
+    show "$L/webapp.log"
+    webapp_diagnose
+    return 0
+  fi
+  if grep -qx 'OnlyShowIn=Motanka;' "$f" 2>/dev/null &&
+    awk -F'\t' -v p="$rel" '$3 == "menu-desktop" && $4 == "app" && $5 == p { f = 1 } END { exit !f }' \
+      "$HOME/.local/state/motanka/ledger"; then
+    pass "the web app override wrote '$f' with OnlyShowIn=Motanka; and ledgered it"
+    printf '%s\n' "$rel" >"$S/webapp"
+  else
+    fail "the web app override reported '$f' but it lacks OnlyShowIn=Motanka; or a menu-desktop ledger line"
+    show "$L/webapp.log"
+    webapp_diagnose
+  fi
+}
+
+# phase_capture_check: after the session ended (or without a session),
+# the User_Ledger holds no unplanned entry (6.10, 12.8: tests fail on
+# them), and with a session the capture was ended. Lists the adopted and
+# observed paths for the log.
+phase_capture_check() {
+  local ul=$HOME/.local/state/motanka/ledger cap=$HOME/.local/state/motanka/capture how=${ARGS[0]:-session}
+  if [[ ! -f $ul ]]; then
+    fail "no User_Ledger at $ul"
+    return 0
+  fi
+  if [[ $how == session ]]; then
+    if [[ -e $cap/start ]]; then
+      fail "the session capture is still pending after logout ($cap/start exists)"
+    else
+      pass "the session capture was ended when the session ended"
+    fi
+  fi
+  awk -F'\t' '$3 == "adopt" { print "    adopted:  " $4 " ~/" $5 }' "$ul"
+  awk -F'\t' '$3 == "observed" { print "    observed: ~/" $5 }' "$ul"
+  if awk -F'\t' '$3 == "unplanned" { f = 1 } END { exit !f }' "$ul"; then
+    fail "the User_Ledger records unplanned home-folder paths:"
+    awk -F'\t' '$3 == "unplanned" { print "    ~/" $5 }' "$ul"
+  else
+    pass "the User_Ledger records no unplanned home-folder path"
   fi
 }
 
@@ -763,6 +833,7 @@ case $phase in
   theme) phase_theme ;;
   menu-install) phase_menu_install ;;
   webapp) phase_webapp ;;
+  capture-check) phase_capture_check ;;
   remove-dry) phase_remove_dry ;;
   remove) phase_remove ;;
   *)

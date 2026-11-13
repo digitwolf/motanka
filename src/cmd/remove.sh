@@ -6,8 +6,9 @@
 #
 # Steps, in order. Nothing changes before step 8.
 #   1. options; root (exit 11)
-#   2. copy the Remover (the motanka command, lib/*.sh, cmd/remove.sh and
-#      package-map.tsv) to /run/motanka/remove.XXXXXX and run from there,
+#   2. copy the Remover (the motanka command, lib/*.sh, cmd/remove.sh,
+#      package-map.tsv and home-paths.tsv) to /run/motanka/remove.XXXXXX
+#      and run from there,
 #      because the packages that hold it are about to be purged. It runs
 #      as "bash <copy>/motanka", so a noexec /run does not matter.
 #   3. the system lock (exit 9)
@@ -24,18 +25,26 @@
 #      - Foreign_Packages: the System_Ledger's pkg-installed names and the
 #        packages that plan lines of install and update runs name as new
 #        installs ("Inst <name> (" - this covers an interrupted install,
-#        whose pkg-installed lines were never written). A name is removed
-#        only if it is known to dpkg, not recorded as manual, still marked
-#        auto by apt-mark, and in the set "apt-get -s purge --auto-remove
-#        <Motanka packages>" would remove; packages the ledger does not
-#        name are never removed, whatever the simulation says (10.7, 10.8).
-#        A ledgered package (not recorded as manual) that is down to its
-#        configuration files is purged too; nothing can depend on it.
-#        Packages installed from Upstream menus (menu-install ... apt) are
-#        kept and listed, unless --purge (10.9). The set is then checked
-#        with "apt-get -s purge <Motanka packages> <set>": a member whose
-#        removal would also remove a package outside the set is dropped,
-#        and the check repeats. No autoremove is ever run.
+#        whose pkg-installed lines were never written). A name is a
+#        candidate only if it is known to dpkg, not recorded as manual and
+#        still marked auto by apt-mark; packages the ledger does not name
+#        are never removed (10.7, 10.8). A ledgered package (not recorded
+#        as manual) that is down to its configuration files is purged too;
+#        nothing can depend on it. Packages installed from Upstream menus
+#        (menu-install ... apt) are kept and listed, unless --purge (10.9).
+#        The candidates are checked with "apt-get -s purge <Motanka
+#        packages> <set>": a member that a package outside the set depends
+#        on (Depends or Pre-Depends, directly or through Provides), so that
+#        the purge would remove that package too, is dropped and listed as
+#        kept, and the check repeats. apt's resolver decides, so a
+#        dependency that another installed alternative still satisfies
+#        ("polkitd | pkexec" with polkitd installed) does not keep a
+#        member. Recommends and Suggests of other packages do not keep a
+#        member either: Motanka installed it, so before the install those
+#        were unmet. apt's autoremove marking is not used for this, because
+#        it keeps every package that a Recommends, a Suggests or any
+#        alternative of an installed package names. No autoremove is ever
+#        run.
 #      - binary outcomes installed from menus under /opt/motanka: kept and
 #        listed, deleted with --purge
 #   7. --dry-run prints the Plan and exits 0 (10.10)
@@ -44,12 +53,18 @@
 #      line per package to the System_Ledger (when it exists)
 #   9. user phase, as the invoking user (setpriv), holding the per-user
 #      lock $XDG_RUNTIME_DIR/motanka.lock that per-user setup holds while
-#      it runs (exit 9 when it is held): Flatpak apps from menus
+#      it runs (exit 9 when it is held): a session capture that is still
+#      pending is ended first (mk_capture_end, src/lib/capture.sh: paths a
+#      Motanka session created are adopted, observed or recorded as
+#      unplanned; the dry run lists what it would record, through
+#      mk_capture_end --plan, and writes nothing), then Flatpak apps from menus
 #      (uninstalled only with --purge), the User_Ledger walked in reverse
 #      (mk_userledger_revert: unchanged files restored or deleted, edited
 #      files moved to ~/.local/state/motanka-removed-<date>/, marked blocks
 #      removed, entries inside Namespaced_Paths deleted whatever their
-#      state, created folders removed when empty), then the
+#      state, created and adopted folders removed when empty, adopted
+#      files deleted when unchanged and moved aside when changed, unplanned
+#      and observed paths listed and left), then the
 #      Namespaced_Paths, empty folders the ledger records as created, and
 #      complete marked blocks left in shell rc files (10.2-10.5). The dry
 #      run lists the same walk through mk_userledger_revert_plan. If it
@@ -100,6 +115,10 @@ source "$_mk_rm_base/lib/common.sh"
 source "$_mk_rm_base/lib/sysledger.sh"
 # shellcheck source=../lib/userledger.sh
 source "$_mk_rm_base/lib/userledger.sh"
+# shellcheck source=../lib/homepaths.sh
+source "$_mk_rm_base/lib/homepaths.sh"
+# shellcheck source=../lib/capture.sh
+source "$_mk_rm_base/lib/capture.sh"
 
 readonly MK_RM_RUN=/run/motanka
 readonly MK_RM_MARKER=/run/motanka/remover.active
@@ -317,7 +336,7 @@ _mk_rm_require_root() {
 # arguments. Returns (and sets MK_RM_WORK) when this process already is
 # that copy.
 _mk_rm_self_copy() {
-  local here entry run d map
+  local here entry run d map hp
   here=$(readlink -f -- "$MK_LIBEXEC")
   if [[ -n ${MK_REMOVER_COPY:-} && $(readlink -f -- "$MK_REMOVER_COPY") == "$here" ]]; then
     MK_RM_WORK=$here
@@ -333,10 +352,12 @@ _mk_rm_self_copy() {
   fi
   d=$(mktemp -d "$run/remove.XXXXXX") || mk_die "$MK_EXIT_ERROR" "cannot create a folder in $run; nothing was changed"
   map=$(mk_path "$MK_RM_MAP")
+  hp=$(mk_hp_file)
   if ! chmod 0755 -- "$d" || ! mkdir -m 0755 -- "$d/lib" "$d/cmd" ||
     ! cp -- "$entry" "$d/motanka" || ! cp -- "$MK_LIBEXEC"/lib/*.sh "$d/lib/" ||
     ! cp -- "$MK_LIBEXEC/cmd/remove.sh" "$d/cmd/" ||
     { [[ -r $map ]] && ! cp -- "$map" "$d/package-map.tsv"; } ||
+    { [[ -r $hp ]] && ! cp -- "$hp" "$d/home-paths.tsv"; } ||
     ! chmod -R u=rwX,go=rX -- "$d"; then
     rm -rf -- "$d"
     mk_die "$MK_EXIT_ERROR" "cannot copy the Remover to $d; nothing was changed"
@@ -602,9 +623,9 @@ _mk_rm_dep_names() {
 # removed. Returns 1 when apt cannot simulate; exits 5 when the purge would
 # install a package.
 _mk_rm_verify_cascade() {
-  local with=$1 out=$MK_RM_WORK/sim-cascade.txt name p hit progress rounds
+  local with=$1 out=$MK_RM_WORK/sim-cascade.txt name p q hit progress rounds
   shift
-  local -a members=("$@") args=() extra=() keepers=() inst=() provs=()
+  local -a members=("$@") args=() extra=() keepers=() inst=() provs=() by=() pdeps=()
   local -A inset=() deps=() prov=()
   MK_RM_CHECKED=()
   rounds=$(($# + 1))
@@ -634,12 +655,19 @@ _mk_rm_verify_cascade() {
       MK_RM_CHECKED=("${members[@]}")
       return 0
     fi
+    # deps[<name>]: the removed packages whose Depends or Pre-Depends name
+    # <name>, as " a b ".
     deps=()
-    while IFS= read -r name; do
-      deps[$name]=1
+    while IFS=$'\t' read -r name p; do
+      name=${name%%:*}
+      while IFS= read -r q; do
+        if [[ -n $q && ${deps[$q]:-} != *" $name "* ]]; then
+          deps[$q]="${deps[$q]:- }$name "
+        fi
+      done < <(printf 'x\t%s\n' "$p" | _mk_rm_dep_names)
     done < <(
       # shellcheck disable=SC2016 # dpkg-query fields, not shell variables
-      dpkg-query -W -f='${Package}\t${Depends}, ${Pre-Depends}\n' "${extra[@]}" 2>/dev/null | _mk_rm_dep_names
+      dpkg-query -W -f='${Package}\t${Depends}, ${Pre-Depends}\n' "${extra[@]}" 2>/dev/null || true
     )
     prov=()
     while IFS=$'\t' read -r name p; do
@@ -651,19 +679,19 @@ _mk_rm_verify_cascade() {
     keepers=()
     progress=0
     for name in "${members[@]}"; do
-      hit=0
-      if [[ -n ${deps[$name]:-} ]]; then
-        hit=1
-      else
-        mapfile -t provs < <(printf 'x\t%s\n' "${prov[$name]:-}" | _mk_rm_dep_names)
-        for p in "${provs[@]}"; do
-          if [[ -n ${deps[$p]:-} ]]; then
-            hit=1
+      hit=${deps[$name]:-}
+      mapfile -t provs < <(printf 'x\t%s\n' "${prov[$name]:-}" | _mk_rm_dep_names)
+      for p in "${provs[@]}"; do
+        read -r -a pdeps <<<"${deps[$p]:-}"
+        for q in "${pdeps[@]}"; do
+          if [[ " $hit " != *" $q "* ]]; then
+            hit+=" $q"
           fi
         done
-      fi
-      if ((hit)); then
-        _mk_rm_kept "$name" "a package Motanka did not install depends on it: ${extra[*]}"
+      done
+      read -r -a by <<<"$hit"
+      if ((${#by[@]} > 0)); then
+        _mk_rm_kept "$name" "another installed package depends on it: ${by[*]}"
         progress=1
       else
         keepers+=("$name")
@@ -689,9 +717,9 @@ _mk_rm_verify_cascade() {
 # state after the Motanka packages are gone. Needs _mk_rm_load_state and
 # _mk_rm_plan_motanka. Returns 1 when apt cannot simulate.
 mk_remove_foreign_plan() {
-  local with=$1 out=$MK_RM_WORK/sim-auto.txt name mode uid kind
-  local -a cand=() menu=() rc_only=() args=() r0=() names=()
-  local -A ledgered=() menu_uid=() removable=()
+  local with=$1 name mode uid kind
+  local -a cand=() menu=() rc_only=() r0=() names=()
+  local -A ledgered=() menu_uid=()
   MK_RM_FOREIGN=() MK_RM_KEPT=()
   while IFS=$'\t' read -r name mode; do
     if [[ -n $name ]]; then
@@ -734,28 +762,7 @@ mk_remove_foreign_plan() {
     fi
   done
 
-  if ((${#cand[@]} + ${#menu[@]} > 0)); then
-    if ((with)); then
-      args=("${MK_RM_MOTANKA[@]}")
-    fi
-    args+=("${menu[@]}")
-    if ((${#args[@]} > 0)); then
-      _mk_rm_simulate "$out" purge --auto-remove "${args[@]}" || return 1
-    else
-      _mk_rm_simulate "$out" autoremove --purge || return 1
-    fi
-    while IFS= read -r name; do
-      removable[$name]=1
-    done < <(_mk_rm_sim_names "$out" rm)
-    for name in "${cand[@]}"; do
-      if [[ -n ${removable[$name]:-} ]]; then
-        r0+=("$name")
-      else
-        _mk_rm_kept "$name" "another installed package needs it"
-      fi
-    done
-    r0+=("${menu[@]}")
-  fi
+  r0=("${cand[@]}" "${menu[@]}")
   if ((${#r0[@]} > 0)); then
     _mk_rm_verify_cascade "$with" "${r0[@]}" || return 1
   else
@@ -809,7 +816,7 @@ _mk_rm_plan_system() {
 
 # _mk_rm_user_read <home>: reads the User_Ledger into _MK_RM_U_MENU
 # (menu-desktop paths), _MK_RM_U_FLATPAKS (app IDs from shadow entries),
-# _MK_RM_U_DIRS (folders Motanka created, in ledger order) and
+# _MK_RM_U_DIRS (folders Motanka created or adopted, in ledger order) and
 # _MK_RM_U_BLOCKS (files with a ledgered block).
 _mk_rm_user_read() {
   local home=$1 ledger line verb rel abs id
@@ -837,7 +844,7 @@ _mk_rm_user_read() {
           fi
         fi
         ;;
-      create)
+      create | adopt)
         if [[ $rel == */ && -z ${seen[d:$rel]:-} ]]; then
           seen[d:$rel]=1
           _MK_RM_U_DIRS+=("$rel")
@@ -859,7 +866,8 @@ _mk_rm_user_line() {
     deleted) a=delete p=deleted detail="" ;;
     moved) a=move p=moved detail="edited by you; moved to ~/$detail" ;;
     block-removed) a=remove-block p=removed-block detail="marked Motanka block" ;;
-    unplanned) a=leave p=left detail="changed during setup without a ledger entry; not restored" ;;
+    unplanned) a=leave p=left detail="changed during setup or a Motanka session without a ledger entry; not restored" ;;
+    observed) a=leave p=left detail="written by Ubuntu's session components, as at any graphical login; not Motanka's" ;;
     rmdir) a=delete p=deleted detail="folder Motanka created, if empty" ;;
     kept)
       a=keep p=kept
@@ -1150,7 +1158,7 @@ _mk_rm_user_apply() {
 # never as root. Exit codes: 0, 1 error, 9 the per-user lock
 # ($XDG_RUNTIME_DIR/motanka.lock) is held.
 mk_remove_user_phase() {
-  local mode=$1 purge=$2 home rt rc=0
+  local mode=$1 purge=$2 home rt rc=0 extra
   MK_RM_U_PURGE=$purge
   if ((EUID == 0)); then
     mk_error "the user phase of motanka remove does not run as root"
@@ -1172,14 +1180,38 @@ mk_remove_user_phase() {
       return "$rc"
     fi
   fi
-  _mk_rm_user_read "$home"
+  # A session capture that was never ended (the session did not end
+  # cleanly): its paths go into the User_Ledger before the walk, so the
+  # walk removes what the session created (design.md, "Session-time home
+  # writes"). The dry run only adds the lines it would write to its walk.
   case $mode in
-    plan) _mk_rm_user_plan "$home" "$purge" ;;
-    apply) _mk_rm_user_apply "$home" "$purge" ;;
+    plan)
+      MK_UL_PLAN_EXTRA=()
+      if mk_capture_pending; then
+        if ! extra=$(mk_capture_end --plan); then
+          mk_error "cannot compare the home folder with the pending session capture in ~/$MK_CAP_REL"
+          return 1
+        fi
+        if [[ -n $extra ]]; then
+          mapfile -t MK_UL_PLAN_EXTRA <<<"$extra"
+        fi
+      fi
+      ;;
+    apply)
+      if mk_capture_pending && ! mk_capture_end; then
+        mk_error "cannot end the pending session capture in ~/$MK_CAP_REL; nothing in the home folder was changed"
+        return 1
+      fi
+      ;;
     *)
       mk_error "mk_remove_user_phase: unknown mode '$mode'"
       return 1
       ;;
+  esac
+  _mk_rm_user_read "$home"
+  case $mode in
+    plan) _mk_rm_user_plan "$home" "$purge" ;;
+    apply) _mk_rm_user_apply "$home" "$purge" ;;
   esac
 }
 
@@ -1197,6 +1229,9 @@ _mk_rm_as_user() {
   fi
   if [[ -n ${NO_COLOR:-} ]]; then
     envs+=(NO_COLOR="$NO_COLOR")
+  fi
+  if [[ -n $MK_RM_WORK && -r $MK_RM_WORK/home-paths.tsv ]]; then
+    envs+=(MOTANKA_HOME_PATHS="$MK_RM_WORK/home-paths.tsv")
   fi
   if [[ -n ${MOTANKA_ROOT:-} ]]; then
     envs+=(MOTANKA_ROOT="$MOTANKA_ROOT" PATH="$PATH")

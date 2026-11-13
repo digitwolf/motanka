@@ -6,17 +6,24 @@ Usage: fakeapt.py <apt-get|apt-mark|dpkg-query|dpkg> <arguments...>
        fakeapt.py check <db> <ledger> <removed-list> <purge:0|1>
 
 The package database is the file $FAKE_DB, one package per line:
-  name TAB status TAB version TAB auto|manual TAB depends TAB provides
-where depends and provides are comma-separated names or "-". Every call
-is appended to $FAKE_LOG as "<tool> <arguments>".
+  name TAB status TAB version TAB auto|manual TAB depends TAB provides [TAB weak]
+where depends, provides and weak are comma-separated names or "-". A
+depends or weak entry may be an or-group of alternatives "a|b". weak
+stands for Recommends and Suggests. Every call is appended to $FAKE_LOG as
+"<tool> <arguments>".
 
 Model:
   - a package is present when its status is not config-files or
     not-installed; only present packages satisfy dependencies
   - removing a set X also removes every present package with a dependency
-    that X leaves without a present provider (repeated until stable)
+    group that was satisfied and that X leaves without a present
+    alternative or provider (repeated until stable); weak entries never
+    remove anything
   - --auto-remove and autoremove also remove every present auto package
-    that no present manual package outside the removed set reaches
+    that no present manual package outside the removed set reaches, where
+    "reaches" follows depends and weak entries and every alternative of an
+    or-group, as apt's autoremove marking does with its default
+    APT::AutoRemove::RecommendsImportant and SuggestsImportant
   - purge forgets the package; remove leaves it in config-files
 apt-get update, install and upgrade exit 99: the Remover must never call
 them. FAKE_APT_FAIL=<command> makes the real (not simulated) run of that
@@ -60,7 +67,7 @@ def load(path):
             if not line or line.startswith("#"):
                 continue
             p = line.split("\t")
-            p += ["-"] * (6 - len(p))
+            p += ["-"] * (7 - len(p))
             name = p[0]
             rows[name] = {
                 "status": p[1],
@@ -68,6 +75,7 @@ def load(path):
                 "mark": p[3],
                 "deps": split_list(p[4]),
                 "provides": split_list(p[5]),
+                "weak": split_list(p[6]),
             }
             order.append(name)
     return rows, order
@@ -89,6 +97,7 @@ def save(path, rows, order):
                         r["mark"],
                         ",".join(r["deps"]) or "-",
                         ",".join(r["provides"]) or "-",
+                        ",".join(r.get("weak", [])) or "-",
                     ]
                 )
                 + "\n"
@@ -101,12 +110,14 @@ def present(rows, n):
 
 
 def satisfiers(rows, dep, gone):
+    """Present packages outside gone that satisfy a dependency group "a|b"."""
+    alts = [a for a in dep.split("|") if a]
     return [
         n
         for n, r in rows.items()
         if n not in gone
         and r["status"] in PRESENT
-        and (n == dep or dep in r["provides"])
+        and any(n == a or a in r["provides"] for a in alts)
     ]
 
 
@@ -138,7 +149,7 @@ def autoremovable(rows, gone):
         if n in keep:
             continue
         keep.add(n)
-        for d in rows[n]["deps"]:
+        for d in rows[n]["deps"] + rows[n].get("weak", []):
             stack.extend(s for s in satisfiers(rows, d, gone) if s not in keep)
     return {
         n
@@ -243,7 +254,7 @@ def dpkg_query(args):
             continue
         r = rows[n]
         if "Depends" in fmt:
-            print(f"{n}\t{', '.join(r['deps'])}")
+            print(f"{n}\t{', '.join(d.replace('|', ' | ') for d in r['deps'])}")
         elif "Provides" in fmt:
             print(f"{n}\t{', '.join(r['provides'])}")
         else:
@@ -291,7 +302,14 @@ def gen(seed, db, ledger, uid):
         deps = sorted(rng.sample(names[:i], k=min(i, rng.randint(0, 3))))
         if rng.random() < 0.1:
             deps.append(f"virt{rng.randint(0, 2)}")
+        if i >= 2 and rng.random() < 0.2:
+            deps.append("|".join(rng.sample(names[:i], k=2)))
         provides = [f"virt{rng.randint(0, 2)}"] if rng.random() < 0.2 else []
+        weak = []
+        if rng.random() < 0.25:
+            weak.append(rng.choice(names))
+        if i >= 2 and rng.random() < 0.15:
+            weak.append("|".join(rng.sample(names[:i], k=2)))
         rows[name] = {
             "status": rng.choices(
                 ["installed", "config-files", "not-installed", "unpacked"], [78, 9, 7, 6]
@@ -300,6 +318,7 @@ def gen(seed, db, ledger, uid):
             "mark": rng.choice(["auto", "auto", "manual"]),
             "deps": deps,
             "provides": provides,
+            "weak": [w for w in weak if w != name],
         }
         order.append(name)
     motanka = ["motanka", "motanka-core", "motanka-stack"][: rng.randint(1, 3)]
@@ -311,6 +330,7 @@ def gen(seed, db, ledger, uid):
             "deps": sorted(rng.sample(names, k=rng.randint(0, min(5, n))))
             + [x for x in motanka if x != m and m == "motanka"],
             "provides": [],
+            "weak": [],
         }
         order.append(m)
     save(db, rows, order)

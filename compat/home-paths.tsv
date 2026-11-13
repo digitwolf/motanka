@@ -1,26 +1,45 @@
-# home-paths.tsv: the Home_Path_Class of each home-folder target (design.md,
-# Data Models). Installed as /opt/motanka/share/motanka/home-paths.tsv; read
-# by per-user setup (/opt/motanka/libexec/motanka/user-setup) and printed by
-# "motanka install --dry-run".
+# home-paths.tsv: the Home_Path_Class of each home-folder path (design.md,
+# Data Models and "Session-time home writes"). Installed as
+# /opt/motanka/share/motanka/home-paths.tsv; read by per-user setup
+# (/opt/motanka/libexec/motanka/user-setup), the session capture
+# (src/lib/capture.sh), the provisioning override (omarchy-provision-user)
+# and tools/fpdiff.py, and printed by "motanka install --dry-run".
 #
 # Fields, separated by tabs:
-#   <glob>  namespaced|session|app|shared
+#   <glob>  namespaced|session|app|shared|desktop
 # A glob is relative to the home folder. "*" and "?" match within one path
 # component, "**" matches any number of them. The first line whose glob
-# matches a path decides its class. Per-user setup skips a target that no
-# line matches, and the motanka-core build fails on one ("user-setup
-# --plan").
+# matches a path decides its class; a folder that no line matches takes
+# the class of a path inside it ("<folder>/x"). Per-user setup skips a
+# target that no line matches, and the motanka-core build fails on one
+# ("user-setup --plan"). The session capture records a path no line
+# matches as unplanned.
 #
-# What per-user setup does with each class (design.md, "Per-user setup"):
+# What each class means for per-user setup (design.md, "Per-user setup")
+# and for the session capture (paths a Motanka session creates without a
+# ledger entry):
 #   namespaced  only Motanka or vendored Upstream code uses the path:
-#               written (ledgered, write-then-rename)
+#               written (ledgered, write-then-rename); not recorded by the
+#               capture, because the Remover deletes the Namespaced_Paths
 #   session     only the Motanka session reads it: ledgered, an existing
-#               file backed up, then replaced by write-then-rename
-#   app         an application config the user's other sessions may also
-#               use: as session, but an existing file is left alone
+#               file backed up, then replaced by write-then-rename; a new
+#               one the session creates is adopted (the Remover deletes it
+#               when unchanged)
+#   app         an application file the user's other sessions may also
+#               use: as session, but an existing file is left alone; a new
+#               one is adopted
 #   shared      read outside the Motanka session (Shared_File): never
 #               written; shell integration may add one marked block to an
-#               rc file when the user accepts it (6.5, 6.6)
+#               rc file when the user accepts it (6.5, 6.6); one the
+#               session creates or changes is recorded as unplanned
+#   desktop     written by Ubuntu's own session components (gnome-keyring,
+#               xdg-user-dirs, PipeWire, the display manager, ...) at any
+#               graphical login, the Motanka session's too: never written
+#               by Motanka, left alone by the Remover, listed by "motanka
+#               doctor" and left out of the Fingerprint comparison (the
+#               Allowlist)
+# The capture never adopts a path that existed when the session started,
+# and adds no line for a path that is in the User_Ledger already.
 #
 # Reviewed against Upstream's config/ tree at the stable pin (v4.5.0); each
 # config/<x> is copied to ~/.config/<x>. Upstream files per entry:
@@ -57,6 +76,64 @@
 # .local/state/omarchy/toggles/hypr/motanka-session.lua (session), the
 # migration markers .local/state/omarchy/migrations/<id>.sh (namespaced) and
 # the dconf database .config/dconf/motanka (namespaced).
+#
+# Writes during the Motanka session, found by the 26.04 round trip (first
+# login, theme switch, menu install, web app) and classified here:
+#   agent skill links that omarchy-provision-user makes (the override
+#     writes them through the User_Ledger) in ~/.agents/skills,
+#     ~/.claude/skills, ~/.codex/skills, ~/.gemini/config/skills,
+#     ~/.hermes/skills and ~/.pi/agent/skills, and the theme files the
+#     theme switch writes next to them (~/.claude/themes/omarchy.json,
+#     ~/.pi/agent/themes/omarchy-system.json, ~/.hermes/skins/omarchy.yaml)
+#                                                app: Upstream's own files
+#                                                in folders of tools the
+#                                                user may also run elsewhere
+#   ~/.config/<browser>/NativeMessagingHosts/com.omarchy.*.json for
+#     Chromium, Chrome, Brave and Edge (omarchy-install-chromium-copy-url
+#     and -ytdlp, run by install/user/chromium.sh, which per-user setup
+#     skips, and by migrations)               app: Upstream's own files; the
+#                                                rest of a browser profile
+#                                                stays shared
+#   ~/.XCompose (install/user/xcompose.sh)       shared: GTK and X input
+#                                                read it in every session;
+#                                                Motanka never writes it
+#   ~/Work, ~/Work/tries (install/user/mise-work.sh)
+#                                                app: folders for Upstream's
+#                                                "try" tool, removed when
+#                                                empty
+#   ~/.config/fcitx5/**, ~/.local/share/fcitx5/** (omarchy-input-method in
+#     the first-run step, omarchy-theme-set-fcitx5)
+#                                                app: the input method's
+#                                                configuration and theme
+#   ~/.local/share/dbus-1/services/org.fcitx.Fcitx5.service (the D-Bus
+#     activation file omarchy-input-method configure --defaults writes in
+#     the first-run step; the folders are adopted when new and removed when
+#     empty)                                     app: Upstream's file for
+#                                                the input method it starts;
+#                                                adopted, so the Remover
+#                                                deletes it; while Motanka
+#                                                is installed the session
+#                                                bus of every login reads it
+#   ~/.config/btop/themes/current.theme (theme switch)
+#                                                app (.config/btop/**)
+#   ~/.local/share/hyprland/lastVersion (the Stack's Hyprland at each
+#     start)                                     app: Ubuntu's own hyprland
+#                                                package writes the same
+#                                                file, so one that existed
+#                                                before is left alone
+#   ~/Desktop, ~/Documents, ~/Downloads, ~/Music, ~/Pictures, ~/Public,
+#     ~/Templates, ~/Videos, ~/.config/user-dirs.dirs,
+#     ~/.config/user-dirs.locale (xdg-user-dirs), ~/.config/gtk-3.0 and
+#     ~/.config/gtk-3.0/bookmarks (xdg-user-dirs-gtk),
+#     ~/.local/share/keyrings/** (gnome-keyring),
+#     ~/.local/share/session_migration-* (session-migration),
+#     ~/.local/state/wireplumber/** (WirePlumber), ~/.config/pulse/**
+#     (PulseAudio clients), ~/.local/share/gvfs-metadata/** (GVfs),
+#     ~/.local/share/recently-used.xbel (GTK), ~/.local/share/sddm/** (SDDM)
+#                                                desktop
+# omarchy-provision-user also sets the XDG user folders, GTK bookmarks and
+# default applications (~/.config/mimeapps.list), all Shared_Files; its
+# override (src/overrides/omarchy-provision-user) drops those writes.
 
 # --- Motanka's own file inside Upstream's namespace: listed before the
 # namespace, so it is ledgered and backed up as a session file.
@@ -102,6 +179,90 @@
 .config/tmux/**	app
 .local/share/applications/**	app
 
+# --- app: Upstream's files that the Motanka session writes after per-user
+# setup (see "Writes during the Motanka session" above)
+.agents	app
+.agents/skills	app
+.agents/skills/**	app
+.claude	app
+.claude/skills	app
+.claude/skills/**	app
+.claude/themes	app
+.claude/themes/omarchy.json	app
+.codex	app
+.codex/skills	app
+.codex/skills/**	app
+.gemini	app
+.gemini/config	app
+.gemini/config/skills	app
+.gemini/config/skills/**	app
+.hermes	app
+.hermes/skills	app
+.hermes/skills/**	app
+.hermes/profiles/*/skills	app
+.hermes/profiles/*/skills/**	app
+.hermes/skins	app
+.hermes/skins/omarchy.yaml	app
+.hermes/profiles/*/skins	app
+.hermes/profiles/*/skins/omarchy.yaml	app
+.pi	app
+.pi/agent	app
+.pi/agent/skills	app
+.pi/agent/skills/**	app
+.pi/agent/themes	app
+.pi/agent/themes/omarchy-system.json	app
+.config/chromium	app
+.config/chromium/NativeMessagingHosts	app
+.config/chromium/NativeMessagingHosts/com.omarchy.*	app
+.config/google-chrome*	app
+.config/google-chrome*/NativeMessagingHosts	app
+.config/google-chrome*/NativeMessagingHosts/com.omarchy.*	app
+.config/BraveSoftware	app
+.config/BraveSoftware/*	app
+.config/BraveSoftware/*/NativeMessagingHosts	app
+.config/BraveSoftware/*/NativeMessagingHosts/com.omarchy.*	app
+.config/microsoft-edge*	app
+.config/microsoft-edge*/NativeMessagingHosts	app
+.config/microsoft-edge*/NativeMessagingHosts/com.omarchy.*	app
+Work	app
+Work/tries	app
+.local/share/fcitx5	app
+.local/share/fcitx5/**	app
+.local/share/dbus-1	app
+.local/share/dbus-1/services	app
+.local/share/dbus-1/services/org.fcitx.Fcitx5.service	app
+.local/share/hyprland	app
+.local/share/hyprland/**	app
+
+# --- desktop: written by Ubuntu's session components at any graphical
+# login (see "Writes during the Motanka session" above). Listed before the
+# shared lines, so the GTK bookmarks are desktop and the rest of
+# ~/.config/gtk-3.0 stays shared.
+Desktop	desktop
+Documents	desktop
+Downloads	desktop
+Music	desktop
+Pictures	desktop
+Public	desktop
+Templates	desktop
+Videos	desktop
+.config/user-dirs.dirs	desktop
+.config/user-dirs.locale	desktop
+.config/gtk-3.0	desktop
+.config/gtk-3.0/bookmarks	desktop
+.config/pulse	desktop
+.config/pulse/**	desktop
+.local/share/keyrings	desktop
+.local/share/keyrings/**	desktop
+.local/share/session_migration-*	desktop
+.local/share/recently-used.xbel	desktop
+.local/share/gvfs-metadata	desktop
+.local/share/gvfs-metadata/**	desktop
+.local/share/sddm	desktop
+.local/share/sddm/**	desktop
+.local/state/wireplumber	desktop
+.local/state/wireplumber/**	desktop
+
 # --- shared: Shared_Files and other files every session reads
 .bashrc	shared
 .bash_profile	shared
@@ -118,7 +279,6 @@
 .config/git/**	shared
 .config/gtk-*/**	shared
 .config/mimeapps.list	shared
-.config/user-dirs.dirs	shared
 .config/autostart/**	shared
 .config/chromium/**	shared
 .config/wireplumber/**	shared
@@ -126,5 +286,3 @@
 .config/systemd/**	shared
 .config/fontconfig/**	shared
 .config/dconf/user	shared
-.local/share/keyrings/**	shared
-.local/state/wireplumber/**	shared

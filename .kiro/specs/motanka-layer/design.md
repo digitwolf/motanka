@@ -298,6 +298,42 @@ All commands log to the journal with `SYSLOG_IDENTIFIER=motanka`. Log lines carr
 5. Scan `~/.config`, `~/.local` and top-level dotfiles with `find -newer <marker>`. Any path not in the ledger and not under a Namespaced_Path is ledgered as `unplanned` (6.9, 6.10).
 6. Write `setup-end`. A login that finds `setup-begin` without `setup-end` resumes from the last ledgered step (6.7).
 
+### Session-time home writes
+
+Per-user setup sees only its own run. Upstream code started in the session (`omarchy-provision-first-run` from `default/hypr/autostart.lua`, `omarchy-theme-set`), the Stack (Hyprland writes `~/.local/share/hyprland/lastVersion`) and Ubuntu's own session components (gnome-keyring, xdg-user-dirs, WirePlumber) also write into the home folder. The 26.04 round trip left 123 such paths after removal. The session capture (`src/lib/capture.sh`) records them so that the Remover can undo what Motanka's session created (6.4, 6.9, 6.10, 10.1-10.5, 12.8).
+
+```mermaid
+sequenceDiagram
+  participant LS as session launcher
+  participant C as capture (User_Ledger lock)
+  participant US as user-setup
+  participant CL as motanka-session-cleanup.service
+  participant R as motanka remove (user phase)
+  LS->>C: capture start (end a capture left open first)
+  LS->>US: per-user setup
+  Note over LS: compositor runs; Upstream and Ubuntu write into $HOME
+  CL->>C: ExecStop "session cleanup": environment, then capture end
+  LS->>C: capture end if still pending
+  R->>C: capture end if still pending, before the ledger walk
+```
+
+- **Capture start** (launcher step 7, before per-user setup and uwsm, under the per-user lock only while it runs): ends a capture an earlier session left open, then writes `~/.local/state/motanka/capture/start` (its modification time is the marker; its content is the UTC time and run ID) and `capture/paths`, one `<find %y> TAB <path>` line per path that exists. A failure is logged and the session starts without a capture; on a Protected_Host nothing is written.
+- **Scanned roots**: `~/.config` and `~/.local` recursively, every top-level entry of the home folder, and top-level dot folders down to the fourth level. `~/.cache`, the Namespaced_Paths and `~/.local/state/motanka-removed-*` are pruned; mount points are not entered. One `find -printf` and one `tr`; no process per path. A unit test lists 100 000 entries within 1.5 s.
+- **Capture end** (ExecStop of `motanka-session-cleanup.service` after the environment cleanup, the launcher's own end, the next capture start, and the Remover's user phase before the ledger walk): one more walk and one awk pass compare the roots with `capture/paths`. A new folder that the walk cut off (a new `~/Work`, a new fourth-level folder) is walked whole. Every path not yet in the User_Ledger gets one line by its Home_Path_Class:
+
+| Path | namespaced | session, app | desktop | shared, no class |
+|---|---|---|---|---|
+| absent at the start | nothing | `adopt` | `observed` | `unplanned` |
+| present at the start, file or link changed after the marker (content, metadata or rename) | nothing | `unplanned` | nothing | `unplanned` |
+
+  A path present at the start is never adopted, also when it was replaced by a rename. A new folder of no class that holds adopted paths is adopted; one that holds only observed paths is observed; below a new folder recorded as unplanned, only paths of another class get lines. The lines are appended with one fsync (`mk_userledger_append_lines`), then the capture files are deleted. `--plan` prints the lines and writes nothing.
+- **User_Ledger verbs** added to Data Models: `adopt <session|app> <path> - <state> -` (a folder: `<path>/ - - -`) and `observed desktop <path> - <state|-> -`; `unplanned` lines written by the capture have `-` as their state. The reverse walk deletes an adopted file whose state is unchanged, moves a changed one to `motanka-removed-<date>`, removes an adopted folder when it is empty, and lists `observed` and `unplanned` paths without touching them. The Remover's dry run adds the planned capture lines to its walk (`MK_UL_PLAN_EXTRA`), so its Plan equals what the real run does.
+- **Home_Path_Class `desktop`** added to `home-paths.tsv`: paths that Ubuntu's session components write at any graphical login. Per-user setup never writes them and its post-setup scan skips them; the Remover leaves them; `motanka doctor` lists them; `tools/fpdiff.py` leaves them out of the Fingerprint comparison, reading the class from `compat/home-paths.tsv`, together with the folders that exist only to hold them. The classes and the reasons for the session-time paths are documented in `compat/home-paths.tsv`.
+- **`omarchy-provision-user` override**: Upstream's script sets the XDG user folders, GTK bookmarks and `mimeapps.list` (Shared_Files and desktop paths) and runs every script of `install/user/all.sh`, including those per-user setup skips. The override runs it unmodified with a staging home and an empty `all.sh`, then writes through the User_Ledger only its session and app files (the agent skill links), its default launchers with `OnlyShowIn=Motanka;` when no system launcher of the same name exists, and its done marker; the rest is dropped and named in the journal.
+- **Doctor**: `motanka doctor [--json]` reports the invoking user's User_Ledger, a pending capture, every `unplanned` entry (12.8) and every `observed` path, and changes nothing.
+- **Allowlist**: the Glossary's Allowlist needs "each user's paths of class `desktop` in `compat/home-paths.tsv`, created by Ubuntu's session components for any graphical login" (requirements.md is not changed by this section).
+- Limits: changed paths are looked for only in `~/.config`, `~/.local` and top-level dot entries; files that appear below a top-level folder that existed before (for example `~/Documents`) and below the fourth level of a dot folder that existed before are not seen; a deleted pre-existing file is not recorded.
+
 ### Updater, snapshots and rollback
 
 - Snapshot: `/var/lib/motanka/snapshots/<id>/` holds `manifest.tsv` (package, version), the installed Motanka .debs copied from the apt cache or rebuilt with `dpkg-repack`, and `user-<uid>.tar.zst` per user with a ledger. The last 3 snapshots are kept (9.10).

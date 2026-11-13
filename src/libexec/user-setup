@@ -38,9 +38,9 @@
 #          as Upstream's first install does, so a new user has no pending
 #          migration.
 #      namespaced and session targets are written; app targets too, unless
-#      the path already exists (kept, with a notice); shared targets are
-#      never written (6.5); a target no glob matches is skipped with a
-#      warning.
+#      the path already exists (kept, with a notice); shared and desktop
+#      targets are never written (6.5); a target no glob matches is skipped
+#      with a warning.
 #   3. The dconf user database ~/.config/dconf/motanka (DCONF_PROFILE=motanka
 #      reads it), compiled empty with "dconf compile" and written like a
 #      target. An existing database is kept.
@@ -58,9 +58,12 @@
 #   5. The scan (6.9, 6.10): every file, link and empty folder under
 #      ~/.config and ~/.local, and every top-level dot entry (and what is
 #      below it) except ~/.cache, that is newer than the time marker, absent
-#      from the User_Ledger and not a Namespaced_Path, is ledgered as
-#      unplanned and named in a warning. The Namespaced_Path folders, ~/.cache
-#      and ~/.local/state/motanka-removed-* are not searched.
+#      from the User_Ledger and of neither the namespaced nor the desktop
+#      class, is ledgered as unplanned and named in a warning. Paths of the
+#      desktop class are written by Ubuntu's session components, which run
+#      at the same time; the session capture records them (observed). The
+#      Namespaced_Path folders, ~/.cache and ~/.local/state/motanka-removed-*
+#      are not searched.
 #   6. setup-end is ledgered.
 # A login that finds setup-begin without a later setup-end resumes (6.7):
 # step 1 keeps the first time marker, step 2 skips each target whose
@@ -71,7 +74,8 @@
 #
 # --plan prints one line per target, fields separated by tabs:
 #   <write|write-if-absent|skip|unclassified>  <class or ->  <path>
-# and exits 1 if a target is unclassified. --upstream and --home-paths
+# (skip for shared and desktop targets) and exits 1 if a target is
+# unclassified. --upstream and --home-paths
 # replace the installed vendored tree and home-paths.tsv; the motanka-core
 # build runs it on the tree it packages.
 #
@@ -105,6 +109,8 @@ source "$_us_base/lib/common.sh"
 source "$_us_base/lib/guard.sh"
 # shellcheck source=../lib/userledger.sh
 source "$_us_base/lib/userledger.sh"
+# shellcheck source=../lib/homepaths.sh
+source "$_us_base/lib/homepaths.sh"
 
 US_VENDORED=$(mk_path "$US_PREFIX/share/omarchy")
 US_DATA=$(mk_path "$US_PREFIX/share/motanka")
@@ -115,8 +121,6 @@ US_FRAGMENT_SRC=$US_DATA/hypr/motanka-session.lua
 US_WRAPPERS=$(mk_path "$US_PREFIX/bin")
 US_VIEW=$(mk_path "$US_OMARCHY_PATH")
 
-HP_RE=()
-HP_CLASS=()
 declare -A US_LAST=()
 US_STATE=""
 US_EMPTY=""
@@ -148,51 +152,13 @@ _us_interrupt_point() {
 
 # --- path classes --------------------------------------------------------
 
-# _us_glob_re <glob>: the glob as an anchored extended regular expression.
-_us_glob_re() {
-  local g=$1 re="" c i
-  for ((i = 0; i < ${#g}; i++)); do
-    c=${g:i:1}
-    case $c in
-      '*')
-        if [[ ${g:i+1:1} == '*' ]]; then
-          re+='.*'
-          i=$((i + 1))
-        else
-          re+='[^/]*'
-        fi
-        ;;
-      '?') re+='[^/]' ;;
-      [A-Za-z0-9_/-]) re+=$c ;;
-      *) re+="\\$c" ;;
-    esac
-  done
-  printf '^%s$\n' "$re"
-}
-
-# _us_load_classes <home-paths.tsv>: fills HP_RE and HP_CLASS.
+# _us_load_classes <home-paths.tsv>: loads the classes (src/lib/homepaths.sh).
 _us_load_classes() {
-  local tsv=$1 glob class
-  HP_RE=()
-  HP_CLASS=()
-  if [[ ! -r $tsv ]]; then
+  local tsv=$1
+  if ! mk_hp_load "$tsv"; then
     mk_die "$MK_EXIT_ERROR" "cannot read $tsv; reinstall motanka-core"
   fi
-  while IFS=$'\t' read -r glob class _ || [[ -n $glob ]]; do
-    if [[ -z $glob || $glob == \#* ]]; then
-      continue
-    fi
-    case $class in
-      namespaced | session | app | shared) ;;
-      *)
-        mk_warn "ignoring '$glob' in $tsv: unknown class '${class:-}'"
-        continue
-        ;;
-    esac
-    HP_RE+=("$(_us_glob_re "$glob")")
-    HP_CLASS+=("$class")
-  done <"$tsv"
-  if ((${#HP_RE[@]} == 0)); then
+  if ((${#MK_HP_RE[@]} == 0)); then
     mk_die "$MK_EXIT_ERROR" "$tsv lists no path"
   fi
 }
@@ -200,14 +166,7 @@ _us_load_classes() {
 # _us_class <path>: prints the Home_Path_Class of a home-relative path;
 # returns 1 if no glob matches.
 _us_class() {
-  local i
-  for i in "${!HP_RE[@]}"; do
-    if [[ $1 =~ ${HP_RE[i]} ]]; then
-      printf '%s\n' "${HP_CLASS[i]}"
-      return 0
-    fi
-  done
-  return 1
+  mk_hp_class "$1"
 }
 
 # --- targets -------------------------------------------------------------
@@ -265,7 +224,7 @@ _us_plan() {
       case $class in
         namespaced | session) action="write" ;;
         app) action=write-if-absent ;;
-        shared) action=skip ;;
+        shared | desktop) action=skip ;;
       esac
     else
       class=- action=unclassified bad=1
@@ -374,8 +333,8 @@ _us_apply_one() {
     US_N_UNCLASSIFIED=$((US_N_UNCLASSIFIED + 1))
     return 0
   fi
-  if [[ $class == shared ]]; then
-    mk_log info "left ~/$rel unchanged: other sessions read it (shared)"
+  if [[ $class == shared || $class == desktop ]]; then
+    mk_log info "left ~/$rel unchanged: other sessions read it ($class)"
     US_N_SHARED=$((US_N_SHARED + 1))
     return 0
   fi
@@ -584,7 +543,7 @@ _us_scan() {
     if [[ -n ${known["$rel"]+x} ]]; then
       continue
     fi
-    if class=$(_us_class "$rel") && [[ $class == namespaced ]]; then
+    if class=$(_us_class "$rel") && [[ $class == namespaced || $class == desktop ]]; then
       continue
     fi
     if ! mk_field_ok "$rel"; then

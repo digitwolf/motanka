@@ -165,6 +165,14 @@ ul() {
   MK_HOME=$H bash -c 'set -euo pipefail; source "$1/src/lib/common.sh"; source "$1/src/lib/userledger.sh"; shift; "$@"' _ "$REPO" "$@"
 }
 
+# cap <function>: a capture.sh function on the test home, with the
+# repository's home-paths.tsv.
+cap() {
+  MK_HOME=$H MOTANKA_HOME_PATHS=$REPO/compat/home-paths.tsv bash -c 'set -euo pipefail
+    for l in common userledger homepaths capture; do source "$1/src/lib/$l.sh"; done
+    "$2"' _ "$REPO" "$1"
+}
+
 src() {
   printf '%b' "$2" >"$SRC/$1"
   printf '%s\n' "$SRC/$1"
@@ -268,10 +276,10 @@ no_network_no_install() {
   assert_line --regexp '^  purge +motanka-source-resolute 0\.1\.0-1  '
   assert_line --regexp '^  purge +libfoo1 1\.2-3  \(installed by Motanka; no other package needs it\)$'
   assert_line --regexp '^  purge +foo-tools 1\.2-3  '
-  assert_line --regexp '^  keep +libshared  \(another installed package needs it\)$'
+  assert_line --regexp '^  keep +libshared  \(another installed package depends on it: userapp\)$'
   assert_line --regexp '^  keep +libmarked  \(marked as manually installed since Motanka installed it\)$'
   assert_line --regexp "^  keep +btop  \\(installed from an Omarchy menu \\(uid $MYUID\\); --purge removes it\\)\$"
-  assert_line --regexp '^  keep +libbtop  \(another installed package needs it\)$'
+  assert_line --regexp '^  keep +libbtop  \(another installed package depends on it: btop\)$'
   refute_line --regexp '^  purge +(oldgarbage|bash|userapp|libshared|libmarked|btop|libbtop) '
   assert_line 'Dry run: nothing was changed.'
   cmp "$FAKE_DB" "$BATS_TEST_TMPDIR/db.before"
@@ -484,6 +492,42 @@ no_network_no_install() {
   [[ ! -e $H/.local/state/motanka && ! -e $H/.config/omarchy ]]
 }
 
+@test "a pending session capture is ended before the ledger walk; the dry run lists it and writes nothing" {
+  standard_db
+  mkdir -p "$MOTANKA_ROOT/opt/motanka/share/motanka"
+  cp "$REPO/compat/home-paths.tsv" "$MOTANKA_ROOT/opt/motanka/share/motanka/"
+  mkdir -p "$H/.config"
+  HOME_BEFORE=$(manifest "$H")
+  ul mk_userledger_setup_begin
+  ul mk_userledger_setup_end
+  # a Motanka session that was never ended (the capture is still pending)
+  cap mk_capture_start
+  sleep 0.05
+  mkdir -p "$H/.config/btop/themes" "$H/.agents/skills"
+  printf 'theme\n' >"$H/.config/btop/themes/current.theme"
+  ln -s /usr/share/omarchy/default/agents/skills/omarchy "$H/.agents/skills/omarchy"
+  printf 'compose\n' >"$H/.XCompose"
+  local mid
+  mid=$(manifest "$H")
+  remove --dry-run
+  assert_success
+  assert_line --regexp '^  delete +~/\.config/btop/themes/current\.theme$'
+  assert_line --regexp '^  delete +~/\.config/btop/themes/  \(folder Motanka created, if empty\)$'
+  assert_line --regexp '^  delete +~/\.agents/skills/omarchy$'
+  assert_line --regexp '^  delete +~/\.agents/  \(folder Motanka created, if empty\)$'
+  assert_line --regexp '^  leave +~/\.XCompose  \(changed during setup or a Motanka session without a ledger entry; not restored\)$'
+  assert_equal "$(manifest "$H")" "$mid"
+  [[ -f $H/.local/state/motanka/capture/start ]]
+  remove --yes
+  assert_success
+  assert_line --regexp '^  deleted +~/\.config/btop/themes/current\.theme$'
+  assert_line --regexp '^  left +~/\.XCompose  '
+  [[ ! -e $H/.config/btop && ! -e $H/.agents && ! -e $H/.local/state/motanka ]]
+  [[ -f $H/.XCompose ]]
+  rm "$H/.XCompose"
+  assert_equal "$(manifest "$H")" "$HOME_BEFORE"
+}
+
 # --- refusals and failures ----------------------------------------------------
 
 @test "a running Motanka session refuses with exit 12 and changes nothing" {
@@ -563,8 +607,62 @@ no_network_no_install() {
   sl 20261113T090000Z-aaaaaa run-end ok
   remove --yes
   assert_success
-  assert_line --regexp '^  kept +libx  \(a package Motanka did not install depends on it: garbage2\)$'
+  assert_line --regexp '^  kept +libx  \(another installed package depends on it: garbage2\)$'
   assert_equal "$(installed_names)" "garbage2 libx "
+}
+
+@test "a package Motanka installed is purged when only packages purged with it need it" {
+  # The 26.04 round trip: pkexec came in as a dependency of motanka-core.
+  # A host package suggests it (apport) and another names it as an
+  # alternative that polkitd already satisfies; apt's autoremove marking
+  # keeps a package for either, a dependency check does not.
+  db 'motanka installed 0.1 manual motanka-core -' \
+    'motanka-core installed 0.1 auto pkexec,libfoo1 -' \
+    'pkexec installed 127-1 auto polkitd -' \
+    'polkitd installed 127-1 manual - -' \
+    'apport installed 2.33 manual - - pkexec' \
+    'hostpkg installed 1.0 manual polkitd|pkexec -' \
+    'libfoo1 installed 1.2-3 auto - -' \
+    'btop installed 1.4 manual libbtop -' \
+    'libbtop installed 1.0 auto - -' \
+    'bash installed 5.2 manual - -'
+  local r=20261113T090000Z-aaaaaa m=20261113T100000Z-bbbbbb
+  sl "$r" run-begin install 0.1
+  sl "$r" plan "Inst pkexec (127-1 Ubuntu:26.04/resolute [amd64])"
+  sl "$r" plan "Inst libfoo1 (1.2-3 Ubuntu:26.04/resolute [amd64])"
+  sl "$r" pkg-installed pkexec 127-1 auto
+  sl "$r" pkg-installed libfoo1 1.2-3 auto
+  sl "$r" run-end ok
+  sl "$m" menu-install "$MYUID" btop apt
+  sl "$m" pkg-installed libbtop 1.0 auto
+
+  # The model reproduces what apt's autoremove marking does with it.
+  run apt-get -s purge --auto-remove motanka motanka-core btop
+  refute_output --partial 'pkexec'
+
+  remove --dry-run --purge
+  assert_success
+  assert_line --regexp '^  purge +pkexec 127-1  \(installed by Motanka; no other package needs it\)$'
+  refute_line --regexp '^  keep +pkexec'
+  remove --yes --purge
+  assert_success
+  assert_line 'Purged 4 package(s) Motanka installed: btop libbtop libfoo1 pkexec'
+  refute_line --regexp '^  kept +pkexec'
+  assert_equal "$(installed_names)" "apport bash hostpkg polkitd "
+}
+
+@test "a package Motanka installed that a host package depends on without an alternative is kept and named" {
+  db 'motanka-core installed 0.1 manual pkexec -' \
+    'pkexec installed 127-1 auto - -' \
+    'needs-pkexec installed 1.0 manual pkexec -' \
+    'bash installed 5.2 manual - -'
+  sl 20261113T090000Z-aaaaaa run-begin install 0.1
+  sl 20261113T090000Z-aaaaaa pkg-installed pkexec 127-1 auto
+  sl 20261113T090000Z-aaaaaa run-end ok
+  remove --yes --purge
+  assert_success
+  assert_line --regexp '^  kept +pkexec  \(another installed package depends on it: needs-pkexec\)$'
+  assert_equal "$(installed_names)" "bash needs-pkexec pkexec "
 }
 
 @test "a failed user phase stops before any package changes and keeps the ledgers" {

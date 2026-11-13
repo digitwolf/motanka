@@ -33,6 +33,11 @@ setup() {
   export NO_COLOR=1
 
   cp "$REPO/packaging/motanka-core/session-env.list" "$P/share/motanka/"
+  cp "$REPO/compat/home-paths.tsv" "$P/share/motanka/"
+  # The launcher writes the session capture into the home folder.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  unset MK_HOME MOTANKA_HOME_PATHS
   local u
   for u in wayland-wm@.service wayland-wm-env@.service wayland-session@.target \
     wayland-session-bindpid@.service app-graphical.slice hyprsunset.service; do
@@ -565,4 +570,104 @@ env_now() {
   assert_success
   run grep -h '^\[Install\]\|WantedBy=' "$d/motanka-session.target" "$d/motanka-session-cleanup.service"
   assert_output ''
+}
+
+# --- session capture (design.md, "Session-time home writes") ------------------
+
+# capture_lib <function>: a capture function of src/lib/capture.sh, run on
+# the test home with the test root's home-paths.tsv.
+capture_lib() {
+  bash -c 'set -euo pipefail
+    for l in common userledger homepaths capture; do source "$1/src/lib/$l.sh"; done
+    "$2"' _ "$REPO" "$1"
+}
+
+ledger_lines() {
+  cut -f3- "$HOME/.local/state/motanka/ledger"
+}
+
+@test "the session capture starts before per-user setup and ends when the session ends" {
+  cat >"$P/libexec/motanka/user-setup" <<'EOF'
+#!/bin/bash
+if [[ -f $HOME/.local/state/motanka/capture/start ]]; then
+  echo capture-started >>"$STUB_STATE/order"
+fi
+echo setup >>"$STUB_STATE/order"
+mkdir -p "$HOME/.config/btop/themes"
+printf 'theme\n' >"$HOME/.config/btop/themes/current.theme"
+EOF
+  chmod +x "$P/libexec/motanka/user-setup"
+  session
+  assert_success
+  run cat "$S/order"
+  assert_output "$(printf 'capture-started\nsetup\nuwsm')"
+  [[ ! -e $HOME/.local/state/motanka/capture/start ]]
+  run ledger_lines
+  assert_line --partial "$(printf 'adopt\tapp\t.config/btop/themes/current.theme\t-\t')"
+  assert_line "$(printf 'adopt\tapp\t.config/btop/\t-\t-\t-')"
+  run grep -F 'session capture ended' "$S/journal"
+  assert_success
+}
+
+@test "session cleanup ends a pending capture after restoring the environment" {
+  capture_lib mk_capture_start
+  sleep 0.05
+  mkdir -p "$HOME/.local/share/hyprland"
+  printf '0.57.2\n' >"$HOME/.local/share/hyprland/lastVersion"
+  printf 'DCONF_PROFILE\tmotanka\n' >"$S/env"
+  session cleanup
+  assert_success
+  run env_now
+  assert_output ''
+  [[ ! -e $HOME/.local/state/motanka/capture/start ]]
+  run ledger_lines
+  assert_line --partial "$(printf 'adopt\tapp\t.local/share/hyprland/lastVersion\t-\t')"
+}
+
+@test "a capture that a killed session left open is ended at the next start" {
+  capture_lib mk_capture_start
+  sleep 0.05
+  mkdir -p "$HOME/.claude/skills"
+  ln -s /usr/share/omarchy/default/agents/skills/omarchy "$HOME/.claude/skills/omarchy"
+  session
+  assert_success
+  run grep -F 'was not ended (the session did not end cleanly); ending it first' "$S/journal"
+  assert_success
+  run ledger_lines
+  assert_line --regexp $'^adopt\tapp\t\.claude/skills/omarchy\t-\tl:'
+  run grep -c $'\t.claude/skills/omarchy\t' "$HOME/.local/state/motanka/ledger"
+  assert_output 1
+  [[ ! -e $HOME/.local/state/motanka/capture/start ]]
+}
+
+@test "a held per-user lock skips the capture and the session still starts" {
+  local fd
+  exec {fd}>>"$XDG_RUNTIME_DIR/motanka.lock"
+  flock -n "$fd"
+  session
+  exec {fd}>&-
+  assert_success
+  [[ -e $S/uwsm.args && ! -e $HOME/.local/state/motanka/capture ]]
+  run grep -F 'session capture start skipped' "$S/journal"
+  assert_success
+}
+
+@test "on a Protected_Host the launcher writes no session capture" {
+  touch "$MOTANKA_ROOT/etc/motanka-protected" 2>/dev/null || {
+    mkdir -p "$MOTANKA_ROOT/etc"
+    touch "$MOTANKA_ROOT/etc/motanka-protected"
+  }
+  session
+  assert_success
+  [[ ! -e $HOME/.local ]]
+  run grep -F 'no session capture: this machine is a Protected_Host' "$S/journal"
+  assert_success
+}
+
+@test "the cleanup unit runs the cleanup that also ends the session capture" {
+  local d="$REPO/packaging/motanka-core/systemd"
+  run grep -c '^ExecStop=' "$d/motanka-session-cleanup.service"
+  assert_output 1
+  run grep -x 'TimeoutStopSec=60' "$d/motanka-session-cleanup.service"
+  assert_success
 }

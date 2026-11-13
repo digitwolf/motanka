@@ -880,3 +880,114 @@ $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
     fi
   done
 }
+
+# --- adopt and observed (session capture, design.md "Session-time home writes")
+
+@test "adopt records a file, a link and a folder with their current state" {
+  mkdir -p "$H/.config/btop/themes"
+  printf 'theme\n' >"$H/.config/btop/themes/current.theme"
+  ln -s /usr/share/omarchy/themes/x "$H/.config/btop/themes/link"
+  mk_userledger_adopt app .config/btop/
+  mk_userledger_adopt app .config/btop/themes/current.theme
+  mk_userledger_adopt app .config/btop/themes/link
+  run entries
+  assert_line "$(printf 'adopt\tapp\t.config/btop/\t-\t-\t-')"
+  assert_line "$(printf 'adopt\tapp\t.config/btop/themes/current.theme\t-\t%s\t-' "$(sha "$H/.config/btop/themes/current.theme")")"
+  assert_line --regexp $'^adopt\tapp\t\.config/btop/themes/link\t-\tl:[0-9a-f]{64}\t-$'
+  run mk_userledger_adopt app .config/missing
+  assert_failure
+  run mk_userledger_adopt shared .config/btop/themes/current.theme
+  assert_failure
+  run mk_userledger_adopt app .local/state/motanka/ledger
+  assert_failure
+}
+
+@test "an adopted file is deleted when unchanged and moved aside when changed; adopted folders go when empty; plan equals apply" {
+  mkdir -p "$H/.local/share/hyprland" "$H/.agents/skills"
+  printf '0.57\n' >"$H/.local/share/hyprland/lastVersion"
+  printf 'a\n' >"$H/.agents/skills/note"
+  ln -s /nowhere "$H/.agents/skills/omarchy"
+  mk_userledger_init
+  mk_userledger_adopt app .local/share/
+  mk_userledger_adopt app .local/share/hyprland/
+  mk_userledger_adopt app .local/share/hyprland/lastVersion
+  mk_userledger_adopt app .agents/
+  mk_userledger_adopt app .agents/skills/
+  mk_userledger_adopt app .agents/skills/note
+  mk_userledger_adopt app .agents/skills/omarchy
+  printf 'b\n' >>"$H/.agents/skills/note"
+  local before plan
+  before=$(manifest "$H")
+  run mk_userledger_revert_plan
+  assert_success
+  plan=$output
+  assert_equal "$(manifest "$H")" "$before"
+  run mk_userledger_revert
+  assert_success
+  assert_line "$(printf 'deleted\t.agents/skills/omarchy')"
+  assert_line --regexp $'^moved\t\.agents/skills/note\t\.local/state/motanka-removed-[0-9-]+/\.agents/skills/note$'
+  assert_line "$(printf 'deleted\t.agents/skills/')"
+  assert_line "$(printf 'deleted\t.agents/')"
+  assert_line "$(printf 'deleted\t.local/share/hyprland/lastVersion')"
+  assert_line "$(printf 'deleted\t.local/share/hyprland/')"
+  assert_line "$(printf 'deleted\t.local/share/')"
+  [[ ! -e $H/.agents && ! -e $H/.local/share ]]
+  assert_equal "$(printf '%s\n' "$plan" | grep -v $'^rmdir\t' | cut -f1,2)" \
+    "$(printf '%s\n' "$output" | grep -Ev $'^(deleted|kept)\t.*/$' | cut -f1,2)"
+}
+
+@test "observed entries are listed by the revert and left alone" {
+  mkdir -p "$H/Downloads" "$H/.local/share/keyrings"
+  printf 'k\n' >"$H/.local/share/keyrings/login.keyring"
+  mk_userledger_init
+  local f t
+  f=$(mktemp "$BATS_TEST_TMPDIR/lines.XXXXXX")
+  t=$(mk_utc_now)
+  printf '%s\tr1\tobserved\tdesktop\tDownloads/\t-\t-\t-\n%s\tr1\tobserved\tdesktop\t.local/share/keyrings/login.keyring\t-\t%s\t-\n' \
+    "$t" "$t" "$(sha "$H/.local/share/keyrings/login.keyring")" >"$f"
+  sed -i 's/\tr1\t/\t20261113T090000Z-abcdef\t/' "$f"
+  mk_userledger_append_lines "$f"
+  run mk_userledger_revert
+  assert_success
+  assert_line "$(printf 'observed\t.local/share/keyrings/login.keyring')"
+  assert_line "$(printf 'observed\tDownloads/')"
+  [[ -d $H/Downloads && -f $H/.local/share/keyrings/login.keyring ]]
+}
+
+@test "append_lines writes valid lines with one append and refuses a batch with an invalid line" {
+  mk_userledger_init
+  local good bad before
+  good=$(mktemp "$BATS_TEST_TMPDIR/good.XXXXXX")
+  bad=$(mktemp "$BATS_TEST_TMPDIR/bad.XXXXXX")
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tunplanned\t-\t.XCompose\t-\t-\t-\n' >"$good"
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tunplanned\t-\t.a\t-\t-\t-\nnot a ledger line\n' >"$bad"
+  before=$(wc -l <"$L")
+  run mk_userledger_append_lines "$bad"
+  assert_failure
+  assert_equal "$(wc -l <"$L")" "$before"
+  run mk_userledger_append_lines "$good"
+  assert_success
+  run tail -n 1 "$L"
+  assert_output --partial $'\tunplanned\t-\t.XCompose\t'
+  # a torn last line is closed first, so the new lines stay whole
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tcreate' >>"$L"
+  run mk_userledger_append_lines "$good"
+  assert_success
+  run mk_userledger_read
+  assert_equal "$(printf '%s\n' "$output" | grep -c $'\tunplanned\t-\t.XCompose\t')" 2
+}
+
+@test "the plan counts MK_UL_PLAN_EXTRA as written after the ledger; the revert ignores it" {
+  mkdir -p "$H/.config/btop"
+  printf 'x\n' >"$H/.config/btop/theme"
+  mk_userledger_init
+  MK_UL_PLAN_EXTRA=("$(printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tadopt\tapp\t.config/btop/theme\t-\t%s\t-' "$(sha "$H/.config/btop/theme")")")
+  run mk_userledger_revert_plan
+  assert_success
+  assert_line "$(printf 'deleted\t.config/btop/theme')"
+  [[ -f $H/.config/btop/theme ]]
+  run mk_userledger_revert
+  assert_success
+  refute_line --partial .config/btop/theme
+  [[ -f $H/.config/btop/theme ]]
+}

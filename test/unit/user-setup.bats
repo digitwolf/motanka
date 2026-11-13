@@ -661,3 +661,29 @@ mkdir -p "$HOME/.cache/x" && touch "$HOME/.cache/x/planted-cache"'
   run bash "$US" --bogus
   assert_failure 2
 }
+
+# --- the desktop class (design.md, "Session-time home writes") -----------------
+
+@test "a target of the desktop class is planned as skip and never written" {
+  write_file "$UP/config/user-dirs.dirs" 'XDG_DESKTOP_DIR="$HOME"'
+  run bash "$US" --plan --upstream "$UP" --home-paths "$REPO/compat/home-paths.tsv"
+  assert_success
+  assert_line "$(printf 'skip\tdesktop\t.config/user-dirs.dirs')"
+  run bash "$US"
+  assert_success
+  [[ ! -e $HOME/.config/user-dirs.dirs ]]
+  run ledger
+  refute_line --partial user-dirs.dirs
+}
+
+@test "paths of the desktop class written during setup are not recorded as unplanned" {
+  write_script "$UP/install/user/desktopish.sh" 'mkdir -p "$HOME/.local/share/keyrings"
+touch "$HOME/.local/share/keyrings/login.keyring"
+touch "$HOME/.config/unplanned.txt"'
+  write_user_scripts $'install/user/desktopish.sh\trun\tfixture'
+  run bash "$US"
+  assert_success
+  run ledger
+  assert_line --partial "$(printf 'unplanned\t-\t.config/unplanned.txt\t')"
+  refute_line --partial keyrings
+}

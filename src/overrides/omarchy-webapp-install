@@ -20,6 +20,14 @@
 # icons in ~/.local/share/icons without a cache and the cache file would be
 # an unledgered write. Anything else the script leaves in the staging
 # folder is discarded with it.
+#
+# A run that Upstream ends with exit 0 must leave a desktop entry in the
+# staging folder (with a name argument: <name>.desktop); otherwise nothing
+# is installed and the override exits 1 naming what the staging folder
+# held, so a silent success without a web app cannot happen. Afterwards
+# every entry it installed must be in the home folder with
+# OnlyShowIn=Motanka; and in the User_Ledger (exit 1 otherwise), and one
+# line per entry on stderr names it.
 set -euo pipefail
 
 _self=$(readlink -f -- "${BASH_SOURCE[0]}")
@@ -70,23 +78,44 @@ icons_rel=.local/share/icons/hicolor/256x256/apps
 apps_rel=.local/share/applications
 shopt -s nullglob
 
+entries=()
+for f in "$stage/$apps_rel"/*.desktop; do
+  if [[ -f $f && ! -L $f ]]; then
+    entries+=("$f")
+  fi
+done
+want=""
+if (($# >= 3)); then
+  want=$stage/$apps_rel/$1.desktop
+fi
+if ((${#entries[@]} == 0)) || [[ -n $want && ! -f $want ]]; then
+  staged=$(cd -- "$stage" && find . -mindepth 1 -printf '%P ' 2>/dev/null | head -c 600 || true)
+  # shellcheck disable=SC2016 # the single quotes are literal text inside the double quotes
+  mk_error "Upstream's omarchy-webapp-install exited 0 but wrote no desktop entry${want:+ named '${want##*/}'} (its staging home held: ${staged:-nothing}); no web app was installed"
+  exit 1
+fi
+
 for f in "$stage/$icons_rel"/*; do
   if [[ -f $f && ! -L $f ]]; then
     mk_userledger_menu_desktop "$icons_rel/${f##*/}" "$f" || exit 1
   fi
 done
 
-for f in "$stage/$apps_rel"/*.desktop; do
-  if [[ ! -f $f || -L $f ]]; then
-    continue
-  fi
+for f in "${entries[@]}"; do
+  rel=$apps_rel/${f##*/}
   limited=$stage/.motanka-entry
   if ! mk_oc_desktop_only_show_in "$f" "$limited"; then
     mk_error "the desktop entry ${f##*/} has no [Desktop Entry] group; it was not installed"
     exit 1
   fi
   chmod --reference="$f" -- "$limited"
-  mk_userledger_menu_desktop "$apps_rel/${f##*/}" "$limited" || exit 1
+  mk_userledger_menu_desktop "$rel" "$limited" || exit 1
   rm -f -- "$limited"
-  mk_log info "web app desktop entry $apps_rel/${f##*/} limited to the Motanka session"
+  if ! grep -qx 'OnlyShowIn=Motanka;' "$home/$rel" 2>/dev/null ||
+    ! mk_userledger_read | awk -F'\t' -v p="$rel" '$3 == "menu-desktop" && $5 == p { f = 1 } END { exit !f }'; then
+    mk_error "the web app entry ~/$rel was not written or not ledgered"
+    exit 1
+  fi
+  mk_log info "web app desktop entry $rel limited to the Motanka session"
+  printf 'motanka: installed the web app entry ~/%s for the Motanka session\n' "$rel" >&2
 done
