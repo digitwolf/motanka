@@ -89,19 +89,19 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - _Requirements: 13.1_
 
 - [ ] 9. Core data and CLI
-- [ ] 9.1 Package map
+- [x] 9.1 Package map
   - Create `packages.yaml` from Upstream's package lists at the pin, `tools/pkgmap` (validate, compile to `package-map.tsv` per release), `test/unit/pkgmap.bats`; fail on an unmapped Upstream package
   - _Requirements: 7.2, 7.9_
-- [ ] 9.2 CLI skeleton, exit codes, journal logging, lock
+- [x] 9.2 CLI skeleton, exit codes, journal logging, lock
   - Create `src/motanka`, `src/lib/common.sh`, `test/unit/cli.bats`; `NO_COLOR`, `--yes`, `--dry-run` parsing; `flock` on `/run/lock/motanka.lock`
   - _Requirements: 9.11, 12.5, 12.6_
-- [ ] 9.3 Guards
+- [x] 9.3 Guards
   - Create `src/lib/guard.sh`, `test/unit/guard.bats`: Protected_Host and Dev_Build checks
   - _Requirements: 14.8, 14.11_
-- [ ] 9.4 System_Ledger library
+- [x] 9.4 System_Ledger library
   - Create `src/lib/sysledger.sh`, `test/unit/sysledger.bats`: append with fsync, read back after truncation
   - _Requirements: 3.7, 3.9_
-- [ ] 9.5 User_Ledger library with property test
+- [x] 9.5 User_Ledger library with property test
   - Create `src/lib/userledger.sh`, `test/unit/userledger.bats`: write-then-rename, backups, reverse walk; for any generated action sequence, truncated at any point, the reverse walk restores the temp home byte for byte
   - _Requirements: 6.2, 6.3, 6.11, 10.2, 10.3, 10.4_
 

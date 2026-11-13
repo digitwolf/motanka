@@ -39,7 +39,7 @@ MK_CMD=${MK_CMD:-motanka}
 # Run identifier for ledger lines; created on first use by mk_run_id.
 MK_RUN_ID=${MK_RUN_ID:-}
 
-# Longest journal message in bytes; longer messages are cut. Messages
+# Longest journal message in characters; longer messages are cut. Messages
 # carry paths and package names only, never file contents (12.6).
 readonly MK_LOG_MAX=1000
 
@@ -117,7 +117,7 @@ mk_not_implemented() {
 # mk_log <priority> <message>: one journal entry with SYSLOG_IDENTIFIER
 # motanka, through systemd-cat. Priority is a syslog name (err, warning,
 # notice, info, debug). Control characters become spaces and the message is
-# cut at MK_LOG_MAX bytes. A missing or failing journal never fails the
+# cut at MK_LOG_MAX characters. A missing or failing journal never fails the
 # caller; nothing is written to log files.
 mk_log() {
   local prio=$1 msg
