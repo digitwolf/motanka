@@ -398,8 +398,25 @@ configure_login() {
 
 harness_access() {
   systemctl enable sshd.service
-  ufw allow 22/tcp comment 'parity harness SSH' >&2
-  log "sshd enabled, 22/tcp allowed in ufw"
+  # ufw cannot reach iptables here: pacman replaced the kernel, so the
+  # running kernel's modules are gone ("ERROR: problem running"). The
+  # rule is added at every boot instead, before ufw starts, when the
+  # kernel and its modules match again.
+  cat >/etc/systemd/system/parity-harness-ssh.service <<'UNIT'
+[Unit]
+Description=Parity harness: allow SSH in ufw (test VM only)
+Before=ufw.service sshd.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ufw allow 22/tcp comment "parity harness SSH"
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl enable parity-harness-ssh.service
+  log "sshd enabled; parity-harness-ssh.service allows 22/tcp in ufw at boot"
 }
 
 record_versions() {
