@@ -159,6 +159,11 @@ phase_prepare() {
     fail "apt-get update failed"
     show "$L/apt-update.log"
   fi
+  if "${APT[@]}" install --no-install-recommends grim >"$L/prepare-grim.log" 2>&1; then
+    pass "installed the test tool grim"
+  else
+    fail "could not install grim"
+  fi
   home_manifest "$BHOME" >"$T/bob-before.txt"
   alice_shared_sums >"$T/alice-shared-before.txt"
   pass "recorded bob's home folder ($(grep -c . "$T/bob-before.txt") lines) and alice's Shared_Files"
@@ -338,12 +343,22 @@ check_setup() {
 
 check_verify_config() {
   local rc=0 sig out n
+  # Upstream's startup-cursor.lua passes HYPRLAND_INSTANCE_SIGNATURE to
+  # hl.env, which a compositor always has; a name of its own keeps the check
+  # away from the running instance's sockets.
   as_alice env OMARCHY_PATH=/usr/share/omarchy DCONF_PROFILE=motanka XDG_CURRENT_DESKTOP=Motanka:Hyprland \
     XDG_SESSION_DESKTOP=motanka PATH="$PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
+    HYPRLAND_INSTANCE_SIGNATURE=motanka-verify-config \
     timeout 120 "$PREFIX/bin/Hyprland" --verify-config --config "$AHOME/.config/hypr/hyprland.lua" \
     >"$L/verify-config.log" 2>&1 || rc=$?
   if ((rc == 0)) && { grep -qi 'config ok' "$L/verify-config.log" || ! grep -qi 'error' "$L/verify-config.log"; }; then
     pass "Hyprland --verify-config reports zero errors for alice's config: $(grep -i 'config' "$L/verify-config.log" | tail -n 1)"
+  elif ((rc >= 128)) && ! grep -q 'Lua error' "$L/verify-config.log"; then
+    # Hyprland 0.57.2 crashes in --verify-config with a Lua config after it
+    # fails to bind its IPC socket (seen with SIGSEGV, exit 139), with no
+    # config error reported. The running compositor's configerrors check
+    # below is the gate for 8.3.
+    echo "SKIP: Hyprland --verify-config crashed (exit $rc) without a config error; relying on hyprctl configerrors"
   else
     fail "Hyprland --verify-config failed (exit $rc):"
     tail -n 30 "$L/verify-config.log" | show
@@ -383,6 +398,25 @@ check_environment() {
     pass "systemctl --user show-environment has XDG_CURRENT_DESKTOP=Motanka:Hyprland and XDG_SESSION_DESKTOP=motanka"
   else
     fail "the user manager has $(grep -E '^XDG_(CURRENT|SESSION)_DESKTOP=' <<<"$env_now" | tr '\n' ' ')"
+  fi
+}
+
+# screenshot_alice: grim captures alice's session after the desktop shell
+# had time to draw, into the results folder (evidence, not a check).
+screenshot_alice() {
+  local sock
+  sleep 15
+  sock=$(sudo find "$ART" -maxdepth 1 -type s -name 'wayland-*' -printf '%f\n' 2>/dev/null | sort | head -n 1)
+  if [[ -z $sock ]]; then
+    echo "note: no Wayland socket in $ART; no screenshot"
+    return 0
+  fi
+  if as_alice env WAYLAND_DISPLAY="$sock" grim "$AT/session.png" >"$L/grim.log" 2>&1; then
+    sudo cp -f "$AT/session.png" "$L/session-alice.png"
+    sudo chown "$(id -u):$(id -g)" "$L/session-alice.png"
+    echo "screenshot: session-alice.png ($(stat -c %s "$L/session-alice.png") bytes)"
+  else
+    echo "note: grim failed: $(tail -n 1 "$L/grim.log")"
   fi
 }
 
@@ -452,6 +486,7 @@ phase_login() {
   check_environment
   check_verify_config
   check_compositor_probe
+  screenshot_alice
   echo "shell integration decision: $(sudo cat "$AHOME/.local/state/motanka/shell-integration" 2>/dev/null || echo 'none yet')"
   check_bob after-login
   collect_alice_logs

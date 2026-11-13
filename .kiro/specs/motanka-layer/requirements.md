@@ -57,7 +57,7 @@ Out of scope:
 #### Acceptance Criteria
 
 1. WHEN the Installer runs on a Supported_Release THEN THE Installer SHALL complete with exit code 0 and a selectable Motanka_Session.
-2. THE Motanka_Repo SHALL serve every Motanka_Package for both `noble` and `resolute` at the same Motanka version, except packages that exist only to supply on `noble` what the `resolute` archive already provides (`motanka-qt6`).
+2. THE Motanka_Repo SHALL serve every Motanka_Package for both `noble` and `resolute` at the same Motanka version, except packages that exist only to supply on one release what the other release's archive already provides (none at present: `motanka-qt6` is served for both, because Upstream's shell needs Qt 6.11 or later and both archives carry Qt 6.10).
 3. THE Motanka_Session SHALL provide the same Upstream_Pin, the same Stack versions and the same set of working Upstream commands on both Supported_Releases.
 4. IF the Host is not a Supported_Release THEN THE Installer SHALL exit with a non-zero code before making any change and name the detected release.
 5. IF the Host architecture is not amd64 THEN THE Installer SHALL exit with a non-zero code before making any change.
