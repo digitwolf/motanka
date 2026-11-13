@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run a command in a test VM over SSH as user tester and pass its exit code
+# through (255 means SSH itself failed).
+#
+# Usage: test/vm/run <name> -- <command> [args...]
+#        test/vm/run <name> --            (interactive login shell)
+#
+# One argument is sent as a shell command line, so pipes and redirections
+# work: test/vm/run NAME -- 'dpkg -l | wc -l'. Several arguments are quoted
+# one by one, so each reaches the remote command unchanged.
+# stdin is forwarded to the remote command.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/run <name> -- <command> [args...]"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# < 2)) || [[ $2 != -- ]]; then
+  mv_usage
+fi
+name=$1
+shift 2
+mv_require_running "$name"
+mv_ssh_args "$name"
+
+if (($# == 0)); then
+  exec ssh "${MV_SSH_OPTS[@]}" -t "$MV_SSH_DEST"
+elif (($# == 1)); then
+  exec "${MV_SSH[@]}" "$1"
+else
+  printf -v remote '%q ' "$@"
+  exec "${MV_SSH[@]}" "$remote"
+fi

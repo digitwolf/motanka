@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Boot a throwaway test VM from a copy-on-write overlay.
+#
+# Usage: test/vm/up <resolute|noble> <fresh|gnome-snaps|kde|multiuser>
+#
+# Builds the base image first if it is missing (test/vm/image). Waits until
+# SSH answers and cloud-init has finished, at most 600 s. Prints the VM name
+# as the last line on stdout; everything else goes to stderr. On failure the
+# serial console tail is printed and the overlay is deleted.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/up <resolute|noble> <fresh|gnome-snaps|kde|multiuser>"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# != 2)); then
+  mv_usage
+fi
+release=$1
+variant=$2
+mv_check_release "$release"
+mv_check_variant "$variant"
+mv_check_kvm
+mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen python3 setsid timeout
+mv_ensure_key
+
+backing=$("$MV_LIB_DIR/image" "$release" "$variant" | tail -n 1)
+if [[ ! -f $backing ]]; then
+  mv_die "base image for $release $variant not found: $backing"
+fi
+
+mv_boot "$release" "$variant" "$backing"
+mv_unregister "$MV_BOOTED"
+mv_log "ready: $MV_BOOTED (SSH on 127.0.0.1:$(<"$MV_VMS/$MV_BOOTED/ssh.port"))"
+printf '%s\n' "$MV_BOOTED"

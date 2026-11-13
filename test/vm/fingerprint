@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Capture the Fingerprint of a test VM.
+#
+# Usage: test/vm/fingerprint <name> <label>
+#
+# Runs test/vm/collect-fingerprint.sh in the VM with sudo and stores the
+# result in ~/.cache/motanka-vm/fp/<name>/<label>/, replacing an earlier
+# capture with the same label. Prints that folder on stdout.
+# Compare two captures with tools/fpdiff.py.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/fingerprint <name> <label>"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# != 2)); then
+  mv_usage
+fi
+name=$1
+label=$2
+if [[ ! $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  mv_usage "invalid label '$label' (letters, digits, '.', '_' and '-')"
+fi
+mv_require_running "$name"
+mv_ssh_args "$name"
+
+dest="$MV_FP/$name/$label"
+mkdir -p "$MV_FP/$name"
+tmp=$(mktemp -d "$MV_FP/$name/.$label.XXXXXX")
+MV_CLEANUP_PATHS+=("$tmp")
+
+mv_log "capturing Fingerprint '$label' of $name"
+"${MV_SSH[@]}" sudo bash -s <"$MV_LIB_DIR/collect-fingerprint.sh" |
+  tar -C "$tmp" --no-same-owner -xf -
+
+if [[ ! -s $tmp/packages.tsv ]]; then
+  mv_die "the Fingerprint of $name is incomplete (no packages.tsv)"
+fi
+rm -rf -- "$dest"
+mv -T "$tmp" "$dest"
+printf '%s\n' "$dest"

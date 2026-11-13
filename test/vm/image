@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Make sure a base image exists and print its path as the last line on stdout.
+#
+# Usage: test/vm/image <resolute|noble> <fresh|gnome-snaps|kde|multiuser>
+#
+# fresh: the Ubuntu server cloud image, downloaded once and verified against
+#   SHA256SUMS, whose signature SHA256SUMS.gpg is checked with gpgv and the
+#   Ubuntu cloud image keyring.
+# other variants: boot an overlay on the fresh image, run
+#   test/vm/variants/<variant>.sh inside it with sudo, clean cloud-init state,
+#   shut down and convert the overlay into base/<release>-<variant>.qcow2.
+#
+# Base images are read-only (mode 0444). Delete one to rebuild it.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/image <resolute|noble> <fresh|gnome-snaps|kde|multiuser>"
+mv_init
+
+CLOUD_IMAGE=""
+
+# Downloads with the Python standard library (python3 is on the host tool
+# list in tech.md; curl is not). HTTPS only, certificates verified.
+FETCH_PY='import shutil, sys, urllib.request
+url, out = sys.argv[1], sys.argv[2]
+if not url.startswith("https://"):
+    sys.exit("refusing a non-HTTPS URL: " + url)
+with urllib.request.urlopen(url, timeout=60) as r:
+    if not r.geturl().startswith("https://"):
+        sys.exit("redirected to a non-HTTPS URL: " + r.geturl())
+    with open(out, "wb") as f:
+        shutil.copyfileobj(r, f, 1 << 20)'
+
+fetch() {
+  local url=$1 out=$2 attempt
+  for attempt in 1 2 3; do
+    if python3 -c "$FETCH_PY" "$url" "$out"; then
+      return 0
+    fi
+    mv_log "download failed (attempt $attempt of 3): $url"
+    sleep 5
+  done
+  mv_die "download failed: $url"
+}
+
+# cloud_image <release>: downloads and verifies the cloud image if needed and
+# sets CLOUD_IMAGE to its path.
+cloud_image() {
+  local release=$1 version fname url dest tmp expected actual lock
+  version=$(mv_release_version "$release")
+  fname="ubuntu-$version-server-cloudimg-amd64.img"
+  url="$MV_CLOUDIMG_URL/$release/release"
+  dest="$MV_BASE/$fname"
+
+  exec {lock}>"$MV_BASE/.$fname.lock"
+  flock "$lock"
+  if [[ ! -f $dest ]]; then
+    if [[ ! -r $MV_CLOUDIMG_KEYRING ]]; then
+      mv_die "$MV_CLOUDIMG_KEYRING is missing; it comes with the Ubuntu package ubuntu-cloudimage-keyring"
+    fi
+    tmp=$(mktemp -d "$MV_BASE/.download.XXXXXX")
+    MV_CLEANUP_PATHS+=("$tmp")
+
+    mv_log "downloading SHA256SUMS for $release ($version)"
+    fetch "$url/SHA256SUMS" "$tmp/SHA256SUMS"
+    fetch "$url/SHA256SUMS.gpg" "$tmp/SHA256SUMS.gpg"
+    mkdir -m 0700 "$tmp/gnupg"
+    if ! gpgv --homedir "$tmp/gnupg" --keyring "$MV_CLOUDIMG_KEYRING" \
+      "$tmp/SHA256SUMS.gpg" "$tmp/SHA256SUMS" >&2; then
+      mv_die "the signature on SHA256SUMS for $release does not verify against $MV_CLOUDIMG_KEYRING"
+    fi
+    mv_log "SHA256SUMS signature is good"
+
+    expected=$(awk -v f="$fname" '$2 == "*" f || $2 == f { print $1; exit }' "$tmp/SHA256SUMS")
+    if [[ ! $expected =~ ^[0-9a-f]{64}$ ]]; then
+      mv_die "$fname is not listed in the signed SHA256SUMS"
+    fi
+
+    mv_log "downloading $fname"
+    fetch "$url/$fname" "$tmp/$fname"
+    actual=$(sha256sum "$tmp/$fname" | awk '{ print $1 }')
+    if [[ $actual != "$expected" ]]; then
+      mv_die "checksum mismatch for $fname: expected $expected, got $actual"
+    fi
+    mv_log "checksum of $fname matches the signed SHA256SUMS"
+
+    chmod 0444 "$tmp/$fname"
+    printf '%s *%s\n' "$expected" "$fname" >"$dest.sha256"
+    mv -f "$tmp/$fname" "$dest"
+    rm -rf -- "$tmp"
+  fi
+  exec {lock}>&-
+  CLOUD_IMAGE=$dest
+}
+
+# variant_image <release> <variant>: builds base/<release>-<variant>.qcow2 if
+# it is missing and prints its path.
+variant_image() {
+  local release=$1 variant=$2 dest script lock name tmpimg
+  dest="$MV_BASE/$release-$variant.qcow2"
+  script="$MV_LIB_DIR/variants/$variant.sh"
+  if [[ ! -f $script ]]; then
+    mv_die "no provisioning script $script"
+  fi
+
+  exec {lock}>"$MV_BASE/.$release-$variant.lock"
+  flock "$lock"
+  if [[ ! -f $dest ]]; then
+    mv_check_kvm
+    mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen setsid timeout
+    mv_ensure_key
+    cloud_image "$release"
+
+    mv_log "building the $variant base image for $release"
+    mv_boot "$release" "$variant" "$CLOUD_IMAGE"
+    name=$MV_BOOTED
+    mv_ssh_args "$name"
+
+    mv_log "running $(basename "$script") in $name"
+    if ! "${MV_SSH[@]}" sudo bash -s <"$script" >&2; then
+      mv_die "provisioning script $(basename "$script") failed in $name"
+    fi
+
+    mv_log "cleaning cloud-init state and shutting down $name"
+    "${MV_SSH[@]}" sudo cloud-init clean --logs </dev/null >&2
+    if ! mv_poweroff "$name" 300; then
+      mv_die "$name did not power off within 300 s"
+    fi
+
+    tmpimg="$MV_BASE/.$release-$variant.qcow2.tmp"
+    MV_CLEANUP_PATHS+=("$tmpimg")
+    rm -f -- "$tmpimg"
+    mv_log "converting the overlay into $(basename "$dest")"
+    qemu-img convert -O qcow2 "$MV_VMS/$name/overlay.qcow2" "$tmpimg"
+    chmod 0444 "$tmpimg"
+    mv -f "$tmpimg" "$dest"
+    mv_destroy "$name"
+    mv_log "built $dest"
+  fi
+  exec {lock}>&-
+  printf '%s\n' "$dest"
+}
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# != 2)); then
+  mv_usage
+fi
+release=$1
+variant=$2
+mv_check_release "$release"
+mv_check_variant "$variant"
+mv_need gpgv sha256sum awk flock python3
+
+if [[ $variant == fresh ]]; then
+  cloud_image "$release"
+  printf '%s\n' "$CLOUD_IMAGE"
+else
+  variant_image "$release" "$variant"
+fi

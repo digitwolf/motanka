@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2329 # stage_* functions are called by name through run_stage
+# Lint on the host, then unit tests and VM tests in throwaway VMs.
+#
+# Usage: test/run-all [--release resolute|noble] [--keep]
+#
+# Stages:
+#   lint        shellcheck on every shell file in the repository except test/bats/ (host)
+#   boot        a fresh VM of the release (default resolute, 26.04)
+#   unit        push the repository into that VM and run test/unit/run there
+#   vm-<test>   every executable test/vm/tests/*.sh, run on the host; each
+#               boots its own VMs and gets MOTANKA_VM_RELEASE and
+#               MOTANKA_VM_RESULTS (its own log folder)
+#   teardown    stop the unit-test VM; skipped with --keep
+#
+# Logs go to ~/.cache/motanka-vm/results/<run-id>/. Exits 1 if any stage
+# failed.
+set -euo pipefail
+# shellcheck source=vm/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vm/lib.sh"
+MV_USAGE="test/run-all [--release resolute|noble] [--keep]"
+mv_init
+
+release=resolute
+keep_vm=false
+while (($# > 0)); do
+  case $1 in
+    --release)
+      if (($# < 2)); then
+        mv_usage "--release needs a value"
+      fi
+      release=$2
+      shift 2
+      ;;
+    --release=*)
+      release=${1#*=}
+      shift
+      ;;
+    --keep)
+      keep_vm=true
+      shift
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$MV_USAGE"
+      exit 0
+      ;;
+    *)
+      mv_usage "unknown argument '$1'"
+      ;;
+  esac
+done
+mv_check_release "$release"
+mv_check_kvm
+mv_need shellcheck qemu-system-x86_64 qemu-img ssh ssh-keygen rsync python3 \
+  gpgv setsid timeout flock
+
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(mv_hex6)"
+RESULTS_DIR="$MV_RESULTS/$run_id"
+mkdir -p "$RESULTS_DIR"
+export MOTANKA_VM_RESULTS="$RESULTS_DIR"
+export MOTANKA_VM_RELEASE="$release"
+
+STAGES=()
+declare -A RESULT=()
+unit_vm=""
+
+# run_stage <stage> <command...>: runs the command, logs its output to
+# <stage>.log and stderr, and records the exit code.
+run_stage() {
+  local stage=$1 rc=0
+  shift
+  mv_log "--- $stage"
+  "$@" 2>&1 | tee "$RESULTS_DIR/$stage.log" >&2 || rc=$?
+  STAGES+=("$stage")
+  RESULT[$stage]=$rc
+  if ((rc == 0)); then
+    mv_log "--- $stage: PASS"
+  else
+    mv_log "--- $stage: FAIL (exit $rc)"
+  fi
+}
+
+skip_stage() {
+  STAGES+=("$1")
+  RESULT[$1]=skip
+  mv_log "--- $1: SKIP ($2)"
+}
+
+# Prints the repository-relative path of every shell file outside .git and
+# test/bats: *.sh, *.bash, *.bats, and files with a sh, bash or bats shebang.
+list_shell_files() {
+  local f first
+  local sh_re='^#!.*(/|[[:space:]])(ba|da)?sh([[:space:]]|$)'
+  local bats_re='^#!.*(/|[[:space:]])bats([[:space:]]|$)'
+  while IFS= read -r -d '' f; do
+    f=${f#./}
+    case $f in
+      *.sh | *.bash | *.bats)
+        printf '%s\n' "$f"
+        continue
+        ;;
+    esac
+    first=""
+    IFS= read -r first <"$MV_REPO/$f" 2>/dev/null || true
+    if [[ $first =~ $sh_re || $first =~ $bats_re ]]; then
+      printf '%s\n' "$f"
+    fi
+  done < <(cd "$MV_REPO" && find . \( -path ./.git -o -path ./test/bats \) -prune -o -type f -print0)
+}
+
+stage_shellcheck() {
+  local -a files
+  mapfile -t files < <(list_shell_files | LC_ALL=C sort)
+  if ((${#files[@]} == 0)); then
+    echo "no shell files found"
+    return 1
+  fi
+  printf 'shellcheck %s on %d files:\n' \
+    "$(shellcheck --version | sed -n 's/^version: //p')" "${#files[@]}"
+  printf '  %s\n' "${files[@]}"
+  (cd "$MV_REPO" && shellcheck -- "${files[@]}")
+}
+
+stage_boot() {
+  "$MV_LIB_DIR/up" "$release" fresh >"$RESULTS_DIR/unit-vm.name"
+}
+
+stage_unit() {
+  "$MV_LIB_DIR/push" "$unit_vm" </dev/null || return 1
+  "$MV_LIB_DIR/run" "$unit_vm" -- "$MV_GUEST_REPO/test/unit/run" </dev/null
+}
+
+{
+  printf 'run-id: %s\n' "$run_id"
+  printf 'release: %s\n' "$release"
+  printf 'commit: %s\n' "$(git -C "$MV_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+  printf 'changed files: %s\n' "$(git -C "$MV_REPO" status --porcelain 2>/dev/null | wc -l)"
+  printf 'qemu: %s\n' "$(qemu-system-x86_64 --version | head -n 1)"
+  printf 'vm: cpus=%s ram=%s gpu-args=%s\n' "${MOTANKA_VM_CPUS:-4}" \
+    "${MOTANKA_VM_RAM:-6G}" "${MOTANKA_VM_GPU_ARGS-$MV_DEFAULT_GPU_ARGS}"
+} >"$RESULTS_DIR/run.txt"
+mv_log "run $run_id on $release; logs in $RESULTS_DIR"
+
+# 1. Lint on the host.
+run_stage shellcheck stage_shellcheck
+
+# 2. Unit tests inside a VM.
+run_stage boot stage_boot </dev/null
+if [[ ${RESULT[boot]} == 0 ]]; then
+  unit_vm=$(tail -n 1 "$RESULTS_DIR/unit-vm.name")
+  if ! mv_valid_name "$unit_vm"; then
+    mv_die "test/vm/up printed an invalid VM name '$unit_vm'"
+  fi
+  if ! $keep_vm; then
+    MV_CLEANUP_VMS+=("$unit_vm")
+  fi
+  run_stage unit stage_unit
+else
+  skip_stage unit "no VM"
+fi
+
+# 3. VM tests; each boots its own VMs.
+shopt -s nullglob
+tests=("$MV_LIB_DIR"/tests/*.sh)
+shopt -u nullglob
+if ((${#tests[@]} == 0)); then
+  mv_log "no VM tests in test/vm/tests/"
+fi
+for t in "${tests[@]}"; do
+  if [[ ! -x $t ]]; then
+    mv_log "ignoring $t: not executable"
+    continue
+  fi
+  stage="vm-$(basename "$t" .sh)"
+  run_stage "$stage" env MOTANKA_VM_RELEASE="$release" \
+    MOTANKA_VM_RESULTS="$RESULTS_DIR/$stage" "$t" </dev/null
+done
+
+# 4. Teardown.
+if [[ -n $unit_vm ]]; then
+  if $keep_vm; then
+    mv_log "kept VM $unit_vm; remove it with: test/vm/down $unit_vm"
+  else
+    run_stage teardown "$MV_LIB_DIR/down" "$unit_vm" </dev/null
+    if [[ ${RESULT[teardown]} == 0 ]]; then
+      mv_unregister "$unit_vm"
+    fi
+  fi
+fi
+
+failed=0
+for s in "${STAGES[@]}"; do
+  case ${RESULT[$s]} in
+    0) word=PASS ;;
+    skip) word=SKIP ;;
+    *)
+      word="FAIL (exit ${RESULT[$s]})"
+      failed=1
+      ;;
+  esac
+  printf '%-28s %s\n' "$s" "$word"
+done >"$RESULTS_DIR/summary.txt"
+mv_log "summary:"
+cat "$RESULTS_DIR/summary.txt" >&2
+mv_log "logs: $RESULTS_DIR"
+exit "$failed"

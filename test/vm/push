@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Copy the repository (without .git) into a test VM at /home/tester/motanka.
+#
+# Usage: test/vm/push <name>
+#
+# Uses rsync over SSH and deletes files in the VM copy that are gone from the
+# repository. Falls back to tar over SSH if the VM has no rsync. No host
+# folder is ever shared into the VM.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/push <name>"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# != 1)); then
+  mv_usage
+fi
+name=$1
+mv_require_running "$name"
+mv_ssh_args "$name"
+
+if "${MV_SSH[@]}" 'command -v rsync >/dev/null' </dev/null; then
+  mv_need rsync
+  rsync -rlptD --delete --exclude=/.git \
+    -e "$(mv_rsync_rsh)" \
+    "$MV_REPO/" "$MV_SSH_DEST:$MV_GUEST_REPO/"
+else
+  mv_log "no rsync in $name; copying with tar"
+  tar -C "$MV_REPO" --exclude=./.git -cf - . |
+    "${MV_SSH[@]}" "rm -rf $MV_GUEST_REPO && mkdir -p $MV_GUEST_REPO && tar -C $MV_GUEST_REPO -xf -"
+fi
+mv_log "pushed $MV_REPO to $name:$MV_GUEST_REPO"

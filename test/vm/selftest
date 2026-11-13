@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2065 # "run test ... </dev/null" runs test(1) in the VM; the redirect is intentional
+# Self-test of the VM harness: boot a fresh VM, check it is a KVM guest with
+# no host folder shared into it, check run and push, then tear it down.
+#
+# Usage: test/vm/selftest [resolute|noble]     (default: resolute)
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/selftest [resolute|noble]"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# > 1)); then
+  mv_usage
+fi
+release=${1:-resolute}
+mv_check_release "$release"
+mv_check_kvm
+
+failures=0
+pass() { mv_log "PASS: $*"; }
+fail() {
+  mv_log "FAIL: $*"
+  failures=$((failures + 1))
+}
+
+vm=$("$MV_LIB_DIR/up" "$release" fresh | tail -n 1)
+MV_CLEANUP_VMS+=("$vm")
+run() { "$MV_LIB_DIR/run" "$vm" -- "$@"; }
+
+virt=$(run systemd-detect-virt </dev/null || true)
+if [[ $virt == kvm ]]; then
+  pass "systemd-detect-virt prints kvm"
+else
+  fail "systemd-detect-virt printed '$virt', expected kvm"
+fi
+
+rc=0
+run sh -c 'exit 7' </dev/null || rc=$?
+if ((rc == 7)); then
+  pass "run passes the exit code through"
+else
+  fail "run returned $rc for 'exit 7'"
+fi
+
+if run '! grep -Eq "^[^ ]+ [^ ]+ (9p|virtiofs) " /proc/mounts' </dev/null; then
+  pass "no 9p or virtiofs mounts in the VM"
+else
+  fail "the VM has a 9p or virtiofs mount"
+fi
+
+if run test ! -e "$HOME" </dev/null; then
+  pass "host home folder $HOME does not exist in the VM"
+else
+  fail "$HOME exists in the VM"
+fi
+
+if "$MV_LIB_DIR/push" "$vm" &&
+  run test -f "$MV_GUEST_REPO/test/vm/lib.sh" </dev/null &&
+  run test ! -e "$MV_GUEST_REPO/.git" </dev/null; then
+  pass "push copies the repository without .git"
+else
+  fail "push did not copy the repository as expected"
+fi
+
+if "$MV_LIB_DIR/down" "$vm" && [[ ! -e $MV_VMS/$vm ]]; then
+  pass "down removed the VM and its overlay"
+  mv_unregister "$vm"
+else
+  fail "down did not remove $MV_VMS/$vm"
+fi
+
+if ((failures > 0)); then
+  mv_log "$failures check(s) failed"
+  exit 1
+fi
+mv_log "all checks passed"

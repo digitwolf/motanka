@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run the shell unit tests (every test/unit/*.bats) with the bats-core
+# vendored under test/bats/. Arguments, if any, are passed to bats instead of
+# the test/unit folder, for example a single .bats file or --filter.
+#
+# Meant to run inside a test VM (test/run-all does that). It refuses to run
+# where systemd-detect-virt reports no virtualisation, or on a Protected_Host.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+
+virt=$(systemd-detect-virt 2>/dev/null || true)
+if [[ -z $virt || $virt == none ]]; then
+  echo "test/unit/run: refusing to run outside a VM (systemd-detect-virt: ${virt:-unavailable}); use test/run-all" >&2
+  exit 1
+fi
+if [[ -e /etc/motanka-protected || -e $HOME/.config/motanka-protected ]]; then
+  echo "test/unit/run: refusing to run on a Protected_Host" >&2
+  exit 1
+fi
+
+if (($# == 0)); then
+  set -- "$here"
+fi
+exec "$repo/test/bats/core/bin/bats" --print-output-on-failure "$@"

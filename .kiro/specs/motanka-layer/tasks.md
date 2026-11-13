@@ -3,26 +3,26 @@
 Rules for every task: nothing is built, installed, removed or run with `sudo` on the development host. "26.04 VM" and "24.04 VM" mean throwaway test VMs started by `test/vm/`. No task runs `git push` or publishes to the apt repo.
 
 - [ ] 1. VM test harness
-- [ ] 1.1 Harness library, KVM check, `up` and `down`
+- [x] 1.1 Harness library, KVM check, `up` and `down`
   - Create `test/vm/lib.sh`, `test/vm/up`, `test/vm/down`
   - Start QEMU as the current user with user-mode networking and SSH forwarded to a free port on 127.0.0.1; overlays and state under `~/.cache/motanka-vm/`
   - Exit non-zero naming the `kvm` group when `/dev/kvm` is not usable; never call `sudo`
   - _Requirements: 14.1, 14.4, 14.5, 14.6, 14.10_
-- [ ] 1.2 Base image download and verification for 26.04
+- [x] 1.2 Base image download and verification for 26.04
   - Create `test/vm/image`; verify the cloud image against the signed `SHA256SUMS` with `gpgv`
   - Seed cloud-init over NoCloud HTTP from a server bound to 127.0.0.1; generate the SSH key under `~/.cache/motanka-vm/`
   - _Requirements: 14.2, 14.4, 14.5_
-- [ ] 1.3 `run` and `push`
+- [x] 1.3 `run` and `push`
   - Create `test/vm/run`, `test/vm/push` (rsync over SSH; no host folder shared into the VM)
   - Add a self-test `test/vm/selftest` that boots a 26.04 VM, runs `systemd-detect-virt`, and tears it down
   - _Requirements: 14.7, 14.9_
-- [ ] 1.4 Fingerprint capture and comparison
+- [x] 1.4 Fingerprint capture and comparison
   - Create `test/vm/fingerprint`, `tools/fpdiff.py` with the Allowlist, and `test/unit/fpdiff.bats`
   - _Requirements: 10.1, 13.3_
 - [ ] 1.5 24.04 image and image variants
   - Extend `test/vm/image` for `noble` and for the variants `gnome-snaps`, `kde`, `multiuser` (provisioning scripts in `test/vm/variants/`)
   - _Requirements: 13.2, 14.3_
-- [ ] 1.6 `test/run-all`, lint and unit-test runner
+- [x] 1.6 `test/run-all`, lint and unit-test runner
   - Create `test/run-all` (`--release noble` switch), `.shellcheckrc`, `test/unit/run` using `bats-core` vendored under `test/bats/`
   - _Requirements: 13.1, 14.5_
 

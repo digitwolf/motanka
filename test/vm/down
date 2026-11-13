@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stop a test VM and delete its overlay and state folder.
+#
+# Usage: test/vm/down <name>
+#
+# Powers the VM off over SSH and waits up to 60 s, then kills QEMU if it is
+# still running. Deletes ~/.cache/motanka-vm/vms/<name>/.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+MV_USAGE="test/vm/down <name>"
+mv_init
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  printf 'usage: %s\n' "$MV_USAGE"
+  exit 0
+fi
+if (($# != 1)); then
+  mv_usage
+fi
+name=$1
+mv_require_vm "$name"
+
+if mv_qemu_pid "$name" >/dev/null; then
+  mv_log "powering off $name"
+  if ! mv_poweroff "$name" "$MV_DOWN_TIMEOUT"; then
+    mv_log "$name still running after $MV_DOWN_TIMEOUT s; killing QEMU"
+  fi
+fi
+mv_destroy "$name"
+mv_log "removed $name"
