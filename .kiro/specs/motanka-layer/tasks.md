@@ -71,7 +71,7 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [ ] 6. Checkpoint — run `test/run-all`, stop for questions
   - _Requirements: 13.1_
 
-- [ ] 7. Stack packages (approach from S1)
+- [x] 7. Stack packages (approach from S1)
 - [x] 7.1 `motanka-stack-libs`
   - Create `packaging/motanka-stack-libs/` and `stack/versions.tsv`; build for both releases in the build VM; RUNPATH only
   - _Requirements: 3.4, 3.5, 8.1, 8.2_
@@ -92,7 +92,7 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - Create `packaging/motanka-stack-shell/`: cpptrace 1.0.4 with libunwind and libdwarf-lite as an orig component, Quickshell 0.3.2; against `motanka-qt6` on noble and the archive Qt on resolute; extend `test/vm/tests/stack.sh` to start `quickshell --version` and a trivial shell config in the session
   - _Requirements: 1.3, 3.4, 8.1, 8.2_
 
-- [ ] 7.7 Qt 6.12.0 for both releases (added after the first-login VM test)
+- [x] 7.7 Qt 6.12.0 for both releases (added after the first-login VM test)
   - Move `motanka-qt6` to Qt 6.12.0 with qtimageformats, build it for noble and resolute, build `motanka-stack-shell` against it on both, map Upstream's qt6-* names to `motanka-qt6` on both, and extend `test/vm/tests/stack.sh` with a QML file that declares `var native` and a WebP image (design.md, "Qt for both releases")
   - _Requirements: 1.2, 1.3, 3.4, 8.1, 8.2_
 

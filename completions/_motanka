@@ -4,7 +4,8 @@
 # motanka-core installs this file as /usr/share/zsh/vendor-completions/_motanka,
 # which Ubuntu's zsh has on its fpath. It completes the commands, the options
 # each command's --help lists and the values of --channel. The
-# development-build option --i-know-this-is-not-a-vm is never offered.
+# development-build option (the one that skips the virtual-machine guard)
+# is never offered.
 
 _motanka() {
   local curcontext=$curcontext state line ret=1
