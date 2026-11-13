@@ -10,7 +10,7 @@ inclusion: always
 - **Logging:** systemd journal, identifier `motanka`. No log files.
 - **Linux practices:** the 'Linux practices' section of `DESIGN.md` is binding.
 - **Data files:** `packages.yaml` (package map), `upstream.pin` (upstream commit per channel), ledgers as line-oriented text.
-- **Lint:** `shellcheck` and `shfmt -i 2` on every shell file.
+- **Lint:** `shellcheck` and `shfmt -i 2 -ci` on every shell file.
 - **Tests:** `bats-core` for shell unit tests; VM round-trip tests driven by scripts under `test/vm/`.
 - **CI:** GitHub Actions. Jobs build packages and run tests inside VMs or containers, never on the runner's own system packages.
 - **Commits:** Conventional Commits v1.0.0. No attribution trailers.
