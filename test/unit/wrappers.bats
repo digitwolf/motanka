@@ -252,6 +252,37 @@ env_script() {
   assert_line 'fdfind -t f y'
 }
 
+@test "magick runs the real magick when there is one (ImageMagick 7, 26.04)" {
+  local bin=$BATS_TEST_TMPDIR/im7
+  mkdir -p "$bin"
+  printf '#!/bin/sh\necho "im7 magick $*"\n' >"$bin/magick"
+  chmod +x "$bin/magick"
+  PATH="$SRC/compat-bin:$bin:/usr/bin:/bin" run "$SRC/compat-bin/magick" identify -ping x.webp
+  assert_success
+  assert_output 'im7 magick identify -ping x.webp'
+}
+
+@test "without a real magick it runs the ImageMagick 6 commands (24.04)" {
+  local bin=$BATS_TEST_TMPDIR/im6 t
+  mkdir -p "$bin"
+  for t in identify convert; do
+    printf '#!/bin/sh\necho "im6 %s $*"\n' "$t" >"$bin/$t"
+    chmod +x "$bin/$t"
+  done
+  PATH="$SRC/compat-bin:$bin:/usr/bin:/bin" run "$SRC/compat-bin/magick" identify -ping -format '%w %h' x.webp
+  assert_success
+  assert_output 'im6 identify -ping -format %w %h x.webp'
+  PATH="$SRC/compat-bin:$bin:/usr/bin:/bin" run "$SRC/compat-bin/magick" -size 10x10 xc:none out.png
+  assert_success
+  assert_output 'im6 convert -size 10x10 xc:none out.png'
+}
+
+@test "magick without any ImageMagick exits 127 and names the package" {
+  PATH="$SRC/compat-bin:$BATS_TEST_TMPDIR/empty" run "$SRC/compat-bin/magick" identify x
+  assert_failure 127
+  assert_output --partial 'imagemagick'
+}
+
 @test "the Compat_Layer's programs are executable in the repository" {
   local f
   local -a bad=()

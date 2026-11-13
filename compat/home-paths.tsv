@@ -126,7 +126,8 @@
 #     ~/.config/user-dirs.locale (xdg-user-dirs), ~/.config/gtk-3.0 and
 #     ~/.config/gtk-3.0/bookmarks (xdg-user-dirs-gtk),
 #     ~/.local/share/keyrings/** (gnome-keyring),
-#     ~/.local/share/session_migration-* (session-migration),
+#     ~/.local/share/session_migration-* and, on 26.04,
+#     ~/.local/share/user-session-migration/** (user-session-migration),
 #     ~/.local/state/wireplumber/** (WirePlumber), ~/.config/pulse/**
 #     (PulseAudio clients), ~/.local/share/gvfs-metadata/** (GVfs),
 #     ~/.local/share/recently-used.xbel (GTK), ~/.local/share/sddm/** (SDDM)
@@ -275,6 +276,8 @@ Videos	desktop
 .local/share/keyrings	desktop
 .local/share/keyrings/**	desktop
 .local/share/session_migration-*	desktop
+.local/share/user-session-migration	desktop
+.local/share/user-session-migration/**	desktop
 .local/share/recently-used.xbel	desktop
 .local/share/gvfs-metadata	desktop
 .local/share/gvfs-metadata/**	desktop

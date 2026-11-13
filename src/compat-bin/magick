@@ -1,0 +1,32 @@
+#!/bin/bash
+# magick: Upstream calls ImageMagick 7's "magick" (for example
+# "magick identify -ping -format '%w %h' <file>" in its shell's wallpaper
+# code). Ubuntu 26.04 ships ImageMagick 7, which has it; Ubuntu 24.04 ships
+# ImageMagick 6, which has the separate commands convert, identify and so on
+# but no magick. This runs the real magick when one is on PATH, otherwise
+# the ImageMagick 6 command: "magick <tool> ..." runs <tool> ..., anything
+# else runs convert. It is on PATH only inside the Wrapper scope
+# (run-upstream), so nothing outside Upstream's commands sees it.
+set -euo pipefail
+
+self_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd -P)
+IFS=: read -r -a dirs <<<"${PATH:-}"
+for d in "${dirs[@]}"; do
+  [[ -n $d && -x $d/magick && ! -d $d/magick ]] || continue
+  if [[ $(cd -- "$d" 2>/dev/null && pwd -P) != "$self_dir" ]]; then
+    exec "$d/magick" "$@"
+  fi
+done
+
+tool=convert
+case ${1:-} in
+  identify | convert | mogrify | composite | montage | compare | stream | import | animate | display | conjure)
+    tool=$1
+    shift
+    ;;
+esac
+if ! command -v "$tool" >/dev/null 2>&1; then
+  printf 'magick: neither magick nor %s is installed (Ubuntu package imagemagick)\n' "$tool" >&2
+  exit 127
+fi
+exec "$tool" "$@"
