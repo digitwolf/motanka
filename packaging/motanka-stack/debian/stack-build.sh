@@ -366,6 +366,20 @@ cmd_build() {
   set_jobs
   set_env
   mkdir -p "$STAMPS" "$STAGE$PREFIX/lib" "$PCDIR"
+  # noble's libiniparser-dev (4.1) ships no iniparser.pc, which hyprtoolkit
+  # looks up; describe the archive library at build time (nothing is shipped).
+  if [[ $SUITE == noble ]] && ! pkg-config --exists iniparser; then
+    cat >"$PCDIR/iniparser.pc" <<'EOF'
+prefix=/usr
+includedir=${prefix}/include/iniparser
+libdir=${prefix}/lib/x86_64-linux-gnu
+Name: iniparser
+Description: iniparser 4.1 from the Ubuntu 24.04 archive (build-time pkg-config file)
+Version: 4.1
+Libs: -L${libdir} -liniparser
+Cflags: -I${includedir}
+EOF
+  fi
   log "suite $SUITE, $($CXX --version | head -n 1)"
   for i in "${!C_NAME[@]}"; do
     in_suite "$i" || continue
