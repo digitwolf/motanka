@@ -1,0 +1,22 @@
+Description: build hyprtoolkit with Pango < 1.56 (Ubuntu 24.04)
+ PANGO_WRAP_NONE appeared in Pango 1.56. On older Pango, use PANGO_WRAP_WORD,
+ which behaves the same for an ellipsized layout with the default height.
+Author: Motanka
+Forwarded: no
+---
+--- a/hyprtoolkit/src/element/text/Text.cpp	2026-11-13 01:08:07.495424469 -0800
++++ b/hyprtoolkit/src/element/text/Text.cpp	2026-11-13 01:08:07.511837089 -0800
+@@ -358,7 +358,13 @@
+         pango_layout_set_wrap(pangoData.layout, PANGO_WRAP_WORD_CHAR);
+         pango_layout_set_ellipsize(pangoData.layout, PANGO_ELLIPSIZE_NONE);
+     } else {
++#if PANGO_VERSION_CHECK(1, 56, 0)
+         pango_layout_set_wrap(pangoData.layout, PANGO_WRAP_NONE);
++#else
++        // Pango < 1.56 (Ubuntu 24.04) has no PANGO_WRAP_NONE. With the default
++        // layout height of -1, an ellipsized layout keeps one line per paragraph.
++        pango_layout_set_wrap(pangoData.layout, PANGO_WRAP_WORD);
++#endif
+         pango_layout_set_ellipsize(pangoData.layout, PANGO_ELLIPSIZE_END);
+     }
+ }
