@@ -143,9 +143,14 @@ EOF
   cat
 } >>"$STUB_STATE/journal"
 EOF
+  # Like the reference dbus-daemon, which forwards every update of its
+  # activation environment to the systemd user manager (SetEnvironment).
   cat >"$STUBS/dbus-update-activation-environment" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$@" >"$STUB_STATE/dbus.args"
+if [[ ${STUB_DBUS_ID:-dbus-broker.service} == dbus.service ]]; then
+  systemctl --user set-environment "$@"
+fi
 EOF
   chmod +x "$STUBS"/*
   export PATH="$STUBS:$PATH"
@@ -499,6 +504,16 @@ env_now() {
   assert_line 'DCONF_PROFILE='
   assert_line 'XDG_CURRENT_DESKTOP='
   assert_line 'PATH=/usr/bin'
+}
+
+@test "with the reference D-Bus daemon, variables unset before the session end unset, not empty" {
+  export STUB_DBUS_ID=dbus.service
+  session
+  assert_success
+  run env_now
+  assert_output "$(cat "$S/env.before")"
+  run grep -E $'^[A-Z_]+\t$' "$S/env"
+  assert_failure
 }
 
 @test "cleanup with dbus-broker leaves the D-Bus activation environment alone" {

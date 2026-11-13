@@ -336,25 +336,20 @@ _s_dbus_daemon() {
   [[ -n $id && $id != dbus-broker.service ]]
 }
 
-# _s_restore <snapshot>: restores the Session_Env_List variables of the
-# user manager (see "cleanup" at the top). Returns 1 if systemctl failed.
-_s_restore() {
-  local file=$1 name v have_pre=0 rc=0
-  local -a set_args=() unset_names=() dbus_args=()
-  if ! _s_read_cur; then
-    mk_warn "cannot read the environment of the systemd user manager; nothing was restored"
-    return 1
-  fi
-  if _s_read_pre "$file"; then
-    have_pre=1
-  fi
+# _s_restore_plan <have_pre>: fills S_SET_ARGS, S_UNSET_NAMES and
+# S_DBUS_ARGS from S_PRE and S_CUR.
+_s_restore_plan() {
+  local have_pre=$1 name v
+  S_SET_ARGS=()
+  S_UNSET_NAMES=()
+  S_DBUS_ARGS=()
   for name in "${S_LIST[@]}"; do
     if ((have_pre)) && [[ -v S_PRE[$name] ]]; then
       v=${S_PRE[$name]}
       if [[ ! -v S_CUR[$name] || ${S_CUR[$name]} != "$v" ]]; then
-        set_args+=("$name=$v")
+        S_SET_ARGS+=("$name=$v")
       fi
-      dbus_args+=("$name=$v")
+      S_DBUS_ARGS+=("$name=$v")
       continue
     fi
     if ((have_pre == 0)) && [[ $name == PATH || $name == XDG_DATA_DIRS ]]; then
@@ -364,41 +359,66 @@ _s_restore() {
       v=$(_s_strip_list "${S_CUR[$name]}" "$S_PREFIX/bin" "$S_PREFIX/share")
       if [[ -n $v ]]; then
         if [[ $v != "${S_CUR[$name]}" ]]; then
-          set_args+=("$name=$v")
+          S_SET_ARGS+=("$name=$v")
         fi
-        dbus_args+=("$name=$v")
+        S_DBUS_ARGS+=("$name=$v")
         continue
       fi
     fi
     if [[ -v S_CUR[$name] ]]; then
-      unset_names+=("$name")
+      S_UNSET_NAMES+=("$name")
     fi
     if [[ $name != PATH ]]; then
-      dbus_args+=("$name=")
+      S_DBUS_ARGS+=("$name=")
     fi
   done
-  if ((${#unset_names[@]} > 0)); then
-    if ! systemctl --user unset-environment "${unset_names[@]}"; then
-      mk_warn "systemctl --user unset-environment failed for: ${unset_names[*]}"
-      rc=1
-    fi
+}
+
+# _s_restore <snapshot>: restores the Session_Env_List variables of the
+# user manager (see "cleanup" at the top). Returns 1 if systemctl failed.
+#
+# The reference D-Bus daemon goes first: it cannot unset a variable of its
+# activation environment, only set it empty, and it forwards every update
+# to the systemd user manager (SetEnvironment). So the user manager is read
+# again afterwards and set last, or it would keep "NAME=" for variables
+# that were unset before the session.
+_s_restore() {
+  local file=$1 have_pre=0 rc=0
+  if ! _s_read_cur; then
+    mk_warn "cannot read the environment of the systemd user manager; nothing was restored"
+    return 1
   fi
-  if ((${#set_args[@]} > 0)); then
-    if ! systemctl --user set-environment "${set_args[@]}"; then
-      mk_warn "systemctl --user set-environment failed for: ${set_args[*]%%=*}"
-      rc=1
-    fi
+  if _s_read_pre "$file"; then
+    have_pre=1
   fi
-  if ((${#dbus_args[@]} > 0)) && command -v dbus-update-activation-environment >/dev/null 2>&1 &&
+  _s_restore_plan "$have_pre"
+  if ((${#S_DBUS_ARGS[@]} > 0)) && command -v dbus-update-activation-environment >/dev/null 2>&1 &&
     _s_dbus_daemon; then
-    if ! dbus-update-activation-environment "${dbus_args[@]}" >/dev/null 2>&1; then
+    if ! dbus-update-activation-environment "${S_DBUS_ARGS[@]}" >/dev/null 2>&1; then
       mk_log warning "could not update the activation environment of the D-Bus daemon"
+    fi
+    if ! _s_read_cur; then
+      mk_warn "cannot read the environment of the systemd user manager after the D-Bus update; nothing was restored"
+      return 1
+    fi
+    _s_restore_plan "$have_pre"
+  fi
+  if ((${#S_UNSET_NAMES[@]} > 0)); then
+    if ! systemctl --user unset-environment "${S_UNSET_NAMES[@]}"; then
+      mk_warn "systemctl --user unset-environment failed for: ${S_UNSET_NAMES[*]}"
+      rc=1
+    fi
+  fi
+  if ((${#S_SET_ARGS[@]} > 0)); then
+    if ! systemctl --user set-environment "${S_SET_ARGS[@]}"; then
+      mk_warn "systemctl --user set-environment failed for: ${S_SET_ARGS[*]%%=*}"
+      rc=1
     fi
   fi
   if ((have_pre)); then
-    mk_log info "restored the user manager's environment from $file (unset: ${unset_names[*]:-none}; reset: ${set_args[*]%%=*})"
+    mk_log info "restored the user manager's environment from $file (unset: ${S_UNSET_NAMES[*]:-none}; reset: ${S_SET_ARGS[*]%%=*})"
   else
-    mk_log info "removed the Motanka session's environment from the user manager without a snapshot (unset: ${unset_names[*]:-none}; reset: ${set_args[*]%%=*})"
+    mk_log info "removed the Motanka session's environment from the user manager without a snapshot (unset: ${S_UNSET_NAMES[*]:-none}; reset: ${S_SET_ARGS[*]%%=*})"
   fi
   return "$rc"
 }
