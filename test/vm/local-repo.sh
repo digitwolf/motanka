@@ -25,12 +25,25 @@
 # Usage, after sourcing lib.sh and calling mv_init:
 #   lr_repo <release> <results-folder> || <handle the failure>
 #   then LR_REPO is the repository folder and LR_VER the package version.
+#
+#   lr_repo_dual <results-folder> || <handle the failure>
+#   one repository with both suites, noble and resolute, for the release
+#   upgrade test (test/vm/tests/release-upgrade.sh): the .debs of the two
+#   per-release repositories of lr_repo, published and signed together by
+#   chumak/build-repo in a build VM. Then LR_DUAL_REPO is its folder and
+#   LR_VER_NOBLE and LR_VER_RESOLUTE the two package versions. It is cached
+#   in ~/.cache/motanka-vm/repo-cache/dual-<key>/repo, where <key> hashes the
+#   SHA256SUMS of both inputs and the TEST key, and is signed again once it
+#   is 7 days old (Valid-Until is 14 days).
 
 LR_STACK_PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
 LR_OPTIONAL_PKGS=(motanka-qt6 motanka-stack-shell)
 LR_URI=http://127.0.0.1:8765/repo
 LR_REPO=""
 LR_VER=""
+LR_DUAL_REPO=""
+LR_VER_NOBLE=""
+LR_VER_RESOLUTE=""
 
 # _lr_deb <release> <package>: the cached .deb of LR_VER, or nothing.
 _lr_deb() {
@@ -200,4 +213,92 @@ EOF
   mv -T -- "$stage" "$cache"
   mv_log "built the test repository $cache/repo"
   LR_REPO=$cache/repo
+}
+
+# lr_repo_dual <results-folder>: sets LR_DUAL_REPO, LR_VER_NOBLE and
+# LR_VER_RESOLUTE (see the top). Returns 1, after logging why, when a build
+# fails.
+lr_repo_dual() {
+  local results=$1 noble resolute key cache stage bvm f rc=0
+  LR_DUAL_REPO=""
+  if ! lr_repo noble "$results"; then
+    return 1
+  fi
+  noble=$LR_REPO
+  LR_VER_NOBLE=$LR_VER
+  if ! lr_repo resolute "$results"; then
+    return 1
+  fi
+  resolute=$LR_REPO
+  LR_VER_RESOLUTE=$LR_VER
+
+  key=$({
+    sha256sum "$noble/SHA256SUMS" "$resolute/SHA256SUMS" | cut -c1-64
+    cat -- "$MV_KEYS/fingerprint"
+  } | sha256sum | cut -c1-16)
+  cache=$MV_STATE/repo-cache/dual-$key
+  if [[ -s $cache/repo/SHA256SUMS && -s $cache/repo/SHA256SUMS.gpg ]] &&
+    [[ -z $(find "$cache/repo/SHA256SUMS" -mmin +$((7 * 24 * 60)) 2>/dev/null) ]]; then
+    mv_log "reusing the noble and resolute test repository $cache/repo"
+    LR_DUAL_REPO=$cache/repo
+    return 0
+  fi
+
+  stage=$MV_STATE/repo-cache/.dual-$key.$$
+  rm -rf -- "$stage"
+  mkdir -p "$stage/in/noble" "$stage/in/resolute"
+  MV_CLEANUP_PATHS+=("$stage")
+  find "$noble/pool/noble" -type f -name '*.deb' -exec cp -f -t "$stage/in/noble" -- {} +
+  find "$resolute/pool/resolute" -type f -name '*.deb' -exec cp -f -t "$stage/in/resolute" -- {} +
+  for f in "motanka-source-noble_${LR_VER_NOBLE}_all.deb" "motanka-archive-keyring_${LR_VER_NOBLE}_all.deb"; do
+    if [[ ! -f $stage/in/noble/$f ]]; then
+      mv_log "FAIL: the noble test repository $noble has no $f"
+      return 1
+    fi
+  done
+  for f in "motanka-source-resolute_${LR_VER_RESOLUTE}_all.deb" "motanka-archive-keyring_${LR_VER_RESOLUTE}_all.deb"; do
+    if [[ ! -f $stage/in/resolute/$f ]]; then
+      mv_log "FAIL: the resolute test repository $resolute has no $f"
+      return 1
+    fi
+  done
+
+  mv_up_build_vm
+  bvm=$MV_BOOTED
+  mv_log "publishing the noble and resolute packages in one repository in $bvm"
+  if ! "$MV_LIB_DIR/push" "$bvm" </dev/null >"$results/dual-push.log" 2>&1; then
+    cat "$results/dual-push.log" >&2
+    mv_destroy "$bvm"
+    mv_log "FAIL: could not copy the repository into $bvm"
+    return 1
+  fi
+  mv_copy_to_vm "$bvm" "$stage/in" /tmp/lr-dual-in
+  mv_copy_to_vm "$bvm" "$MV_KEYS" "/home/$MV_GUEST_USER/.cache/motanka-vm/keys"
+  "$MV_LIB_DIR/run" "$bvm" -- bash -s <<'EOF' >"$results/dual-build-repo.log" 2>&1 || rc=$?
+set -euo pipefail
+command -v apt-ftparchive >/dev/null ||
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300 install apt-utils >/dev/null
+rm -rf /tmp/lr-dual-repo
+bash ~/motanka/chumak/build-repo /tmp/lr-dual-repo noble=/tmp/lr-dual-in/noble resolute=/tmp/lr-dual-in/resolute
+EOF
+  if ((rc != 0)); then
+    cat "$results/dual-build-repo.log" >&2
+    mv_destroy "$bvm"
+    mv_log "FAIL: chumak/build-repo failed for the noble and resolute repository (exit $rc)"
+    return 1
+  fi
+  mv_copy_from_vm "$bvm" /tmp/lr-dual-repo "$stage/repo"
+  mv_destroy "$bvm"
+  for f in SHA256SUMS SHA256SUMS.gpg install.sh dists/noble/InRelease dists/resolute/InRelease; do
+    if [[ ! -s $stage/repo/$f ]]; then
+      mv_log "FAIL: the noble and resolute test repository has no $f"
+      return 1
+    fi
+  done
+  rm -rf -- "$stage/in"
+  find "$MV_STATE/repo-cache" -mindepth 1 -maxdepth 1 -type d -name 'dual-*' \
+    -exec rm -rf -- {} + 2>/dev/null || true
+  mv -T -- "$stage" "$cache"
+  mv_log "built the noble and resolute test repository $cache/repo"
+  LR_DUAL_REPO=$cache/repo
 }

@@ -17,7 +17,8 @@
 #      is wayland, x11 or mir, whose class is user and which is not closing,
 #      or when graphical-session.target of the user manager is active or
 #      activating (another desktop uses the shared user manager).
-#   3. GPU (8.6, 8.9). The driver of every DRM card (/sys/class/drm/cardN):
+#   3. GPU (8.6, 8.9), detected by src/lib/gpu.sh (mk_gpu_scan), which the
+#      Doctor uses too. The driver of every DRM card (/sys/class/drm/cardN):
 #      i915, xe, amdgpu, radeon, nouveau and virtio_gpu are supported, and
 #      nvidia at version 555 or later (/proc/driver/nvidia/version, else
 #      /sys/module/nvidia/version). Exit 12, with the reason in the journal,
@@ -98,8 +99,6 @@ readonly S_CURRENT_DESKTOP=Motanka:Hyprland
 readonly S_SESSION_DESKTOP=motanka
 readonly S_DCONF_PROFILE=motanka
 readonly S_TARGET=motanka-session.target
-readonly S_NVIDIA_MIN_MAJOR=555
-readonly S_DRIVERS="i915 xe amdgpu radeon nouveau virtio_gpu"
 # motanka-session.target is started once graphical-session.target is
 # active, polled every 0.5 s for at most 240 polls (120 s).
 readonly S_TARGET_POLLS=240
@@ -128,6 +127,8 @@ source "$_s_base/lib/userledger.sh"
 source "$_s_base/lib/homepaths.sh"
 # shellcheck source=../lib/capture.sh
 source "$_s_base/lib/capture.sh"
+# shellcheck source=../lib/gpu.sh
+source "$_s_base/lib/gpu.sh"
 
 S_UWSM=$(mk_path "$S_PREFIX/bin/uwsm")
 S_START_HYPRLAND=$(mk_path "$S_PREFIX/bin/start-hyprland")
@@ -482,90 +483,15 @@ _s_check_other_sessions() {
   esac
 }
 
-# _s_nvidia_version: the loaded NVIDIA driver version, or nothing.
-_s_nvidia_version() {
-  local f line tok
-  local -a toks=()
-  f=$(mk_path /proc/driver/nvidia/version)
-  if [[ -r $f ]]; then
-    IFS= read -r line <"$f" || true
-    read -r -a toks <<<"$line"
-    for tok in "${toks[@]}"; do
-      if [[ $tok =~ ^[0-9]+\.[0-9]+(\.[0-9]+)*$ ]]; then
-        printf '%s\n' "$tok"
-        return 0
-      fi
-    done
-  fi
-  f=$(mk_path /sys/module/nvidia/version)
-  if [[ -r $f ]]; then
-    IFS= read -r line <"$f" || true
-    if [[ $line =~ ^[0-9]+\.[0-9]+(\.[0-9]+)*$ ]]; then
-      printf '%s\n' "$line"
-    fi
-  fi
-}
-
-# _s_card_driver <card>: the kernel driver that runs a DRM card, or "none".
-# Usually the card's parent device carries it. With kernel 7.0 a virtio GPU
-# card hangs off the PCI function (driver virtio-pci), and virtio_gpu is
-# bound to the virtio device below it (.../0000:00:03.0/virtio2).
-_s_card_driver() {
-  local card=$1 drv=none link v
-  if [[ -L $card/device/driver ]]; then
-    link=$(readlink -- "$card/device/driver") || link=""
-    drv=${link##*/}
-    drv=${drv:-none}
-  fi
-  if [[ $drv == virtio-pci ]]; then
-    for v in "$card"/device/virtio*/driver; do
-      if [[ -L $v ]] && link=$(readlink -- "$v"); then
-        drv=${link##*/}
-        break
-      fi
-    done
-  fi
-  printf '%s\n' "$drv"
-}
-
-# _s_check_gpu: step 3.
+# _s_check_gpu: step 3 (src/lib/gpu.sh).
 _s_check_gpu() {
-  local drm card name drv ver major
-  local -a supported=() refused=() other=()
-  drm=$(mk_path /sys/class/drm)
-  for card in "$drm"/card*; do
-    name=${card##*/}
-    if [[ ! $name =~ ^card[0-9]+$ ]]; then
-      continue
-    fi
-    drv=$(_s_card_driver "$card")
-    if [[ " $S_DRIVERS " == *" $drv "* ]]; then
-      supported+=("$name ($drv)")
-    elif [[ $drv == nvidia ]]; then
-      ver=$(_s_nvidia_version)
-      major=${ver%%.*}
-      if [[ $major =~ ^[0-9]+$ ]] && ((10#$major >= S_NVIDIA_MIN_MAJOR)); then
-        supported+=("$name (nvidia $ver)")
-      else
-        refused+=("$name runs the NVIDIA driver ${ver:-of unknown version}")
-      fi
-    else
-      other+=("$name ($drv)")
-    fi
-  done
-  if ((${#refused[@]} > 0)); then
-    mk_die "$MK_EXIT_SESSION" "refused: ${refused[*]}; the Motanka session needs the NVIDIA driver $S_NVIDIA_MIN_MAJOR or later"
+  if ! mk_gpu_scan; then
+    mk_die "$MK_EXIT_SESSION" "$MK_GPU_REASON"
   fi
-  if ((${#supported[@]} == 0)); then
-    if ((${#other[@]} == 0)); then
-      mk_die "$MK_EXIT_SESSION" "refused: no GPU with a kernel display driver was found (no card in /sys/class/drm); the Motanka session needs one of the drivers $S_DRIVERS, or NVIDIA $S_NVIDIA_MIN_MAJOR or later"
-    fi
-    mk_die "$MK_EXIT_SESSION" "refused: the GPU driver of ${other[*]} is not supported; the Motanka session needs one of the drivers $S_DRIVERS, or NVIDIA $S_NVIDIA_MIN_MAJOR or later"
+  if ((${#MK_GPU_OTHER[@]} > 0)); then
+    mk_log warning "ignoring ${MK_GPU_OTHER[*]}: driver not supported by the Stack; the session uses ${MK_GPU_SUPPORTED[*]}"
   fi
-  if ((${#other[@]} > 0)); then
-    mk_log warning "ignoring ${other[*]}: driver not supported by the Stack; the session uses ${supported[*]}"
-  fi
-  mk_log info "GPU: ${supported[*]}"
+  mk_log info "GPU: ${MK_GPU_SUPPORTED[*]}"
 }
 
 # _s_check_stack: step 4.

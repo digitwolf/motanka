@@ -99,7 +99,10 @@ motanka() {
   [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
 }
 
-@test "valid options parse and the unfinished subcommands exit 2 'not implemented yet'" {
+@test "doctor parses --json and --fix, then --fix refuses to run without root with exit 11" {
+  if [[ $(id -u) -eq 0 ]]; then
+    skip "the tests run as root"
+  fi
   local -a cmds=(
     'doctor --json --fix'
     'doctor --fix'
@@ -108,9 +111,10 @@ motanka() {
   for c in "${cmds[@]}"; do
     # shellcheck disable=SC2086 # split the command line on purpose
     run bash "$MOTANKA" $c
-    assert_failure 2
-    assert_output "motanka ${c%% *}: not implemented yet"
+    assert_failure 11
+    assert_output --partial 'must run as root: sudo motanka doctor --fix'
   done
+  [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
 }
 
 @test "every subcommand prints its help with exit 0" {
