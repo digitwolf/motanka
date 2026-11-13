@@ -17,20 +17,39 @@
 #   MOTANKA_VM_RESULTS     log folder
 #   MOTANKA_PARITY_SETTLE  seconds each session settles before the probe
 #                          records it (default 20)
+#   MOTANKA_PARITY_FIRST_RUN_TIMEOUT
+#                          seconds the probe in the Motanka VM waits for
+#                          Upstream's first-run work (default 300)
 #   test/vm/image documents MOTANKA_VM_ARCH_IMAGE_VERSION,
 #   MOTANKA_VM_ARCH_KEYRING, MOTANKA_VM_ARCH_KEY_FPR and
 #   MOTANKA_PARITY_ARCH_ANY_VERSION for the reference image.
 #
 # Both VMs need MOTANKA_VM_GPU=gl (Hyprland in QEMU, spike S3), so the user
-# needs read and write access to the host's render node. The Motanka VM is
-# the multiuser variant and gets the local .debs exactly as
-# test/vm/tests/first-login.sh installs them (its guest half
-# test/vm/first-login-guest.sh runs the phases prepare, install, login and
-# logout); this test builds nothing and fails with the build commands when
-# a .deb is missing. In both VMs the probe runs as user alice inside her
-# running session: on the reference VM SDDM logs her into Upstream's
-# omarchy.desktop session at boot, on the Motanka VM tty1 autologin runs
-# the Motanka session launcher.
+# needs read and write access to the host's render node.
+#
+# The Motanka VM (multiuser variant) gets Motanka the way a user installs
+# it: test/vm/local-repo.sh builds the Motanka packages of the working tree
+# once (or reuses an earlier build of the same tree) and publishes them in a
+# signed local repository, and the real Installer ('motanka install --yes'
+# from the source tree, guest phases serve and install of
+# test/vm/remove-guest.sh, as test/vm/tests/roundtrip.sh runs them) installs
+# Motanka with the Package_Map's Ubuntu packages from it. The Stack .debs,
+# motanka-qt6 and motanka-stack-shell must be cached in
+# ~/.cache/motanka-vm/debs/<release>/; when the last two are missing the
+# test fails with the build commands. Then the phases prepare, login and
+# logout of test/vm/first-login-guest.sh log alice in: tty1 autologin runs
+# the Motanka session launcher. prepare installs the test tool grim (for
+# the screenshot) when the Installer did not; the log says so, because the
+# probe's "tools" category then no longer shows that gap.
+#
+# In both VMs the probe runs as user alice inside her running session: on
+# the reference VM SDDM logs her into Upstream's omarchy.desktop session at
+# boot. In the Motanka VM the probe first waits (probe.sh --wait-*) until
+# Upstream's first-run work is done: the default theme is recorded in
+# ~/.local/state/motanka/default-theme, the wallpaper layer
+# omarchy-background is mapped and no omarchy-provision-first-run process
+# runs. What was not reached is printed and recorded in probe.json as the
+# error "first-run", which diff.py reports.
 #
 # Results in MOTANKA_VM_RESULTS:
 #   reference/probe.json, reference/screenshot.png, reference/raw/
@@ -43,12 +62,21 @@
 #                                    the files of /usr/share/omarchy that
 #                                    differ from the pinned tarball
 #   reference-journal.log
-#   guest-<phase>.log, guest-logs/   the Motanka VM's first-login phases
-# The test fails if a probe document is missing or diff.py reports an
-# unexpected difference.
+#   debs.txt, build-*.log            the package build (when not reused)
+#   guest-serve.log, guest-install.log
+#                                    the Installer phases
+#   system-ledger.tsv                the Motanka VM's System_Ledger: the
+#                                    Ubuntu packages the Installer added
+#   guest-prepare.log, guest-login.log, guest-logout.log
+#                                    the first-login phases
+#   guest-logs/installer/, guest-logs/first-login/
+# The test fails if the install fails, a probe document is missing or
+# diff.py reports an unexpected difference.
 set -euo pipefail
 # shellcheck source=../lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+# shellcheck source=../local-repo.sh
+source "$MV_LIB_DIR/local-repo.sh"
 MV_USAGE="test/vm/tests/parity.sh"
 mv_init
 
@@ -58,10 +86,14 @@ fi
 release=${MOTANKA_VM_RELEASE:-resolute}
 mv_check_release "$release"
 mv_check_kvm
-mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen python3 setsid timeout tar gpgv
+mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen python3 setsid timeout tar gpgv git
 settle=${MOTANKA_PARITY_SETTLE:-20}
 if [[ ! $settle =~ ^[0-9]+$ ]]; then
   mv_usage "MOTANKA_PARITY_SETTLE must be a number of seconds, got '$settle'"
+fi
+first_run_timeout=${MOTANKA_PARITY_FIRST_RUN_TIMEOUT:-300}
+if [[ ! $first_run_timeout =~ ^[1-9][0-9]*$ ]]; then
+  mv_usage "MOTANKA_PARITY_FIRST_RUN_TIMEOUT must be a number of seconds, got '$first_run_timeout'"
 fi
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(mv_hex6)"
@@ -71,7 +103,14 @@ export MOTANKA_VM_RESULTS="$results"
 PARITY="$MV_REPO/test/parity"
 GUEST_P=/tmp/motanka-parity
 GUEST_T=/tmp/motanka-first-login
-PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack motanka-qt6 motanka-stack-shell motanka-core)
+GUEST_R=/tmp/motanka-remove-test
+# Packages lr_repo adds only when they are cached, and motanka-core needs.
+SHELL_PKGS=(motanka-qt6 motanka-stack-shell)
+# Upstream's first-run work in the Motanka session (probe.sh --wait-*).
+FIRST_RUN_WAIT=(--first-run-timeout "$first_run_timeout"
+  --wait-file .local/state/motanka/default-theme
+  --wait-layer omarchy-background
+  --wait-gone omarchy-provision-first-run)
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 failures=0
@@ -112,16 +151,21 @@ up_vm() {
   fi
 }
 
-# probe_vm <vm> <label>: runs the probe as alice in her session and copies
-# its results to $results/<label>/. Returns 1 if there is no probe.json.
+# probe_vm <vm> <label> [probe.sh options...]: runs the probe as alice in
+# her session and copies its results to $results/<label>/. Returns 1 if
+# there is no probe.json.
 probe_vm() {
-  local vm=$1 label=$2 rc=0
+  local vm=$1 label=$2 rc=0 opts=""
+  shift 2
+  if (($# > 0)); then
+    printf -v opts ' %q' "$@"
+  fi
   mv_copy_to_vm "$vm" "$results/stage-probe" "$GUEST_P"
   "$MV_LIB_DIR/run" "$vm" -- "sudo chmod 0755 $GUEST_P && sudo chmod 0644 $GUEST_P/probe.sh $GUEST_P/probe.py &&
     sudo rm -rf $GUEST_P/out && sudo install -d -o alice -g alice -m 0755 $GUEST_P/out" </dev/null
   "$MV_LIB_DIR/run" "$vm" -- "sudo -u alice env -i HOME=/home/alice USER=alice LOGNAME=alice \
     PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/\$(id -u alice) \
-    bash $GUEST_P/probe.sh --out $GUEST_P/out --settle $settle" \
+    bash $GUEST_P/probe.sh --out $GUEST_P/out --settle $settle$opts" \
     </dev/null >"$results/probe-$label.log" 2>&1 || rc=$?
   cat "$results/probe-$label.log" >&2
   rm -rf -- "${results:?}/$label"
@@ -137,16 +181,31 @@ probe_vm() {
   fi
 }
 
-# phase <name>: runs one guest phase of first-login-guest.sh in the Motanka
-# VM and logs it.
+# phase <installer|first-login> <name> [arguments...]: runs one guest phase
+# in the Motanka VM, of test/vm/remove-guest.sh or
+# test/vm/first-login-guest.sh, and logs it.
 phase() {
-  local name=$1 rc=0 f
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/first-login-guest.sh" "$name" "$release" \
-    </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
+  local script=$1 name=$2 rc=0 f
+  local -a cmd
+  shift 2
+  case $script in
+    installer) cmd=(bash "$GUEST_R/remove-guest.sh" "$name" "$release" "$@") ;;
+    first-login) cmd=(bash "$GUEST_T/first-login-guest.sh" "$name" "$release") ;;
+  esac
+  "$MV_LIB_DIR/run" "$tvm" -- "${cmd[@]}" </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)
   mv_log "guest phase $name: exit $rc, $f failed check(s)"
   return "$rc"
+}
+
+# collect_motanka_logs: copies the Motanka VM's guest logs and its
+# System_Ledger to the results.
+collect_motanka_logs() {
+  mv_copy_from_vm "$tvm" "$GUEST_R/logs" "$results/guest-logs/installer" || true
+  mv_copy_from_vm "$tvm" "$GUEST_T/logs" "$results/guest-logs/first-login" || true
+  "$MV_LIB_DIR/run" "$tvm" -- 'sudo cat /var/lib/motanka/ledger' \
+    </dev/null >"$results/system-ledger.tsv" 2>&1 || true
 }
 
 # --- 1. what the test needs ---------------------------------------------------
@@ -155,28 +214,32 @@ if [[ ! -r $MV_GL_RENDER_NODE || ! -w $MV_GL_RENDER_NODE ]]; then
   finish
 fi
 missing=()
-for p in "${PKGS[@]}"; do
+for p in "${SHELL_PKGS[@]}"; do
   if ! deb_of "$p" >/dev/null; then
     missing+=("${p}_${ver}_{amd64,all}.deb")
   fi
 done
 if ((${#missing[@]} > 0)); then
-  fail "missing .debs of version $ver in $MV_DEBS/$release/: ${missing[*]}"
+  fail "missing .debs of version $ver in $MV_DEBS/$release/: ${missing[*]} (motanka-core depends on them)"
   mv_log "build them first, for example:"
-  mv_log "  test/vm/build --suite $release packaging/motanka-stack"
   mv_log "  test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
-  mv_log "  test/vm/build --suite $release packaging/motanka-core"
   finish
 fi
 
+if ! lr_repo "$release" "$results"; then
+  fail "no test repository for $release"
+  finish
+fi
+pass "test repository for $release: $LR_REPO (version $LR_VER)"
+
 rm -rf -- "$results/stage" "$results/stage-probe"
-mkdir -p "$results/stage/debs" "$results/stage-probe"
-for p in "${PKGS[@]}"; do
-  cp -f "$(deb_of "$p")" "$results/stage/debs/"
-done
-cp -f "$MV_LIB_DIR/first-login-guest.sh" "$results/stage/first-login-guest.sh"
+mkdir -p "$results/stage/first-login" "$results/stage/installer" "$results/stage/cli/packaging/keys" \
+  "$results/stage-probe"
+cp -f "$MV_LIB_DIR/first-login-guest.sh" "$results/stage/first-login/first-login-guest.sh"
+cp -f "$MV_LIB_DIR/remove-guest.sh" "$results/stage/installer/remove-guest.sh"
+cp -a "$MV_REPO/src" "$results/stage/cli/src"
+cp -f "$MV_REPO/packaging/keys/motanka-archive.asc" "$results/stage/cli/packaging/keys/"
 cp -f "$PARITY/probe.sh" "$PARITY/probe.py" "$results/stage-probe/"
-pass ".debs $ver for $release: $(cd "$results/stage/debs" && echo *.deb)"
 
 # --- 2. the reference VM: Upstream on Arch Linux --------------------------------
 mv_log "booting the Arch Linux reference VM (the first run builds its base image)"
@@ -202,17 +265,31 @@ if [[ -z $tvm ]]; then
   fail "the Motanka VM did not start (test/vm/up $release multiuser)"
 else
   MV_CLEANUP_VMS+=("$tvm")
-  mv_copy_to_vm "$tvm" "$results/stage" "$GUEST_T"
-  if phase prepare && phase install; then
-    if ! phase login; then
+  mv_copy_to_vm "$tvm" "$results/stage/installer" "$GUEST_R"
+  mv_copy_to_vm "$tvm" "$LR_REPO" "$GUEST_R/www/repo"
+  mv_copy_to_vm "$tvm" "$results/stage/cli" "/home/$MV_GUEST_USER/motanka"
+  mv_copy_to_vm "$tvm" "$results/stage/first-login" "$GUEST_T"
+  if phase installer serve && phase installer install; then
+    pass "the Installer installed Motanka from the test repository (guest-install.log)"
+    rc=0
+    # shellcheck disable=SC2016 # dpkg-query field, expanded in the VM
+    "$MV_LIB_DIR/run" "$tvm" -- 'test "$(dpkg-query -W -f="\${db:Status-Status}" grim 2>/dev/null)" = installed' \
+      </dev/null >/dev/null 2>&1 || rc=$?
+    if ((rc != 0)); then
+      mv_log "note: the Installer did not install grim; the prepare phase installs it for the screenshot, so tools.grim hides that gap"
+    fi
+    if ! phase first-login prepare; then
+      mv_log "note: the prepare phase failed (guest-prepare.log); logging in anyway"
+    fi
+    if ! phase first-login login; then
       mv_log "note: first-login checks failed in the login phase (guest-login.log); probing anyway"
     fi
-    probe_vm "$tvm" motanka || true
-    phase logout || true
+    probe_vm "$tvm" motanka "${FIRST_RUN_WAIT[@]}" || true
+    phase first-login logout || true
   else
-    fail "the Motanka .debs could not be installed (guest-prepare.log, guest-install.log)"
+    fail "the Installer could not install Motanka (guest-serve.log, guest-install.log, guest-logs/installer/)"
   fi
-  mv_copy_from_vm "$tvm" "$GUEST_T/logs" "$results/guest-logs" || true
+  collect_motanka_logs
   mv_destroy "$tvm"
 fi
 

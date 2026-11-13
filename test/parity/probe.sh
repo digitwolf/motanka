@@ -5,6 +5,8 @@
 # the two.
 #
 # Usage: probe.sh --out DIR [--settle SECONDS] [--timeout SECONDS]
+#                 [--wait-file REL]... [--wait-layer NAMESPACE]...
+#                 [--wait-gone NAME]... [--first-run-timeout SECONDS]
 #
 # Runs INSIDE a test VM as the user whose graphical session is running; it
 # refuses root, a machine that is not a VM and a Protected_Host. It changes
@@ -20,7 +22,14 @@
 #      recorded. The dump is deleted at the end; probe.json keeps only the
 #      allowlisted variables.
 #   3. Wait up to 120 s for Upstream's shell to answer
-#      "omarchy-shell shell ping", then --settle s more (default 20).
+#      "omarchy-shell shell ping". Then, when --wait-* options are given,
+#      wait up to --first-run-timeout s (default 300) until Upstream's
+#      first-run work is done: every --wait-file (relative to $HOME) exists
+#      and is not empty, every --wait-layer namespace is mapped (hyprctl
+#      layers) and no process named --wait-gone runs (probe.py first-run
+#      checks this every 3 s). What was not reached is printed and recorded
+#      as the error "first-run"; the probe goes on. Then --settle s more
+#      (default 20).
 #   4. In that environment: a grim screenshot DIR/screenshot.png; hyprctl -j
 #      version, configerrors, layers, clients, binds, monitors and selected
 #      getoption values; quickshell --version; systemctl --user active and
@@ -36,8 +45,8 @@
 #      variables.
 #
 # Nothing is read from home-folder files except what those commands print,
-# the menu's own files (menu definitions, language code) and the names of
-# themes.
+# the menu's own files (menu definitions, language code), the names of
+# themes and the first line of each --wait-file.
 #
 # Exit codes: 0 probe.json written; 1 no session found (probe.json is still
 # written and names the error); 2 usage error; 7 refused (root, not a VM,
@@ -47,8 +56,9 @@ export LC_ALL=C.UTF-8
 umask 022
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-USAGE="probe.sh --out DIR [--settle SECONDS] [--timeout SECONDS]"
+USAGE="probe.sh --out DIR [--settle SECONDS] [--timeout SECONDS] [--wait-file REL]... [--wait-layer NAMESPACE]... [--wait-gone NAME]... [--first-run-timeout SECONDS]"
 SHELL_TIMEOUT=120
+FIRST_RUN_INTERVAL=3
 
 # Hyprland options read with hyprctl getoption.
 OPTIONS=(general:gaps_in general:gaps_out general:border_size general:layout decoration:rounding
@@ -99,9 +109,13 @@ usage_error() {
 OUT=""
 SETTLE=20
 TIMEOUT=300
+FIRST_RUN_TIMEOUT=300
+WAIT_FILES=()
+WAIT_LAYERS=()
+WAIT_GONE=()
 while (($# > 0)); do
   case $1 in
-    --out | --settle | --timeout)
+    --out | --settle | --timeout | --first-run-timeout | --wait-file | --wait-layer | --wait-gone)
       if (($# < 2)); then
         usage_error "$1 needs a value"
       fi
@@ -109,6 +123,23 @@ while (($# > 0)); do
         --out) OUT=$2 ;;
         --settle) SETTLE=$2 ;;
         --timeout) TIMEOUT=$2 ;;
+        --first-run-timeout) FIRST_RUN_TIMEOUT=$2 ;;
+        --wait-file)
+          if [[ ! $2 =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ || $2 == *..* ]]; then
+            usage_error "--wait-file takes a path relative to \$HOME of letters, digits, '.', '_', '-' and '/', got '$2'"
+          fi
+          WAIT_FILES+=("$2")
+          ;;
+        --wait-layer | --wait-gone)
+          if [[ ! $2 =~ ^[A-Za-z0-9._-]+$ ]]; then
+            usage_error "$1 takes a name of letters, digits, '.', '_' and '-', got '$2'"
+          fi
+          if [[ $1 == --wait-layer ]]; then
+            WAIT_LAYERS+=("$2")
+          else
+            WAIT_GONE+=("$2")
+          fi
+          ;;
       esac
       shift 2
       ;;
@@ -129,8 +160,8 @@ fi
 if [[ ! $OUT =~ ^/[A-Za-z0-9._/-]+$ || $OUT == *..* ]]; then
   usage_error "--out must be an absolute path of letters, digits, '.', '_', '-' and '/', got '$OUT'"
 fi
-if [[ ! $SETTLE =~ ^[0-9]+$ || ! $TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
-  usage_error "--settle and --timeout take a number of seconds"
+if [[ ! $SETTLE =~ ^[0-9]+$ || ! $TIMEOUT =~ ^[1-9][0-9]*$ || ! $FIRST_RUN_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
+  usage_error "--settle, --timeout and --first-run-timeout take a number of seconds"
 fi
 
 if ((EUID == 0)); then
@@ -276,6 +307,52 @@ wait_for_shell() {
   done
 }
 
+# wait_for_first_run: waits for the --wait-* conditions (step 3).
+wait_for_first_run() {
+  local deadline=$((SECONDS + FIRST_RUN_TIMEOUT)) start=$SECONDS rc x
+  local -a args=(first-run --home "$HOME" --ps "$RAW/first-run-ps.txt" --layers "$RAW/first-run-layers.json"
+    --own-sid "$OWN_SID")
+  local -a pending=()
+  if ((${#WAIT_FILES[@]} + ${#WAIT_LAYERS[@]} + ${#WAIT_GONE[@]} == 0)); then
+    return 0
+  fi
+  for x in "${WAIT_FILES[@]}"; do
+    args+=(--file "$x")
+  done
+  for x in "${WAIT_LAYERS[@]}"; do
+    args+=(--layer "$x")
+  done
+  for x in "${WAIT_GONE[@]}"; do
+    args+=(--gone "$x")
+  done
+  say "waiting up to $FIRST_RUN_TIMEOUT s for Upstream's first-run work to finish"
+  while :; do
+    timeout 10 env -i "${SENV[@]}" hyprctl -j layers </dev/null >"$RAW/first-run-layers.json" 2>/dev/null ||
+      : >"$RAW/first-run-layers.json"
+    ps -u "$UIDN" -o pid=,sid=,args= >"$RAW/first-run-ps.txt" 2>/dev/null || true
+    rc=0
+    python3 "$HERE/probe.py" "${args[@]}" >"$RAW/first-run.txt" 2>&1 || rc=$?
+    if ((rc == 0)); then
+      say "Upstream's first-run work is done after $((SECONDS - start)) s:"
+      sed 's/^/probe:   /' "$RAW/first-run.txt" >&2
+      break
+    fi
+    if ((rc != 1)); then
+      note first-run "probe.py first-run failed (exit $rc): $(head -n 1 "$RAW/first-run.txt")"
+      break
+    fi
+    if ((SECONDS >= deadline)); then
+      mapfile -t pending < <(sed -n 's/^pending: //p' "$RAW/first-run.txt")
+      x=$(printf '%s; ' "${pending[@]}")
+      note first-run "not reached within $FIRST_RUN_TIMEOUT s: ${x%; }"
+      sed 's/^/probe:   /' "$RAW/first-run.txt" >&2
+      break
+    fi
+    sleep "$FIRST_RUN_INTERVAL"
+  done
+  rm -f -- "$RAW/first-run-ps.txt" "$RAW/first-run-layers.json"
+}
+
 collect() {
   local x o q i
   local -a argv
@@ -321,6 +398,7 @@ if ! wait_for_session; then
 fi
 capture_session_env
 wait_for_shell
+wait_for_first_run
 if ((SETTLE > 0)); then
   say "letting the session settle for $SETTLE s"
   sleep "$SETTLE"

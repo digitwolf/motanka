@@ -3,7 +3,9 @@
 # Unit tests for test/parity/diff.py, the comparison of two parity probe
 # documents (task 24.3, requirement 13.6): differences per category and
 # kind, the expected-differences file with its patterns and reasons, input
-# errors, the per-category limit, and the shipped test/parity/expected.tsv.
+# errors, the per-category limit, and the shipped test/parity/expected.tsv
+# (what it accepts, and that it lets failed units, a first run that did not
+# finish and missing tools through).
 
 setup() {
   load '../bats/support/load'
@@ -190,4 +192,25 @@ pdiff() {
   assert_line 'Unexpected differences: 0'
   assert_line 'Expected differences: 2'
   assert_line --partial '    DCONF_PROFILE: only in candidate: "motanka"  -- '
+}
+
+@test "the shipped expected.tsv accepts the Stack path, the session's names and Motanka's processes, but no failure" {
+  EXP="$BATS_TEST_DIRNAME/../parity/expected.tsv"
+  set_value "$REF" env_session HYPRLAND_CMD '"Hyprland --watchdog-fd 4"'
+  set_value "$CAND" env_session HYPRLAND_CMD '"/opt/motanka/bin/Hyprland --watchdog-fd 4"'
+  set_value "$REF" env_user_manager XDG_MENU_PREFIX '"hyprland-"'
+  set_value "$CAND" env_user_manager XDG_MENU_PREFIX '"motanka-"'
+  set_value "$CAND" processes motanka-session-capture true
+  pdiff
+  assert_success
+  assert_line 'Expected differences: 3'
+  set_value "$CAND" units_failed motanka-default-theme.service true
+  set_value "$CAND" errors first-run '"not reached within 300 s: layer omarchy-background: not mapped (layers: none)"'
+  set_value "$REF" tools xdg-terminal-exec true
+  set_value "$CAND" tools xdg-terminal-exec false
+  pdiff
+  assert_failure 1
+  assert_line 'Unexpected differences: 3'
+  assert_line '    motanka-default-theme.service: only in candidate: true'
+  assert_line '    xdg-terminal-exec: reference true | candidate false'
 }

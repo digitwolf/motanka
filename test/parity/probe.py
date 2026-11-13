@@ -3,6 +3,8 @@
 
 Usage: probe.py --raw DIR --out FILE [--own-sid SID] [--screenshot FILE]
                 [--no-session]
+       probe.py first-run --home DIR --ps FILE --layers FILE [--own-sid SID]
+                [--file REL]... [--layer NAMESPACE]... [--gone NAME]...
 
 probe.sh runs the session's commands and leaves their output in DIR; this
 program parses it, adds the facts that need no session command, and writes
@@ -26,9 +28,12 @@ one JSON document (format 1) to FILE:
                       compositor gets
     env_user_manager  the same variables in systemctl --user show-environment
     dbus_names        well-known names on the session bus -> owning process
+                      ("-<pid>-<n>" at the end of a name becomes "-*")
     processes         names of the user's processes (outside the probe)
-    units_active      active user units
-    units_failed      failed user units
+    units_active      active user units, without the .device, .swap and
+                      .mount units the user manager mirrors from the
+                      system (mounts under /run/user/<uid> are kept)
+    units_failed      failed user units, filtered the same way
     queries           read-only Upstream commands -> exit code and output
     themes            omarchy-theme-list
     commands          every file of Upstream's bin/ -> found on the PATH
@@ -44,7 +49,20 @@ one JSON document (format 1) to FILE:
 Upstream's tree is /opt/motanka/share/omarchy where Motanka vendors it, and
 the resolved OMARCHY_PATH (/usr/share/omarchy) otherwise. Values that hold
 the user's runtime folder have the UID replaced by $UID; memory addresses
-become 0x*.
+become 0x*. Unit names drop what changes on every login: random instance
+and scope ids become *, bus connection ids :1.* and the UID in
+run-user-<uid> $UID; the session's first desktop name in app-<desktop>-...
+units (named after XDG_CURRENT_DESKTOP) becomes $DESKTOP, so the same app
+pairs up across sessions with different desktop names.
+
+The first-run mode checks whether Upstream's first-run work in the session
+is done, for probe.sh --wait-*: every --file (relative to --home) exists
+and is not empty, every --layer namespace is mapped in --layers (the output
+of hyprctl -j layers), and no process named --gone is in --ps (the output
+of ps -o pid=,sid=,args=; process names as in "processes", the probe's own
+session --own-sid left out). It prints one line per condition, "reached: "
+or "pending: " and what it found, and exits 0 when all are reached, 1 when
+one is pending, 2 on a usage error.
 
 The menu is computed the way shell/plugins/menu/MenuModel.js does it: the
 shipped default/omarchy/omarchy-menu.jsonc under OMARCHY_PATH, translated by
@@ -102,7 +120,7 @@ ENV_PREFIXES = (
     "XCURSOR_", "HYPRCURSOR_", "HYPRLAND_", "UWSM_", "AQ_", "WLR_", "LIBVA_", "LC_",
 )
 ENV_SKIP = frozenset(("HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_ID", "XDG_VTNR", "XDG_SEAT_PATH",
-                      "XDG_SESSION_PATH"))
+                      "XDG_SESSION_PATH", "OMARCHY_STARTUP_CURSOR_SESSION"))
 
 # Short-lived helpers that say nothing about the session.
 PROCESS_SKIP = frozenset((
@@ -119,6 +137,8 @@ BIND_FLAGS = (("l", "locked"), ("r", "release"), ("e", "repeat"), ("o", "longPre
               ("m", "mouse"))
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 HEX_ADDRESS_RE = re.compile(r"\b0x[0-9a-fA-F]{6,}\b")
+BUS_NAME_IDS_RE = re.compile(r"-[0-9]+-[0-9]+$")
+FIRST_LINE_LIMIT = 120
 
 
 # --- omarchy-menu (a port of shell/plugins/menu/MenuModel.js) --------------
@@ -346,6 +366,22 @@ class Raw:
             return None
 
 
+def layer_surfaces(layers):
+    """[(level, namespace)] of hyprctl -j layers output (a dict by monitor)."""
+    out = []
+    if not isinstance(layers, dict):
+        return out
+    for monitor in layers.values():
+        levels = monitor.get("levels", {}) if isinstance(monitor, dict) else {}
+        if not isinstance(levels, dict):
+            continue
+        for level, surfaces in levels.items():
+            for s in surfaces or []:
+                if isinstance(s, dict):
+                    out.append((level, str(s.get("namespace", ""))))
+    return out
+
+
 def mod_names(mask):
     try:
         mask = int(mask)
@@ -370,13 +406,9 @@ def collect_hyprland(raw, doc):
                 doc["configerrors"][msg] = doc["configerrors"].get(msg, 0) + 1
 
     layers = raw.json("hypr-layers.json", "hyprctl layers")
-    if isinstance(layers, dict):
-        for monitor in layers.values():
-            levels = monitor.get("levels", {}) if isinstance(monitor, dict) else {}
-            for level, surfaces in levels.items():
-                for s in surfaces or []:
-                    key = f"{LAYER_LEVELS.get(str(level), level)}:{s.get('namespace', '')}"
-                    doc["layers"][key] = doc["layers"].get(key, 0) + 1
+    for level, namespace in layer_surfaces(layers):
+        key = f"{LAYER_LEVELS.get(str(level), level)}:{namespace}"
+        doc["layers"][key] = doc["layers"].get(key, 0) + 1
 
     clients = raw.json("hypr-clients.json", "hyprctl clients")
     if isinstance(clients, list):
@@ -428,9 +460,38 @@ def parse_env(entries, raw):
     return out
 
 
-def normalize_unit(unit):
+def normalize_unit(unit, desktop="", uid=None):
     unit = re.sub(r"@[0-9a-f]{8,}\.", "@*.", unit)
-    return re.sub(r"^run-[pu][0-9]+(-i[0-9]+)?\.", "run-*.", unit)
+    unit = re.sub(r"^run-[pu][0-9]+(-i[0-9]+)?\.", "run-*.", unit)
+    unit = re.sub(r"-[0-9a-f]{8,32}\.scope$", "-*.scope", unit)
+    unit = re.sub(r":1\.[0-9]+", ":1.*", unit)
+    if desktop and unit.startswith(f"app-{desktop}-"):
+        unit = "app-$DESKTOP-" + unit[len(desktop) + 5:]
+    if uid is not None:
+        unit = re.sub(rf"^run-user-{uid}(?=[-.])", "run-user-$UID", unit)
+    return unit
+
+
+def session_unit(unit):
+    """False for the device, swap and mount units the user manager mirrors
+    from the system; mounts under the user's runtime folder are kept."""
+    if unit.endswith((".device", ".swap")):
+        return False
+    return not unit.endswith(".mount") or unit.startswith("run-user-")
+
+
+def normalize_bus_name(name):
+    """org.kde.StatusNotifierHost-612-1794581783598 -> ...StatusNotifierHost-*"""
+    return BUS_NAME_IDS_RE.sub("-*", name)
+
+
+def session_desktop(env_entries):
+    """The first name of XDG_CURRENT_DESKTOP in the session environment."""
+    for entry in env_entries:
+        name, sep, value = entry.partition("=")
+        if sep and name == "XDG_CURRENT_DESKTOP":
+            return value.split(":")[0]
+    return ""
 
 
 def process_name(args):
@@ -451,18 +512,21 @@ def collect_session(raw, doc, env_entries, own_sid):
     if text is not None:
         doc["env_user_manager"] = parse_env(text.splitlines(), raw)
 
+    desktop = session_desktop(env_entries)
     for name, category in (("units-active.txt", "units_active"), ("units-failed.txt", "units_failed")):
         text = raw.output(name, f"systemctl --user list-units ({category})")
         for line in (text or "").splitlines():
             fields = line.split()
             if fields:
-                doc[category][normalize_unit(fields[0].lstrip("●*"))] = True
+                unit = normalize_unit(fields[0].lstrip("●*"), desktop, raw.uid)
+                if session_unit(unit):
+                    doc[category][unit] = True
 
     text = raw.output("busctl.txt", "busctl --user list")
     for line in (text or "").splitlines():
         fields = line.split()
         if len(fields) >= 3 and not fields[0].startswith(":") and fields[1] != "-":
-            doc["dbus_names"][fields[0]] = fields[2]
+            doc["dbus_names"][normalize_bus_name(fields[0])] = fields[2]
 
     for line in (raw.text("ps.txt") or "").splitlines():
         fields = line.split(None, 2)
@@ -652,7 +716,83 @@ def build(args):
     return doc
 
 
+# --- first-run mode (probe.sh --wait-*) ----------------------------------
+
+def first_line(path):
+    text = read_file(path) or ""
+    line = text.splitlines()[0] if text.strip() else ""
+    line = " ".join(line.split())
+    if len(line) > FIRST_LINE_LIMIT:
+        line = line[:FIRST_LINE_LIMIT] + "…"
+    return line
+
+
+def first_run_status(home, ps_text, layers, files=(), namespaces=(), gone=(), own_sid=""):
+    """[(reached, description)], one per condition, in the order given."""
+    out = []
+    for rel in files:
+        path = os.path.join(home, rel)
+        if not os.path.isfile(path):
+            out.append((False, f"~/{rel}: missing"))
+        elif os.path.getsize(path) == 0:
+            out.append((False, f"~/{rel}: empty"))
+        else:
+            out.append((True, f"~/{rel}: {first_line(path) or '(blank first line)'}"))
+    mapped = sorted({ns for _, ns in layer_surfaces(layers)})
+    for ns in namespaces:
+        if layers is None:
+            out.append((False, f"layer {ns}: hyprctl layers gave no answer"))
+        elif ns in mapped:
+            out.append((True, f"layer {ns}: mapped"))
+        else:
+            out.append((False, f"layer {ns}: not mapped (layers: {' '.join(mapped) or 'none'})"))
+    procs = []
+    for line in (ps_text or "").splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[1] != own_sid:
+            procs.append((fields[0], process_name(fields[2])))
+    for name in gone:
+        pids = [pid for pid, pname in procs if pname == name]
+        if pids:
+            out.append((False, f"process {name}: still running (pid {', '.join(pids)})"))
+        else:
+            out.append((True, f"process {name}: not running"))
+    return out
+
+
+def first_run_main(argv):
+    p = argparse.ArgumentParser(prog="probe.py first-run",
+                                description="Check whether Upstream's first-run work in the session is done.")
+    p.add_argument("--home", required=True)
+    p.add_argument("--ps", required=True)
+    p.add_argument("--layers", required=True)
+    p.add_argument("--own-sid", default="")
+    p.add_argument("--file", action="append", default=[])
+    p.add_argument("--layer", action="append", default=[])
+    p.add_argument("--gone", action="append", default=[])
+    args = p.parse_args(argv)
+    for rel in args.file:
+        if rel.startswith("/") or ".." in rel.split("/"):
+            print(f"probe.py first-run: --file must be relative to --home, got {rel!r}", file=sys.stderr)
+            return 2
+    layers = None
+    text = read_file(args.layers)
+    if text and text.strip():
+        try:
+            layers = json.loads(text)
+        except ValueError:
+            layers = None
+    status = first_run_status(args.home, read_file(args.ps), layers, args.file, args.layer, args.gone,
+                              args.own_sid)
+    for reached, what in status:
+        print(("reached: " if reached else "pending: ") + what)
+    return 0 if all(reached for reached, _ in status) else 1
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["first-run"]:
+        return first_run_main(argv[1:])
     p = argparse.ArgumentParser(prog="probe.py", description=__doc__.split("\n", 1)[0])
     p.add_argument("--raw", required=True)
     p.add_argument("--out", required=True)

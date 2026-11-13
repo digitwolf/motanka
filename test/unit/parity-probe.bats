@@ -3,8 +3,10 @@
 # Unit tests for test/parity/probe.py, the assembler of the parity probe
 # (task 24.3, requirement 13.6): its port of omarchy-menu's model (JSONC
 # reading, merging the user extension, translations, visibility with "when"
-# conditions run by bash), and the normalisation of process names, unit
-# names, modifier masks and runtime paths.
+# conditions run by bash), the normalisation of process names, unit
+# names, bus names, modifier masks and runtime paths, the filter of mirrored
+# system units, the first-run check (probe.py first-run) and probe.sh's
+# validation of its --wait-* options.
 
 setup() {
   load '../bats/support/load'
@@ -83,8 +85,120 @@ print(raw.norm("unix:path=/run/user/1001/bus 0x55d0c0ffee00"))'
 @test "the environment keeps allowlisted names only, without per-login values" {
   py 'raw = probe.Raw(sys.argv[3], 1001, {})
 env = probe.parse_env(["PATH=/usr/bin", "XDG_CURRENT_DESKTOP=Hyprland", "HYPRLAND_INSTANCE_SIGNATURE=abc",
-                       "XDG_SESSION_ID=3", "SECRET_TOKEN=x", "OMARCHY_PATH=/usr/share/omarchy", "XDG_RUNTIME_DIR=/run/user/1001"], raw)
+                       "XDG_SESSION_ID=3", "SECRET_TOKEN=x", "OMARCHY_PATH=/usr/share/omarchy", "XDG_RUNTIME_DIR=/run/user/1001",
+                       "OMARCHY_STARTUP_CURSOR_SESSION=efb50993_1794581783_1083611601"], raw)
 print(sorted(env.items()))'
   assert_success
   assert_line "[('OMARCHY_PATH', '/usr/share/omarchy'), ('PATH', '/usr/bin'), ('XDG_CURRENT_DESKTOP', 'Hyprland'), ('XDG_RUNTIME_DIR', '/run/user/\$UID')]"
+}
+
+@test "unit names drop the session's desktop name, scope ids, bus connection ids and the UID" {
+  py 'print(probe.normalize_unit("app-Hyprland-udiskie-7894a99d.scope", "Hyprland"),
+      probe.normalize_unit("app-Hyprland-udiskie-7894a99d.scope", "Motanka"),
+      probe.normalize_unit("dbus-:1.19-org.a11y.atspi.Registry@0.service"),
+      probe.normalize_unit("run-user-1001.mount", uid=1001), probe.normalize_unit("run-user-10010-doc.mount", uid=1001))
+print(probe.session_unit("boot.mount"), probe.session_unit("run-user-1001-gvfs.mount"),
+      probe.session_unit("sys-subsystem-net-devices-eth0.device"), probe.session_unit("swap-swapfile.swap"),
+      probe.session_unit("pipewire.socket"))'
+  assert_success
+  assert_line "app-\$DESKTOP-udiskie-*.scope app-Hyprland-udiskie-*.scope dbus-:1.*-org.a11y.atspi.Registry@0.service run-user-\$UID.mount run-user-10010-doc.mount"
+  assert_line 'False True False False True'
+}
+
+@test "the session's units leave out mirrored system units; bus names drop pid suffixes" {
+  py 'd = sys.argv[3]
+def put(name, text):
+    open(d + "/" + name, "w").write(text)
+    open(d + "/" + name + ".rc", "w").write("0\n")
+put("units-active.txt", "app-Motanka-omarchy\\x2dhyprland\\x2dmonitor\\x2dwatch-57e753ea.scope loaded active running x\n"
+    "boot-efi.mount loaded active mounted /boot/efi\nrun-user-1001-doc.mount loaded active mounted x\n"
+    "sys-devices-virtual-tty-ttyprintk.device loaded active plugged x\nswap-swapfile.swap loaded active active x\n"
+    "motanka-session.target loaded active active x\n")
+put("units-failed.txt", "")
+put("busctl.txt", "org.kde.StatusNotifierHost-612-1794581783598 612 quickshell alice :1.40 user@1001.service - -\n"
+    "org.fcitx.Fcitx5 700 fcitx5 alice :1.41 user@1001.service - -\n"
+    ":1.40 612 quickshell alice :1.40 user@1001.service - -\n")
+raw = probe.Raw(d, 1001, {})
+doc = {c: {} for c in probe.CATEGORIES}
+probe.collect_session(raw, doc, ["XDG_CURRENT_DESKTOP=Motanka:Hyprland"], "")
+print(" ".join(sorted(doc["units_active"])))
+print(" ".join(sorted(doc["dbus_names"])), doc["units_failed"])'
+  assert_success
+  assert_line "app-\$DESKTOP-omarchy\\x2dhyprland\\x2dmonitor\\x2dwatch-*.scope motanka-session.target run-user-\$UID-doc.mount"
+  assert_line 'org.fcitx.Fcitx5 org.kde.StatusNotifierHost-* {}'
+}
+
+# first_run_fixture: a home folder with the default-theme record, a layers
+# answer with the wallpaper, and a process list in which the probe's own
+# session (sid 300) is the only one that mentions the first-run command.
+first_run_fixture() {
+  H=$BATS_TEST_TMPDIR/home
+  mkdir -p "$H/.local/state/motanka"
+  printf 'ok\t2026-11-13T10:00:00Z\ttokyo-night\n' >"$H/.local/state/motanka/default-theme"
+  printf '{"Virtual-1": {"levels": {"0": [{"namespace": "omarchy-background"}], "2": [{"namespace": "omarchy-bar"}]}}}\n' \
+    >"$BATS_TEST_TMPDIR/layers.json"
+  printf '  100   100 /opt/motanka/bin/Hyprland --watchdog-fd 4\n  400   300 /bin/bash /opt/motanka/bin/omarchy-provision-first-run\n' \
+    >"$BATS_TEST_TMPDIR/ps.txt"
+}
+
+first_run() {
+  run python3 "$PARITY/probe.py" first-run --home "$H" --ps "$BATS_TEST_TMPDIR/ps.txt" --own-sid 300 "$@"
+}
+
+@test "first-run reports each condition and exits 0 once all are reached" {
+  first_run_fixture
+  first_run --layers "$BATS_TEST_TMPDIR/layers.json" --file .local/state/motanka/default-theme \
+    --layer omarchy-background --gone omarchy-provision-first-run
+  assert_success
+  assert_line 'reached: ~/.local/state/motanka/default-theme: ok 2026-11-13T10:00:00Z tokyo-night'
+  assert_line 'reached: layer omarchy-background: mapped'
+  assert_line 'reached: process omarchy-provision-first-run: not running'
+}
+
+@test "first-run names what is pending and exits 1" {
+  first_run_fixture
+  : >"$H/.local/state/motanka/empty"
+  printf '  401   500 /bin/bash /opt/motanka/bin/omarchy-provision-first-run\n' >>"$BATS_TEST_TMPDIR/ps.txt"
+  first_run --layers "$BATS_TEST_TMPDIR/no-such-file" --file .local/state/motanka/missing \
+    --file .local/state/motanka/empty --file .local/state/motanka/default-theme \
+    --layer omarchy-background --gone omarchy-provision-first-run
+  assert_failure 1
+  assert_line 'pending: ~/.local/state/motanka/missing: missing'
+  assert_line 'pending: ~/.local/state/motanka/empty: empty'
+  assert_line --partial 'reached: ~/.local/state/motanka/default-theme: ok'
+  assert_line 'pending: layer omarchy-background: hyprctl layers gave no answer'
+  assert_line 'pending: process omarchy-provision-first-run: still running (pid 401)'
+  printf '{"Virtual-1": {"levels": {"2": [{"namespace": "omarchy-bar"}]}}}\n' >"$BATS_TEST_TMPDIR/layers.json"
+  first_run --layers "$BATS_TEST_TMPDIR/layers.json" --layer omarchy-background
+  assert_failure 1
+  assert_line 'pending: layer omarchy-background: not mapped (layers: omarchy-bar)'
+}
+
+@test "first-run refuses paths outside the home folder and missing arguments" {
+  first_run_fixture
+  first_run --layers "$BATS_TEST_TMPDIR/layers.json" --file /etc/passwd
+  assert_failure 2
+  assert_output --partial 'must be relative to --home'
+  first_run --layers "$BATS_TEST_TMPDIR/layers.json" --file .local/../../etc/passwd
+  assert_failure 2
+  run python3 "$PARITY/probe.py" first-run --ps "$BATS_TEST_TMPDIR/ps.txt" --layers "$BATS_TEST_TMPDIR/layers.json"
+  assert_failure 2
+}
+
+@test "probe.sh refuses malformed --wait-* options before it looks for a session" {
+  run bash "$PARITY/probe.sh" --out "$BATS_TEST_TMPDIR/out" --wait-file ../etc/passwd
+  assert_failure 2
+  assert_output --partial "wait-file takes a path relative to \$HOME"
+  run bash "$PARITY/probe.sh" --out "$BATS_TEST_TMPDIR/out" --wait-file /etc/passwd
+  assert_failure 2
+  run bash "$PARITY/probe.sh" --out "$BATS_TEST_TMPDIR/out" --wait-gone 'a b'
+  assert_failure 2
+  assert_output --partial 'wait-gone takes a name'
+  run bash "$PARITY/probe.sh" --out "$BATS_TEST_TMPDIR/out" --wait-layer
+  assert_failure 2
+  assert_output --partial 'wait-layer needs a value'
+  run bash "$PARITY/probe.sh" --out "$BATS_TEST_TMPDIR/out" --first-run-timeout 0
+  assert_failure 2
+  assert_output --partial 'take a number of seconds'
+  assert [ ! -e "$BATS_TEST_TMPDIR/out" ]
 }
