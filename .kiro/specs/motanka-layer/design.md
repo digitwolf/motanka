@@ -29,7 +29,7 @@ Building the current Hyprland stack for Ubuntu 24.04 under `/opt/motanka` is not
 | The apt source file is owned by one of four `motanka-source-<suite>` packages, not by the keyring package. | Requirement 11.2 needs a suite switch, and system files change only through dpkg. Installing a different source package does that. |
 | Override files keep their Upstream names, for example `omarchy-pkg-add`. | An override works only if it shadows the Upstream name inside the wrapper scope. No name Motanka exposes contains "Omarchy". |
 | Rollback restores from locally stored .debs, not from the repo. | Rollback then works offline and does not depend on the repo keeping old versions. |
-| `~/.local/share/omarchy` is a symlink to `/opt/motanka/share/omarchy`. | Upstream configuration files source that path literally. The symlink is a Namespaced_Path and is ledgered. |
+| `/usr/share/omarchy` is a package-owned symlink to `/opt/motanka/share/omarchy`. | Upstream hardcodes `/usr/share/omarchy` in 27 files (spike S2). |
 | `motanka-tweaks` is not part of this spec. | No requirement covers it. |
 
 ## Architecture
@@ -267,7 +267,7 @@ All commands log to the journal with `SYSLOG_IDENTIFIER=motanka`. Log lines carr
 | anything else | Log to the journal, exit 64 (7.5). |
 
 - `mkinitcpio`, `limine-*` and `snapper` shims log the call and exit 64. Scripts that need them are overrides (7.8).
-- The `sudo` dispatcher skips sudo's own options, and if the command name is a shim it runs the shim unprivileged. Anything else is passed to `/usr/bin/sudo` unchanged.
+- The `sudo` dispatcher skips sudo's own options. If the command name is a shim it runs the shim unprivileged. Otherwise it looks up the calling Upstream command in `compat/privileged.tsv` (see spike S2): `allow` runs `/usr/bin/sudo` with the original arguments, `override` cannot occur (the override replaces the command), and anything else exits 64 with a journal entry.
 - The Helper is run as `pkexec /opt/motanka/libexec/motanka/helper <install|remove> <names…>`. It:
   - accepts a name only if it is an outcome in `package-map.tsv` for the running release, or is in a ledger (7.12);
   - simulates the apt transaction and refuses with exit 5 if a Foreign_Package would change version or be removed;
@@ -293,7 +293,7 @@ All commands log to the journal with `SYSLOG_IDENTIFIER=motanka`. Log lines carr
    - `session` (for example `~/.config/hypr`, `waybar`, `walker`): ledger, back up if present, write by temp-file-and-rename (6.2, 6.3, 6.11).
    - `app` (for example `~/.config/alacritty`, `btop`): same as `session`, but skipped with a notice when the file already exists.
    - `shared`: skipped. With opt-in shell integration, one marked block is added to the chosen rc file (6.5, 6.6).
-3. Create the `~/.local/share/omarchy` symlink and the dconf user database `~/.config/dconf/motanka`.
+3. Create the dconf user database `~/.config/dconf/motanka`.
 4. Run Upstream per-user scripts that the Call_Inventory marks safe, through Wrappers.
 5. Scan `~/.config`, `~/.local` and top-level dotfiles with `find -newer <marker>`. Any path not in the ledger and not under a Namespaced_Path is ledgered as `unplanned` (6.9, 6.10).
 6. Write `setup-end`. A login that finds `setup-begin` without `setup-end` resumes from the last ledgered step (6.7).
@@ -468,6 +468,25 @@ limine:
 - **S3 — Hyprland in QEMU.** Confirm a Motanka-independent Hyprland session starts in the test VM without host privileges, and choose the graphics device.
 - **S4 — Release upgrade.** Run `do-release-upgrade` 24.04 → 26.04 in a VM with placeholder `/opt` packages and a third-party source, and record what the upgrader does to both.
 - **S5 — Display managers.** Confirm GDM on both releases and SDDM list a session with `DesktopNames=Motanka;Hyprland` and pass the names through.
+
+**Spike results**
+
+- **S1 — Stack on 24.04 (done 2026-11-13, 24.04 part).** Feasible within the rules. Chosen approach: a native build per release in that release's own build environment, compiled with GCC 16 (Arch builds Hyprland 0.57 with GCC 16.2; GCC 15 lacks `std::ranges::starts_with`). GCC 16 comes from the archive on 26.04 (`g++-16`) and from the Ubuntu toolchain PPA on 24.04, at build time only. Results for Hyprland 0.57.2 on 24.04:
+  - Bundled under `/opt/motanka` because 24.04's versions are too old or missing: wayland 1.24.0 (server 1.22.91 needed), wayland-protocols 1.50 (build time only), libxkbcommon 1.13.1, libinput 1.31.1, libdisplay-info 0.3.0, libei 1.5.0 (`libeis`), xcb-util-errors 1.0.1, Lua 5.5.0 (static), sdbus-c++ 2.2.1, glaze 9.1.0 (headers, build time only), and the Hypr libraries (hyprwayland-scanner 0.4.6, hyprutils 0.14.3, hyprlang 0.6.8, hyprcursor 0.1.14, hyprgraphics 0.6.0, hyprland-protocols 0.8.0, aquamarine 0.16.0, hyprwire 0.3.1). CMake 4.5 is needed at build time only (glaze requires 3.31; 24.04 has 3.28).
+  - GCC 16's `libstdc++.so.6` and `libgcc_s.so.1` ship in `/opt/motanka/lib` on 24.04 (Hyprland needs `GLIBCXX_3.4.35`; 24.04 provides 3.4.33). 26.04's system `libstdc++6` is already GCC 16's (3.4.35), so nothing is bundled there; `motanka-stack-libs` must depend on `libstdc++6 (>= 16-20260322)` on 26.04.
+  - Every library resolves from `/opt/motanka/lib` through RUNPATH; no `LD_LIBRARY_PATH`.
+  - Size: 54 MB compressed, 85 MB installed after stripping debug info; 83 runtime packages from the 24.04 archive (main and universe).
+  - Verified on a clean, stock 24.04 VM without the PPA: `/opt/motanka/bin/Hyprland` started on tty1, used the bundled `libstdc++`, opened the seat through logind, and rendered through virgl (screenshot taken).
+  - Follow-ups for the stack packages: build `hyprtoolkit` and `hyprland-guiutils` (Hyprland warns without them); start the compositor through `start-hyprland`, which Hyprland 0.57 expects; libinput's udev helper rules stay those of the host's libinput (1.25 on 24.04), to be checked on hardware; pin every source tarball by SHA-256 (lua.org reset connections twice during the spike, so mirror it in the build).
+- **Upstream facts found during the spikes.** Omarchy v4.5.0 configures Hyprland in Lua (`config/hypr/*.lua`, `default/hypr/*.lua`), which Ubuntu 26.04's Hyprland 0.53.3 cannot read; Motanka therefore ships its own Hyprland on both releases. Omarchy's session is started by `uwsm` (`uwsm start -g -1 -e -D Hyprland hyprland.desktop`), apps are launched with `uwsm-app`, and Upstream expects its files under `/usr/share/omarchy` (`OMARCHY_PATH`). These feed spike S2.
+- **S2 — Upstream inventory (done 2026-11-13).** `tools/inventory` at the v4.5.0 pin (`compat/inventory/ac2690cd….tsv` and `.summary.md`) scanned 1,203 files and recorded 2,367 findings (776 marked uncertain). Decisions:
+  - **Do not run Upstream's `install/` tree.** It is Arch's installer (209 privileged findings). Motanka's packages and per-user setup replace it; specific steps are ported as overrides when a feature needs them.
+  - **Ship `uwsm` in the Stack.** Upstream starts its session with `uwsm start` and launches apps through `uwsm-app` (32 uses). `uwsm` (0.27.2, Python) goes into `/opt/motanka` so both releases run the version Upstream expects; the launcher starts the compositor through `uwsm` and `start-hyprland`. uwsm writes its generated units under `$XDG_RUNTIME_DIR`, not the home folder.
+  - **`/usr/share/omarchy` becomes a package-owned symlink to `/opt/motanka/share/omarchy`**, owned by `motanka-core`. Upstream hardcodes that path 53 times in 27 files (`~/.local/share/omarchy` appears nowhere), so a symlink is cheaper and safer than 27 overrides. It is the only path outside the File layout table's `motanka` names; `tools/debcheck` allows exactly this one symlink. The earlier `~/.local/share/omarchy` symlink is dropped.
+  - **The `sudo` dispatcher is default-deny.** 72 of 560 Upstream commands call `sudo` for more than packages (`sed -i` and `tee` on `/etc`, `ufw`, `systemctl enable`, `cryptsetup`, `usermod`, `modprobe`, `btrfs`, `docker`). Passing those to the real `sudo` would change the Host outside dpkg and break removal. The dispatcher therefore consults `compat/privileged.tsv`, one line per Upstream command: `allow` (runs `/usr/bin/sudo` with the original arguments; only for operations that change no persistent state, such as `systemctl restart` of a running unit), `override` (the command is replaced by a Motanka override that goes through the Helper), or `unsupported` (exit 64, journal entry, notification "not available in Motanka"). Unlisted commands are `unsupported`. This replaces the earlier "anything else is passed to `/usr/bin/sudo` unchanged".
+  - **Overrides.** 40 `bin/` files touch Arch tools or paths; 20 of them only call `pacman`/`yay` and are covered by the shims and the `omarchy-pkg-*` overrides; the other 20 (kernel, hibernation, Limine, mkinitcpio, channels, mirrors, keyring, migrate) get overrides or are `unsupported`. 74 of 218 migrations have Arch or privileged findings and are classified in `migrations.tsv`.
+  - **User units.** Upstream enables and starts its own user units (for example `omarchy-crash-watch.service`, `omarchy-fcitx5.service`) and writes under `~/.config/systemd/user` in two places. The `systemctl` path through the wrapper scope maps `--user enable` of Upstream units to Motanka's package-owned wiring under `motanka-session.target`; writes under `~/.config/systemd/user` are ledgered.
+- **S3 — Hyprland in QEMU (done 2026-11-13).** Works. A 26.04 VM started with `-vga none -device virtio-vga-gl -display egl-headless,rendernode=/dev/dri/renderD128` gets a virtio GPU with virgl, backed by the host GPU (log: `Renderer: virgl (Mesa Intel(R) Iris(R) Xe Graphics (RPL-P))`), and a connected `Virtual-1` output at 1280x800. Ubuntu's Hyprland 0.53.3 started on tty1 through getty autologin, opened the seat through logind, and rendered frames that `grim` captured over SSH. No host privileges are needed beyond the render-node access logind grants the locally logged-in user. The harness exposes this as `MOTANKA_VM_GPU=gl`. Open point: CI runners have no GPU, so session tests in CI need a software-rendering fallback, to be checked in task 24.1.
 
 **Decisions by the owner (2026-11-12)**
 

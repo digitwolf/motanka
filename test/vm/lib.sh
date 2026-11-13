@@ -21,17 +21,24 @@
 # Environment:
 #   MOTANKA_VM_CPUS      vCPUs per VM (default 4)
 #   MOTANKA_VM_RAM       memory per VM, QEMU syntax (default 6G)
+#   MOTANKA_VM_GPU       "gl" for a virgl GPU backed by the host render node
+#                        (needed to run Hyprland; spike S3), otherwise unset
 #   MOTANKA_VM_GPU_ARGS  QEMU display and GPU arguments, split on spaces
+#                        (overrides MOTANKA_VM_GPU)
 #                        (default "-vga none -device virtio-vga -display none";
 #                        to be revisited after spike S3)
 #   MOTANKA_VM_RESULTS   if set, serial and QEMU logs of every VM that is
 #                        torn down are copied there; must be a folder under
 #                        ~/.cache/motanka-vm/results/
+#   MOTANKA_BUILD_VM_CPUS  vCPUs of a build VM (default: host CPUs, at most 10)
+#   MOTANKA_BUILD_VM_RAM   memory of a build VM (default 10G)
 
 MV_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MV_REPO=$(cd "$MV_LIB_DIR/../.." && pwd)
 
 MV_STATE="$HOME/.cache/motanka-vm"
+MV_KEYS="$MV_STATE/keys"
+MV_DEBS="$MV_STATE/debs"
 MV_BASE="$MV_STATE/base"
 MV_VMS="$MV_STATE/vms"
 MV_SSH_DIR="$MV_STATE/ssh"
@@ -48,6 +55,8 @@ MV_DISK_SIZE=40G
 MV_BOOT_TIMEOUT=600
 MV_DOWN_TIMEOUT=60
 MV_DEFAULT_GPU_ARGS="-vga none -device virtio-vga -display none"
+MV_GL_RENDER_NODE=${MOTANKA_VM_RENDER_NODE:-/dev/dri/renderD128}
+MV_GL_GPU_ARGS="-vga none -device virtio-vga-gl -display egl-headless,rendernode=$MV_GL_RENDER_NODE"
 MV_CLOUDIMG_URL=https://cloud-images.ubuntu.com/releases
 MV_CLOUDIMG_KEYRING=/usr/share/keyrings/ubuntu-cloudimage-keyring.gpg
 
@@ -390,7 +399,14 @@ mv_start_qemu() {
   if [[ ! $ram =~ ^[1-9][0-9]*[MG]?$ ]]; then
     mv_die "MOTANKA_VM_RAM must look like 6G or 6144M, got '$ram'"
   fi
-  read -r -a gpu <<<"${MOTANKA_VM_GPU_ARGS-$MV_DEFAULT_GPU_ARGS}"
+  local gpu_default=$MV_DEFAULT_GPU_ARGS
+  if [[ ${MOTANKA_VM_GPU:-} == gl ]]; then
+    if [[ ! -r $MV_GL_RENDER_NODE || ! -w $MV_GL_RENDER_NODE ]]; then
+      mv_die "MOTANKA_VM_GPU=gl needs read and write access to $MV_GL_RENDER_NODE (granted to the user logged in at the local seat)"
+    fi
+    gpu_default=$MV_GL_GPU_ARGS
+  fi
+  read -r -a gpu <<<"${MOTANKA_VM_GPU_ARGS-$gpu_default}"
 
   for attempt in 1 2 3; do
     port=$(mv_free_port)
@@ -586,4 +602,50 @@ mv_rsync_rsh() {
     fi
   done
   printf '%s\n' "$out"
+}
+
+# --- build VMs and file copies ----------------------------------------------
+
+# mv_up_build_vm: boots a resolute fresh VM sized for package builds
+# (MOTANKA_BUILD_VM_CPUS, MOTANKA_BUILD_VM_RAM) and sets MV_BOOTED to its
+# name. The VM is registered for cleanup; callers that keep it call
+# mv_unregister.
+mv_up_build_vm() {
+  local n cpus ram name
+  n=$(nproc 2>/dev/null || echo 4)
+  if ((n > 10)); then
+    n=10
+  fi
+  cpus=${MOTANKA_BUILD_VM_CPUS:-$n}
+  ram=${MOTANKA_BUILD_VM_RAM:-10G}
+  mv_log "booting a build VM ($cpus vCPUs, $ram)"
+  name=$(MOTANKA_VM_CPUS=$cpus MOTANKA_VM_RAM=$ram "$MV_LIB_DIR/up" resolute fresh </dev/null | tail -n 1)
+  if ! mv_valid_name "$name"; then
+    mv_die "test/vm/up printed an invalid VM name '$name'"
+  fi
+  MV_CLEANUP_VMS+=("$name")
+  MV_BOOTED=$name
+}
+
+# mv_copy_to_vm <name> <host-dir> <guest-dir>: copies the content of a host
+# folder into a guest folder (created if needed) with tar over SSH.
+mv_copy_to_vm() {
+  local name=$1 src=$2 dest=$3 q
+  mv_ssh_args "$name"
+  printf -v q '%q' "$dest"
+  tar -C "$src" -cf - . | "${MV_SSH[@]}" "mkdir -p -- $q && tar -C $q -xf -"
+}
+
+# mv_copy_from_vm <name> <guest-dir> <host-dir>: copies the content of a
+# guest folder into a host folder (created if needed) with tar over SSH.
+# The host folder must be inside ~/.cache/motanka-vm/.
+mv_copy_from_vm() {
+  local name=$1 src=$2 dest=$3 q
+  if [[ $dest != "$MV_STATE"/* || $dest == *..* ]]; then
+    mv_die "refusing to copy into $dest: not under $MV_STATE/"
+  fi
+  mv_ssh_args "$name"
+  printf -v q '%q' "$src"
+  mkdir -p "$dest"
+  "${MV_SSH[@]}" "tar -C $q -cf - ." </dev/null | tar -C "$dest" --no-same-owner -xf -
 }

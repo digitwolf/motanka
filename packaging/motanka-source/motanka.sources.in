@@ -1,0 +1,9 @@
+# Motanka apt source for the suite @SUITE@, owned by the package
+# motanka-source-@SUITE@. To switch suites, install another
+# motanka-source-<suite> package; it replaces this one.
+Types: deb
+URIs: @URI@
+Suites: @SUITE@
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/motanka-archive-keyring.gpg

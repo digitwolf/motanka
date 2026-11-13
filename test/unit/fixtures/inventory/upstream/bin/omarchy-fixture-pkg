@@ -1,0 +1,10 @@
+#!/bin/bash
+# Fixture: Arch tools and privilege. sudo pacman -S in this comment is not a call.
+set -euo pipefail
+
+sudo pacman -S --noconfirm --needed -- "$@"
+if ((EUID == 0)); then
+  pacman -Q -- "$1" >/dev/null
+fi
+exec sudo env OMARCHY_UPDATE_PACMAN=1 \
+  pacman -Syu --noconfirm

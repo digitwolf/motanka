@@ -30,14 +30,14 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - _Requirements: 14.1, 14.2, 14.3_
 
 - [ ] 3. Feasibility spikes (each runs in a test VM and writes its result into `design.md`)
-- [ ] 3.1 S3: Hyprland in QEMU
+- [x] 3.1 S3: Hyprland in QEMU
   - In a 26.04 VM, start Ubuntu's own Hyprland headless; choose between `virtio-vga-gl` with `egl-headless` and software rendering; record the QEMU flags in `test/vm/lib.sh`
   - _Requirements: 8.5_
-- [ ] 3.2 S1: Hyprland stack on 24.04 under `/opt/motanka`
+- [x] 3.2 S1: Hyprland stack on 24.04 under `/opt/motanka`
   - In a 24.04 VM, try the four approaches in the design; record bundled libraries, package size and the chosen approach; repeat the chosen approach in a 26.04 VM
   - Keep scripts in `spikes/s1/`
   - _Requirements: 1.3, 3.5, 8.1, 8.2_
-- [ ] 3.3 S2: Upstream call inventory
+- [x] 3.3 S2: Upstream call inventory
   - Create `tools/inventory` producing `compat/inventory/<pin>.tsv`; record hardcoded paths, `sudo` and Arch-tool calls, `systemctl --user enable` calls, Shared_File writes and `uwsm` use; decide on shipping `uwsm`; list required overrides
   - _Requirements: 6.5, 7.8, 7.10_
 - [ ] 3.4 S4: release upgrade behaviour

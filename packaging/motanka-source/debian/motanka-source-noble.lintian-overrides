@@ -1,0 +1,3 @@
+# Shipping the Motanka apt source is the purpose of this package
+# (design.md, "Departures from DESIGN.md"; requirement 11.2).
+package-installs-apt-sources

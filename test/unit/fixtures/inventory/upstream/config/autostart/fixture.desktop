@@ -1,0 +1,3 @@
+[Desktop Entry]
+Name=Fixture
+Exec=limine-snapper-notify %u

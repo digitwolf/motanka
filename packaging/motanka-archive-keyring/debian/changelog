@@ -1,0 +1,6 @@
+motanka-archive-keyring (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial package: the Motanka archive signing key and the apt pin that
+    limits the Motanka repository to Motanka packages.
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

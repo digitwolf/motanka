@@ -1,0 +1,2 @@
+debian/build/motanka-archive-keyring.gpg usr/share/keyrings/
+apt-preferences/motanka etc/apt/preferences.d/

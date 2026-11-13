@@ -1,0 +1,26 @@
+Source: motanka
+Section: metapackages
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka
+Architecture: all
+Multi-Arch: foreign
+Depends: motanka-archive-keyring,
+         motanka-core,
+         motanka-stack,
+         ${motanka:Source},
+         ${misc:Depends},
+Description: Omarchy-compatible Hyprland session for Ubuntu (metapackage)
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. It installs
+ next to the current desktop as a separate login session, follows
+ upstream Omarchy, and removes cleanly.
+ .
+ This metapackage depends on the Motanka core, the Hyprland stack, the
+ archive keyring and the apt source of the matching suite.

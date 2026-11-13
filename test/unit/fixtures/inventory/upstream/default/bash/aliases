@@ -1,0 +1,2 @@
+# Fixture: aliases are sourced by the user's shell
+alias up='sudo pacman -Syu'

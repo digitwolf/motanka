@@ -1,0 +1,1934 @@
+#!/usr/bin/env python3
+"""Build the Call_Inventory of an Upstream tree at one pin (Spike S2).
+
+usage: tools/inventory [--out-dir DIR] <upstream-dir> <pin>
+
+Scans every file under bin/, install/, migrations/, default/, config/ and
+shell/ of <upstream-dir> that is a shell script (sh, bash, dash, zsh or ksh
+shebang; .sh, .bash, .zsh or .ksh name; or a shell file Upstream sources
+without a shebang: bashrc, files under a bash/ or uwsm/ folder) or a file
+that runs commands:
+
+  *.lua                Hyprland Lua config. String literals on lines with
+                       exec_cmd, launch, bind and similar calls are commands;
+                       other string literals are analysed as uncertain.
+  *.conf (Hyprland)    exec, exec-once, execr, execr-once, exec-shutdown and
+                       bind* lines with the exec dispatcher.
+  *.desktop            Exec= and TryExec= lines.
+  systemd units        Exec*= lines (*.service, *.timer, *.socket, *.path,
+                       *.target and drop-in *.conf files).
+  *.json, *.jsonc      action, when, checked, disabled, exec, command, cmd,
+                       run and on-click* values.
+  *.toml, *.yaml, *.yml, *.ini
+                       command, cmd, exec, run, shell and on-click* values
+                       (uncertain).
+  *.qml, *.js, *.mjs, scripts with another interpreter
+                       string literals; a line with a string array is read
+                       as one argv.
+
+Writes into DIR (default: compat/inventory/ in this repository):
+
+  <pin>.tsv          <file> TAB <line> TAB <class> TAB <detail>, one line per
+                     finding, sorted by file, line number, class and detail
+  <pin>.summary.md   counts per class and the lists reviews need
+
+Classes:
+  arch-tool     call of an Arch tool (ARCH_TOOLS, limine-*); detail: the
+                command and its first three arguments
+  arch-path     reference to an Arch path (ARCH_PATHS); detail: the path
+  privileged    sudo, pkexec, doas, run0 (Upstream's as_root helper is
+                marked uncertain); detail: the command run with privilege
+  home-write    write into the home folder; detail: the target, with ~ for
+                $HOME and the XDG base folders, and " [namespaced]" under
+                ~/.config/omarchy, ~/.local/share/omarchy,
+                ~/.local/state/omarchy or ~/.cache/omarchy
+  user-unit     systemctl --user unit verbs (detail "<unit> (<verb>)"),
+                environment imports into the user manager (detail
+                "environment (<command>)"), writes under ~/.config/systemd
+                (detail: the path)
+  session       uwsm, uwsm-app, Hyprland, start-hyprland, hyprctl dispatch
+                exec; detail: the command
+  omarchy-path  reference to $OMARCHY_PATH, ~/.local/share/omarchy or
+                /usr/share/omarchy; detail: the referenced path with its base
+
+A detail ending in " ?" is uncertain: a target resolved through a variable,
+a command found in a string that is probably run, or a tool name passed as
+an argument. Comments and here-doc bodies are not analysed. The line is the
+line where the command starts.
+
+Exit codes: 0 written, 1 output could not be written, 2 usage or input error.
+"""
+
+import argparse
+import bisect
+import collections
+import json
+import os
+import posixpath
+import re
+import shlex
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCAN_DIRS = ("bin", "install", "migrations", "default", "config", "shell")
+CLASSES = (
+    "arch-tool",
+    "arch-path",
+    "privileged",
+    "home-write",
+    "user-unit",
+    "session",
+    "omarchy-path",
+)
+PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+MAX_DEPTH = 4
+DETAIL_MAX = 200
+
+# --- Patterns ----------------------------------------------------------------
+
+ARCH_TOOLS = frozenset(
+    """
+    pacman yay paru makepkg mkinitcpio limine snapper paccache pactree expac
+    reflector pacman-key checkupdates archlinux-java arch-chroot pacman-conf
+    pacdiff pacstrap genfstab vercmp
+    """.split()
+)
+LIMINE_RE = re.compile(r"limine-[A-Za-z0-9._-]+")
+
+
+def is_arch_tool(name):
+    return name in ARCH_TOOLS or bool(LIMINE_RE.fullmatch(name))
+
+
+ARCH_PATHS = (
+    "/etc/pacman.conf",
+    "/etc/pacman.d",
+    "/var/lib/pacman",
+    "/var/cache/pacman",
+    "/boot/limine",
+    "/boot/EFI/limine",
+    "/etc/limine",
+    "/etc/default/limine",
+    "/etc/mkinitcpio",
+    "/usr/share/libalpm",
+)
+PATH_TAIL = r"""(?:[^\s"'`;|&()<>{}\[\],]|\$\{[^{}\s]*\})*"""
+ARCH_PATH_RE = re.compile(
+    "(?:" + "|".join(re.escape(p) for p in ARCH_PATHS) + ")" + PATH_TAIL
+)
+
+_DEFAULT = r"(?:[^{}]*(?:\$\{[^{}]*\}[^{}]*)*)"
+
+
+def _var_src(name):
+    return (
+        r"\$\{" + name + r"(?![A-Za-z0-9_])" + _DEFAULT + r"\}"
+        r"|\$" + name + r"(?![A-Za-z0-9_])"
+    )
+
+
+OP_RE = re.compile(
+    r"(?P<base>"
+    + _var_src("OMARCHY_PATH")
+    + r"|(?:(?<![A-Za-z0-9_./~-])~|"
+    + _var_src("HOME")
+    + r")/\.local/share/omarchy(?![A-Za-z0-9_.-])"
+    + r"|(?:"
+    + _var_src("XDG_DATA_HOME")
+    + r")/omarchy(?![A-Za-z0-9_.-])"
+    + r"|/usr/share/omarchy(?![A-Za-z0-9_.-])"
+    + r")(?P<sub>/"
+    + PATH_TAIL
+    + r")?"
+)
+CODE_OP_RE = re.compile(r"""["']OMARCHY_PATH["']|\bomarchy_path\b|\bomarchyPath\b""")
+CONCAT_RE = re.compile(r"""(?:\.\.|\+)\s*["'](/[^"'\n]*)["']""")
+
+HOME_RULES = (
+    (re.compile(_var_src("XDG_CONFIG_HOME")), "~/.config", False),
+    (re.compile(_var_src("XDG_DATA_HOME")), "~/.local/share", False),
+    (re.compile(_var_src("XDG_STATE_HOME")), "~/.local/state", False),
+    (re.compile(_var_src("XDG_CACHE_HOME")), "~/.cache", False),
+    (re.compile(_var_src("HOME") + r"|~(?=/|$)"), "~", False),
+    (
+        re.compile(
+            r"/home/\$\{?(?:USER|SUDO_USER|LOGNAME|USERNAME|OMARCHY_USER|user|username)"
+            r"\}?(?![A-Za-z0-9_])"
+        ),
+        "~",
+        True,
+    ),
+)
+HOME_VARS = frozenset(
+    ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME")
+)
+NAMESPACED = (
+    "~/.config/omarchy",
+    "~/.local/share/omarchy",
+    "~/.local/state/omarchy",
+    "~/.cache/omarchy",
+)
+# Shared_File examples from the Glossary of requirements.md.
+SHARED_FILES = (
+    "~/.bashrc",
+    "~/.zshrc",
+    "~/.profile",
+    "~/.gitconfig",
+    "~/.config/gtk-3.0/settings.ini",
+    "~/.config/gtk-4.0/settings.ini",
+    "~/.config/mimeapps.list",
+)
+
+# --- Command tables ------------------------------------------------------------
+
+PRIV_OPTS = {
+    "sudo": frozenset(
+        "-u -g -C -D -p -r -t -T -U --user --group --close-from --chdir --prompt "
+        "--role --type --command-timeout --other-user --host".split()
+    ),
+    "pkexec": frozenset(("--user", "-u")),
+    "doas": frozenset(("-u", "-C")),
+    "run0": frozenset(
+        "-u --user -g --group -D --chdir --setenv --property --description "
+        "--slice --unit --machine --nice --background".split()
+    ),
+}
+UWSM_APP_OPTS = frozenset(("-s", "-t", "-a", "-u", "-d", "-p"))
+WRAPPERS = {
+    "exec": frozenset(("-a",)),
+    "builtin": frozenset(),
+    "nohup": frozenset(),
+    "setsid": frozenset(),
+    "time": frozenset(),
+    "ionice": frozenset(("-c", "-n", "--class", "--classdata")),
+    "stdbuf": frozenset(("-i", "-o", "-e")),
+    "unbuffer": frozenset(),
+    "systemd-run": frozenset(
+        "-u --unit -p --property -E --setenv -M --machine --slice --description "
+        "--uid --gid --nice --working-directory --on-active --on-boot "
+        "--on-startup --on-unit-active --on-unit-inactive --on-calendar "
+        "--timer-property --path-property --socket-property -H --host".split()
+    ),
+    "systemd-cat": frozenset(
+        ("-t", "--identifier", "-p", "--priority", "--stderr-priority")
+    ),
+    "systemd-inhibit": frozenset(("--what", "--who", "--why", "--mode")),
+    "runuser": frozenset(("-u", "--user", "-g", "--group", "-s", "--shell")),
+    "xdg-terminal-exec": frozenset(),
+}
+TIMEOUT_OPTS = frozenset(("-s", "--signal", "-k", "--kill-after"))
+XARGS_OPTS = frozenset(
+    "-I -n -P -d -L -a -E -s --max-args --max-procs --delimiter --arg-file "
+    "--replace --max-lines".split()
+)
+FLOCK_OPTS = frozenset(("-w", "--timeout", "-E", "--conflict-exit-code"))
+SHELLS = frozenset(("sh", "bash", "dash", "zsh", "ksh"))
+TERMINALS = frozenset(("alacritty", "ghostty", "kitty", "foot", "xterm", "wezterm"))
+SESSION_CMDS = frozenset(("Hyprland", "hyprland", "start-hyprland"))
+SESSION_TOOLS = frozenset(("uwsm", "uwsm-app")) | SESSION_CMDS
+SYSTEMCTL_OPTS = frozenset(
+    "-t --type -p --property -M --machine -H --host -n --lines -o --output "
+    "-s --signal --state --kill-whom --root --what --job-mode".split()
+)
+USER_UNIT_VERBS = frozenset(
+    "enable disable reenable start stop restart try-restart reload "
+    "reload-or-restart try-reload-or-restart mask unmask link preset "
+    "add-wants add-requires revert edit".split()
+)
+ENV_VERBS = frozenset(("import-environment", "set-environment", "unset-environment"))
+# Commands whose arguments are text, not commands or tool names.
+QUIET = frozenset(
+    """
+    echo printf print notify-send omarchy-notification-send gum logger read
+    omarchy-i18n grep egrep fgrep rg sed awk gawk jq cut tr sort uniq wc head
+    tail cat tac column fold cmp diff basename dirname realpath readlink test
+    [ [[ ]] local export declare typeset readonly unset shift return exit true
+    false : source . die abort fail log info warn warning error msg step
+    sleep date stat printenv
+    """.split()
+)
+KEYWORDS_LEAD = frozenset(
+    "then else elif do if while until ! { } time fi done esac".split()
+)
+NO_COMMAND = frozenset(("for", "select", "case", "function", "in", "coproc"))
+DECLARE = frozenset(("local", "export", "declare", "typeset", "readonly"))
+
+COPY_OPTS = {
+    "cp": frozenset(("-t", "--target-directory", "-S", "--suffix")),
+    "mv": frozenset(("-t", "--target-directory", "-S", "--suffix")),
+    "ln": frozenset(("-t", "--target-directory", "-S", "--suffix")),
+    "install": frozenset(
+        "-m --mode -o --owner -g --group -t --target-directory -S --suffix".split()
+    ),
+    "rsync": frozenset(
+        "-e --rsh --exclude --include --filter -f --chmod --chown".split()
+    ),
+}
+PLAIN_WRITE_OPTS = {
+    "mkdir": frozenset(("-m", "--mode")),
+    "touch": frozenset(("-d", "--date", "-r", "--reference", "-t")),
+    "rm": frozenset(),
+    "rmdir": frozenset(),
+    "truncate": frozenset(("-s", "--size", "-r", "--reference")),
+    "shred": frozenset(("-n", "--iterations", "-s", "--size")),
+    "unlink": frozenset(),
+    "update-desktop-database": frozenset(),
+    "gtk-update-icon-cache": frozenset(),
+}
+SED_OPTS = frozenset(("-e", "--expression", "-f", "--file", "-l", "--line-length"))
+WRITE_REDIRS = frozenset((">", ">>", ">|", "&>", "&>>", "<>", ">&"))
+
+ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=")
+ARRAY_OPEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+ARRAY_EXP_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\}")
+VAR_WORD_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
+VAR_START_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])|\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+DIRNAME_RE = re.compile(r"\$\(\s*dirname\s+(?:--\s+)?(.+?)\s*\)")
+DOLLAR_NAME_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])")
+REDIR_RE = re.compile(r"(\d*|&)(>>|>&|>\||<<<|<<-|<<|<&|<>|>|<)")
+REDIR_DIGIT_RE = re.compile(r"\d+[<>]")
+WORD_BREAK = frozenset(" \t\n;&|()<>")
+LUA_LONG_RE = re.compile(r"\[(=*)\[")
+
+# --- Shell lexer ---------------------------------------------------------------
+
+
+class Word:
+    __slots__ = ("raw", "value", "literal", "quoted", "line")
+
+    def __init__(self, raw, value, literal, quoted, line):
+        self.raw = raw
+        self.value = value
+        self.literal = literal
+        self.quoted = quoted
+        self.line = line
+
+
+class Cmd:
+    __slots__ = ("line", "words", "redirs", "uncertain")
+
+    def __init__(self, line, words, redirs, uncertain=False):
+        self.line = line
+        self.words = words
+        self.redirs = redirs
+        self.uncertain = uncertain
+
+
+def first_word(words):
+    for w in words:
+        if w.quoted or w.value not in KEYWORDS_LEAD:
+            return w.value
+    return None
+
+
+class _State:
+    __slots__ = ("words", "redirs", "line", "dbracket")
+
+    def __init__(self):
+        self.words = []
+        self.redirs = []
+        self.line = None
+        self.dbracket = False
+
+
+class ShellLexer:
+    """Splits shell text into simple commands.
+
+    Comments and here-doc bodies are skipped and recorded in `blanks`.
+    Command substitutions, backticks and process substitutions become
+    commands of their own.
+    """
+
+    def __init__(self, text, first_line=1):
+        self.t = text
+        self.n = len(text)
+        self.first_line = first_line
+        self.line_starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+        self.cmds = []
+        self.blanks = []
+        self.pending = []
+        self.case_stack = []
+        self.pos = 0
+
+    def line_of(self, pos):
+        return self.first_line + bisect.bisect_right(self.line_starts, pos) - 1
+
+    def run(self):
+        while self.pos < self.n:
+            self.parse_list(None)
+        return self.cmds
+
+    def cleaned(self):
+        chars = list(self.t)
+        for start, end in self.blanks:
+            for i in range(start, min(end, self.n)):
+                if chars[i] != "\n":
+                    chars[i] = " "
+        return "".join(chars)
+
+    # -- helpers --
+
+    def skip_comment(self):
+        end = self.t.find("\n", self.pos)
+        if end < 0:
+            end = self.n
+        self.blanks.append((self.pos, end))
+        self.pos = end
+
+    def skip_spaces(self):
+        t = self.t
+        while self.pos < self.n:
+            if t[self.pos] in " \t\r":
+                self.pos += 1
+            elif t.startswith("\\\n", self.pos):
+                self.pos += 2
+            else:
+                break
+
+    def skip_blank(self):
+        t = self.t
+        while self.pos < self.n:
+            c = t[self.pos]
+            if c in " \t\r":
+                self.pos += 1
+            elif t.startswith("\\\n", self.pos):
+                self.pos += 2
+            elif c == "\n":
+                self.pos += 1
+                self.read_heredocs()
+            elif c == "#":
+                self.skip_comment()
+            else:
+                break
+
+    def at_word(self, word):
+        end = self.pos + len(word)
+        return self.t.startswith(word, self.pos) and (
+            end >= self.n or self.t[end] in WORD_BREAK
+        )
+
+    def read_heredocs(self):
+        t = self.t
+        while self.pending:
+            delim, strip = self.pending.pop(0)
+            start = self.pos
+            while self.pos < self.n:
+                end = t.find("\n", self.pos)
+                if end < 0:
+                    end = self.n
+                text = t[self.pos:end]
+                self.pos = min(end + 1, self.n)
+                if (text.lstrip("\t") if strip else text).rstrip("\r") == delim:
+                    break
+            self.blanks.append((start, self.pos))
+
+    def consume_pattern(self):
+        t = self.t
+        if self.pos < self.n and t[self.pos] == "(":
+            self.pos += 1
+        while self.pos < self.n:
+            c = t[self.pos]
+            if c == "\\":
+                self.pos += 2
+            elif c in "'\"":
+                end = t.find(c, self.pos + 1)
+                self.pos = self.n if end < 0 else end + 1
+            elif c == ")":
+                self.pos += 1
+                return True
+            elif c == "\n":
+                return False
+            else:
+                self.pos += 1
+        return False
+
+    def skip_arith(self, p):
+        depth = 2
+        t = self.t
+        while p < self.n:
+            if t[p] == "(":
+                depth += 1
+            elif t[p] == ")":
+                depth -= 1
+                if depth == 0:
+                    return p + 1
+            p += 1
+        return self.n
+
+    def match_brace(self, p):
+        depth = 1
+        t = self.t
+        while p < self.n:
+            c = t[p]
+            if c == "\\":
+                p += 2
+                continue
+            if c == '"':
+                p += 1
+                while p < self.n and t[p] != '"':
+                    p += 2 if t[p] == "\\" else 1
+                p += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return p + 1
+            p += 1
+        return self.n
+
+    def match_paren(self, p):
+        depth = 0
+        t = self.t
+        while p < self.n:
+            c = t[p]
+            if c == "\\":
+                p += 2
+                continue
+            if c in "'\"":
+                end = t.find(c, p + 1)
+                p = self.n if end < 0 else end + 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return p
+            p += 1
+        return self.n
+
+    def sublex(self, text, offset, uncertain):
+        sub = ShellLexer(text, self.line_of(offset))
+        sub.run()
+        for c in sub.cmds:
+            if uncertain:
+                c.uncertain = True
+            self.cmds.append(c)
+
+    # -- words --
+
+    def read_dollar(self):
+        t = self.t
+        s = self.pos
+        if t.startswith("$((", s):
+            self.pos = self.skip_arith(s + 3)
+            return t[s:self.pos], False
+        if t.startswith("$(", s):
+            self.pos = s + 2
+            self.parse_list(")")
+            return t[s:self.pos], False
+        if t.startswith("${", s):
+            self.pos = self.match_brace(s + 2)
+            return t[s:self.pos], False
+        m = DOLLAR_NAME_RE.match(t, s)
+        if m:
+            self.pos = m.end()
+            return m.group(0), False
+        self.pos = s + 1
+        return "$", True
+
+    def read_backtick(self):
+        t = self.t
+        s = self.pos
+        j = s + 1
+        while j < self.n and t[j] != "`":
+            j += 2 if t[j] == "\\" else 1
+        inner = re.sub(r"\\([`$\\])", r"\1", t[s + 1:j])
+        self.sublex(inner, s + 1, False)
+        self.pos = min(j + 1, self.n)
+        return t[s:self.pos]
+
+    def read_word(self):
+        t = self.t
+        start = self.pos
+        val = []
+        literal = True
+        quoted = False
+        while self.pos < self.n:
+            c = t[self.pos]
+            if c in WORD_BREAK:
+                raw = t[start:self.pos]
+                if c == "(" and (
+                    ARRAY_OPEN_RE.fullmatch(raw) or (raw and raw[-1] in "@!?*+")
+                ):
+                    end = self.match_paren(self.pos)
+                    if ARRAY_OPEN_RE.fullmatch(raw):
+                        self.sublex(t[self.pos + 1:end], self.pos + 1, True)
+                    val.append(t[self.pos:end + 1])
+                    self.pos = min(end + 1, self.n)
+                    literal = False
+                    continue
+                break
+            if c == "\\":
+                if t.startswith("\\\n", self.pos):
+                    self.pos += 2
+                    continue
+                if self.pos + 1 < self.n:
+                    val.append(t[self.pos + 1])
+                    quoted = True
+                self.pos += 2
+                continue
+            if c == "'":
+                end = t.find("'", self.pos + 1)
+                if end < 0:
+                    end = self.n
+                val.append(t[self.pos + 1:end])
+                self.pos = end + 1
+                quoted = True
+                continue
+            if c == '"':
+                self.pos += 1
+                quoted = True
+                while self.pos < self.n and t[self.pos] != '"':
+                    d = t[self.pos]
+                    if d == "\\" and self.pos + 1 < self.n:
+                        nx = t[self.pos + 1]
+                        if nx == "\n":
+                            self.pos += 2
+                            continue
+                        if nx in '$`"\\':
+                            val.append(nx)
+                            self.pos += 2
+                            continue
+                        val.append(d)
+                        self.pos += 1
+                        continue
+                    if d == "$":
+                        s, lit = self.read_dollar()
+                        val.append(s)
+                        literal = literal and lit
+                        continue
+                    if d == "`":
+                        val.append(self.read_backtick())
+                        literal = False
+                        continue
+                    val.append(d)
+                    self.pos += 1
+                self.pos += 1
+                continue
+            if c == "$":
+                if t.startswith("$'", self.pos):
+                    j = self.pos + 2
+                    while j < self.n and t[j] != "'":
+                        j += 2 if t[j] == "\\" else 1
+                    val.append(t[self.pos + 2:j])
+                    self.pos = j + 1
+                    quoted = True
+                    continue
+                if t.startswith('$"', self.pos):
+                    self.pos += 1
+                    continue
+                s, lit = self.read_dollar()
+                val.append(s)
+                literal = literal and lit
+                continue
+            if c == "`":
+                val.append(self.read_backtick())
+                literal = False
+                continue
+            val.append(c)
+            self.pos += 1
+        end = min(self.pos, self.n)
+        return Word(t[start:end], "".join(val), literal, quoted, self.line_of(start))
+
+    def read_redir(self, st):
+        t = self.t
+        start = self.pos
+        m = REDIR_RE.match(t, self.pos)
+        fd, op = m.group(1), m.group(2)
+        if fd == "&":
+            op = "&" + op
+        self.pos = m.end()
+        self.skip_spaces()
+        if st.line is None:
+            st.line = self.line_of(start)
+        if self.pos >= self.n or t[self.pos] in WORD_BREAK:
+            st.redirs.append((op, None))
+            return
+        w = self.read_word()
+        if op in ("<<", "<<-"):
+            self.pending.append((w.value, op == "<<-"))
+        st.redirs.append((op, w))
+
+    def read_op(self):
+        for op in (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|"):
+            if self.t.startswith(op, self.pos):
+                self.pos += len(op)
+                return op
+        self.pos += 1
+        return self.t[self.pos - 1]
+
+    # -- command lists --
+
+    def parse_list(self, stop):
+        t = self.t
+        st = _State()
+        depth = 0
+
+        def flush():
+            if st.words or st.redirs:
+                self.cmds.append(Cmd(st.line, st.words, st.redirs))
+                if first_word(st.words) == "esac" and self.case_stack:
+                    self.case_stack.pop()
+            st.words = []
+            st.redirs = []
+            st.line = None
+            st.dbracket = False
+
+        while self.pos < self.n:
+            if (
+                not st.words
+                and not st.redirs
+                and self.case_stack
+                and self.case_stack[-1] == "pattern"
+            ):
+                self.skip_blank()
+                if self.pos >= self.n:
+                    break
+                if not self.at_word("esac"):
+                    if self.consume_pattern():
+                        self.case_stack[-1] = "clause"
+                    else:
+                        self.case_stack.pop()
+                    continue
+            c = t[self.pos]
+            if c in " \t\r":
+                self.pos += 1
+                continue
+            if t.startswith("\\\n", self.pos):
+                self.pos += 2
+                continue
+            if c == "\n":
+                flush()
+                self.pos += 1
+                self.read_heredocs()
+                continue
+            if c == "#":
+                self.skip_comment()
+                continue
+            if st.dbracket and c in "()<>|&":
+                self.pos += 1
+                continue
+            if c == ")":
+                self.pos += 1
+                if depth > 0:
+                    depth -= 1
+                    flush()
+                    continue
+                flush()
+                if stop == ")":
+                    return
+                continue
+            if c == "(":
+                if t.startswith("((", self.pos) and all(
+                    not w.quoted and w.value in KEYWORDS_LEAD for w in st.words
+                ):
+                    self.pos = self.skip_arith(self.pos + 2)
+                    continue
+                if t.startswith("()", self.pos) and len(st.words) == 1:
+                    st.words = []
+                    st.line = None
+                    self.pos += 2
+                    continue
+                depth += 1
+                flush()
+                self.pos += 1
+                continue
+            if t.startswith("<(", self.pos) or t.startswith(">(", self.pos):
+                start = self.pos
+                self.pos += 2
+                self.parse_list(")")
+                w = Word(t[start:self.pos], t[start:self.pos], False, False, self.line_of(start))
+                if st.line is None:
+                    st.line = w.line
+                st.words.append(w)
+                continue
+            if (
+                c in "<>"
+                or t.startswith("&>", self.pos)
+                or (c.isdigit() and REDIR_DIGIT_RE.match(t, self.pos))
+            ):
+                self.read_redir(st)
+                continue
+            if c in ";&|":
+                op = self.read_op()
+                flush()
+                if (
+                    op in (";;", ";&", ";;&")
+                    and self.case_stack
+                    and self.case_stack[-1] == "clause"
+                ):
+                    self.case_stack[-1] = "pattern"
+                continue
+            w = self.read_word()
+            if st.line is None:
+                st.line = w.line
+            st.words.append(w)
+            if not w.quoted and w.value == "[[":
+                st.dbracket = True
+            elif st.dbracket and not w.quoted and w.value == "]]":
+                st.dbracket = False
+            elif (
+                not w.quoted
+                and w.value == "in"
+                and len(st.words) >= 3
+                and first_word(st.words) == "case"
+            ):
+                flush()
+                self.case_stack.append("pattern")
+        flush()
+
+
+# --- Word helpers ------------------------------------------------------------
+
+
+def cmd_name(w):
+    v = w.value
+    return posixpath.basename(v) if "/" in v and not v.endswith("/") else v
+
+
+def synth(value, line):
+    return Word(value, value, "$" not in value, False, line)
+
+
+def skip_opts(words, i, value_opts):
+    n = len(words)
+    while i < n:
+        v = words[i].value
+        if v == "--":
+            return i + 1
+        if len(v) > 1 and v.startswith("-"):
+            if v.startswith("--") and "=" in v:
+                i += 1
+            elif v in value_opts:
+                i += 2
+            else:
+                i += 1
+            continue
+        break
+    return min(i, n)
+
+
+def positionals(args, value_opts):
+    out = []
+    i = 0
+    n = len(args)
+    ended = False
+    while i < n:
+        v = args[i].value
+        if not ended and v == "--":
+            ended = True
+            i += 1
+            continue
+        if not ended and len(v) > 1 and v.startswith("-"):
+            if v.startswith("--") and "=" in v:
+                i += 1
+            elif v in value_opts:
+                i += 2
+            else:
+                i += 1
+            continue
+        out.append(args[i])
+        i += 1
+    return out
+
+
+def option_values(args, names):
+    out = []
+    for i, a in enumerate(args):
+        v = a.value
+        if v in names and i + 1 < len(args):
+            out.append(args[i + 1])
+        for name in names:
+            if name.startswith("--") and v.startswith(name + "="):
+                out.append(synth(v[len(name) + 1:], a.line))
+    return out
+
+
+def short_flags(args):
+    """Letters of every single-dash option group, e.g. -xzf gives x, z, f."""
+    letters = set()
+    for a in args:
+        v = a.value
+        if len(v) > 1 and v.startswith("-") and not v.startswith("--"):
+            letters.update(v[1:])
+    return letters
+
+
+def words_detail(words, limit):
+    text = " ".join(w.raw for w in words[:limit])
+    if len(words) > limit:
+        text += " ..."
+    return text
+
+
+def strip_quotes(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        return s[1:-1]
+    return s
+
+
+def normalise_home(value):
+    """Returns (path with ~, uncertain) for a home-folder path, else None."""
+    for rx, repl, unc in HOME_RULES:
+        m = rx.match(value)
+        if not m:
+            continue
+        rest = value[m.end():]
+        if rest and not rest.startswith("/"):
+            return None
+        path = re.sub(r"/{2,}", "/", repl + rest)
+        while len(path) > 1 and path.endswith("/"):
+            path = path[:-1]
+        if path.endswith("/."):
+            path = path[:-2]
+        return path, unc
+    return None
+
+
+def is_namespaced(path):
+    return any(path == p or path.startswith(p + "/") for p in NAMESPACED)
+
+
+def build_varmap(cmds):
+    """Maps variable names to the first assigned value that names a home path
+    (or another variable)."""
+    found = {}
+    fallback = {}
+
+    def add(name, value):
+        if name in found:
+            return
+        if normalise_home(value) is not None or DIRNAME_RE.fullmatch(value):
+            found[name] = value
+        elif VAR_START_RE.match(value) and name not in fallback:
+            fallback[name] = value
+
+    for c in cmds:
+        ws = c.words
+        i = 0
+        while i < len(ws) and not ws[i].quoted and ws[i].value in KEYWORDS_LEAD:
+            i += 1
+        if i < len(ws) and ws[i].value == "for":
+            if i + 2 < len(ws) and ws[i + 2].value == "in":
+                for w in ws[i + 3:]:
+                    add(ws[i + 1].value, w.value)
+            continue
+        declared = i < len(ws) and ws[i].value in DECLARE
+        if declared:
+            i += 1
+        for w in ws[i:]:
+            m = ASSIGN_RE.match(w.raw)
+            if not m:
+                if declared:
+                    continue
+                break
+            add(m.group(1), w.value.split("=", 1)[1] if "=" in w.value else "")
+    for name, value in fallback.items():
+        found.setdefault(name, value)
+    return found
+
+
+# --- Command analysis ------------------------------------------------------------
+
+
+class Analyzer:
+    def __init__(self, inv, rel, varmap):
+        self.inv = inv
+        self.rel = rel
+        self.varmap = varmap
+
+    def emit(self, line, cls, detail, uncertain):
+        self.inv.add(self.rel, line, cls, detail, uncertain)
+
+    def snippet(self, text, line, uncertain, depth):
+        if depth > MAX_DEPTH or not text.strip():
+            return
+        for c in ShellLexer(text, line).run():
+            self.command(c, uncertain or c.uncertain, depth)
+
+    def command(self, cmd, uncertain, depth):
+        for op, w in cmd.redirs:
+            if w is not None and op in WRITE_REDIRS:
+                self.home_target(w, cmd.line, uncertain)
+        self.words(cmd.words, cmd.line, uncertain, depth)
+
+    # -- home-folder targets --
+
+    def home_path(self, value, depth=0):
+        v = value.strip()
+        unc = False
+        m = DIRNAME_RE.fullmatch(v)
+        if m and depth < 3:
+            path, _ = self.home_path(strip_quotes(m.group(1)), depth + 1)
+            if path is None:
+                return None, False
+            parent = posixpath.dirname(path)
+            return (parent if parent.startswith("~") else "~"), True
+        for _ in range(4):
+            m = VAR_START_RE.match(v)
+            if not m:
+                break
+            name = m.group(1) or m.group(2)
+            if name in HOME_VARS or name not in self.varmap:
+                break
+            v = self.varmap[name] + v[m.end():]
+            unc = True
+            m2 = DIRNAME_RE.fullmatch(v)
+            if m2 and depth < 3:
+                path, _ = self.home_path(v, depth + 1)
+                return path, True
+        res = normalise_home(v)
+        if res is None:
+            return None, False
+        return res[0], unc or res[1]
+
+    def home_target(self, w, line, uncertain):
+        path, unc = self.home_path(w.value)
+        if path is not None:
+            self.emit_home(line, path, uncertain or unc)
+
+    def emit_home(self, line, path, uncertain):
+        detail = path + (" [namespaced]" if is_namespaced(path) else "")
+        self.emit(line, "home-write", detail, uncertain)
+        if path == "~/.config/systemd" or path.startswith("~/.config/systemd/"):
+            self.emit(line, "user-unit", path, uncertain)
+
+    # -- simple commands --
+
+    def words(self, words, line, unc, depth):
+        n = len(words)
+        i = 0
+        while i < n and not words[i].quoted and words[i].value in KEYWORDS_LEAD:
+            i += 1
+        while i < n and ASSIGN_RE.match(words[i].raw):
+            i += 1
+        if i >= n or (not words[i].quoted and words[i].value in NO_COMMAND):
+            return
+        priv = None
+        priv_start = i
+        priv_unc = False
+        var_unc = False
+        while i < n:
+            w = words[i]
+            name = cmd_name(w)
+            if name in PRIV_OPTS:
+                if priv is None:
+                    priv, priv_start = name, i
+                i = skip_opts(words, i + 1, PRIV_OPTS[name])
+                continue
+            if name == "as_root":
+                if priv is None:
+                    priv, priv_start, priv_unc = name, i, True
+                i += 1
+                continue
+            if name == "uwsm-app":
+                self.emit(line, "session", words_detail(words[i:], 4), unc)
+                i = skip_opts(words, i + 1, UWSM_APP_OPTS)
+                continue
+            if name == "uwsm" and i + 1 < n and words[i + 1].value == "app":
+                self.emit(line, "session", words_detail(words[i:], 5), unc)
+                i = skip_opts(words, i + 2, UWSM_APP_OPTS)
+                continue
+            if name == "env":
+                i = self.skip_env(words, i + 1)
+                continue
+            if name == "timeout":
+                i = skip_opts(words, i + 1, TIMEOUT_OPTS)
+                i = min(i + 1, n)
+                continue
+            if name == "flock":
+                i = self.flock(words, i + 1, unc, depth)
+                continue
+            if name == "nice":
+                i += 1
+                while i < n and words[i].value.startswith("-"):
+                    i += 2 if words[i].value in ("-n", "--adjustment") else 1
+                continue
+            if name == "xargs":
+                i = skip_opts(words, i + 1, XARGS_OPTS)
+                continue
+            if name in WRAPPERS:
+                i = skip_opts(words, i + 1, WRAPPERS[name])
+                continue
+            if name == "command":
+                if any(x.value in ("-v", "-V") for x in words[i + 1:i + 3]):
+                    break
+                i = skip_opts(words, i + 1, ())
+                continue
+            if ARRAY_EXP_RE.fullmatch(w.value):
+                i += 1
+                continue
+            if VAR_WORD_RE.fullmatch(w.value) and i + 1 < n:
+                var_unc = True
+                i += 1
+                continue
+            break
+        rest = words[i:]
+        if priv is not None:
+            if rest:
+                detail = words_detail(rest, 8)
+            else:
+                detail = words_detail(words[priv_start:], 4)
+            self.emit(line, "privileged", detail, unc or priv_unc)
+        if rest:
+            self.call(rest, line, unc or var_unc, depth)
+
+    def skip_env(self, words, i):
+        n = len(words)
+        while i < n:
+            v = words[i].value
+            if v == "--":
+                return i + 1
+            if v in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+                i += 2
+                continue
+            if len(v) > 1 and v.startswith("-"):
+                i += 1
+                continue
+            if ASSIGN_RE.match(words[i].raw):
+                i += 1
+                continue
+            break
+        return min(i, n)
+
+    def flock(self, words, i, unc, depth):
+        n = len(words)
+        i = skip_opts(words, i, FLOCK_OPTS)
+        i = min(i + 1, n)
+        while i < n and words[i].value.startswith("-"):
+            if words[i].value in ("-c", "--command"):
+                if i + 1 < n:
+                    self.snippet(words[i + 1].value, words[i + 1].line, unc, depth + 1)
+                return n
+            i += 1
+        return i
+
+    def call(self, rest, line, unc, depth):
+        name = cmd_name(rest[0])
+        args = rest[1:]
+        if is_arch_tool(name):
+            self.emit(line, "arch-tool", words_detail(rest, 4), unc)
+        if name in SESSION_CMDS or name == "uwsm":
+            self.emit(line, "session", words_detail(rest, 4), unc)
+        if name == "hyprctl":
+            self.hyprctl(rest, line, unc, depth)
+        if name == "systemctl":
+            self.systemctl(args, line, unc)
+        if name == "dbus-update-activation-environment" and any(
+            a.value == "--systemd" for a in args
+        ):
+            self.emit(
+                line, "user-unit", f"environment ({words_detail(rest, 6)})", unc
+            )
+        if name in SHELLS:
+            script = self.shell_script(args)
+            if script is not None:
+                self.snippet(script.value, script.line, unc, depth + 1)
+        if name == "eval" and args:
+            self.snippet(" ".join(a.value for a in args), args[0].line, unc, depth + 1)
+        if name == "su":
+            for k, a in enumerate(args[:-1]):
+                if a.value in ("-c", "--command"):
+                    self.snippet(args[k + 1].value, args[k + 1].line, unc, depth + 1)
+        if name == "trap" and args:
+            self.snippet(args[0].value, args[0].line, unc, depth + 1)
+        if name == "alias":
+            for a in args:
+                if "=" in a.value:
+                    self.snippet(a.value.split("=", 1)[1], a.line, True, depth + 1)
+            return
+        if name in TERMINALS:
+            for k, a in enumerate(args):
+                if a.value == "-e":
+                    self.words(args[k + 1:], line, unc, depth + 1)
+                    break
+        self.writes(name, args, line, unc)
+        if name in QUIET or is_arch_tool(name):
+            return
+        for a in args:
+            v = a.value
+            if is_arch_tool(v):
+                self.emit(line, "arch-tool", f"{v} (argument of {name})", True)
+            if v in SESSION_TOOLS:
+                self.emit(line, "session", f"{v} (argument of {name})", True)
+            if a.quoted and depth < MAX_DEPTH and re.search(r"\s", v.strip()):
+                self.snippet(v, a.line, True, depth + 1)
+
+    def shell_script(self, args):
+        k = 0
+        while k < len(args):
+            v = args[k].value
+            if v in ("-o", "+o"):
+                k += 2
+                continue
+            if v.startswith("-") and not v.startswith("--") and "c" in v[1:]:
+                return args[k + 1] if k + 1 < len(args) else None
+            if v.startswith("-") or v.startswith("+"):
+                k += 1
+                continue
+            return None
+        return None
+
+    def hyprctl(self, rest, line, unc, depth):
+        vals = [w.value for w in rest]
+        for k in range(1, len(rest) - 1):
+            if vals[k] == "dispatch" and vals[k + 1] == "exec":
+                self.emit(line, "session", words_detail(rest, 6), unc)
+                cmdwords = rest[k + 2:]
+                if not cmdwords:
+                    return
+                if len(cmdwords) == 1:
+                    text, ln = cmdwords[0].value, cmdwords[0].line
+                else:
+                    text, ln = " ".join(w.raw for w in cmdwords), cmdwords[0].line
+                text = re.sub(r"^\s*\[[^\]]*\]\s*", "", text)
+                self.snippet(text, ln, unc, depth + 1)
+                return
+        for w in rest[1:]:
+            if re.search(r"dispatch\s+exec\b", w.value):
+                self.emit(line, "session", words_detail(rest, 4), unc)
+                for part in w.value.split(";"):
+                    m = re.match(r"\s*dispatch\s+exec\s+(.*)", part, re.S)
+                    if m:
+                        text = re.sub(r"^\s*\[[^\]]*\]\s*", "", m.group(1))
+                        self.snippet(text, w.line, unc, depth + 1)
+
+    def systemctl(self, args, line, unc):
+        if not any(a.value == "--user" for a in args):
+            return
+        pos = positionals(args, SYSTEMCTL_OPTS)
+        if not pos:
+            return
+        verb = pos[0].value
+        if verb in USER_UNIT_VERBS:
+            for u in pos[1:]:
+                self.emit(line, "user-unit", f"{u.value} ({verb})", unc or not u.literal)
+        elif verb in ENV_VERBS:
+            names = " ".join(w.raw for w in pos)
+            self.emit(line, "user-unit", f"environment ({names})", unc)
+
+    def writes(self, name, args, line, unc):
+        targets = []
+        implied = []
+        if name == "tee":
+            targets = positionals(args, ())
+        elif name in COPY_OPTS:
+            tdir = option_values(args, ("-t", "--target-directory"))
+            pos = positionals(args, COPY_OPTS[name])
+            if tdir:
+                targets = tdir
+            elif name == "install" and (
+                "d" in short_flags(args) or any(a.value == "--directory" for a in args)
+            ):
+                targets = pos
+            elif len(pos) >= 2:
+                targets = [pos[-1]]
+        elif name in PLAIN_WRITE_OPTS:
+            targets = positionals(args, PLAIN_WRITE_OPTS[name])
+        elif name in ("chmod", "chown", "chgrp"):
+            pos = positionals(args, ())
+            if any(a.value.startswith("--reference") for a in args):
+                targets = pos
+            elif pos and (
+                name != "chmod" or re.fullmatch(r"[0-7]+|[ugoa]*[-+=][rwxXst]*(,.*)?", pos[0].value)
+            ):
+                targets = pos[1:]
+            else:
+                targets = pos
+        elif name == "sed":
+            in_place = any(
+                a.value.startswith("--in-place")
+                or (
+                    a.value.startswith("-")
+                    and not a.value.startswith("--")
+                    and "i" in a.value[1:]
+                )
+                for a in args
+            )
+            if in_place:
+                pos = positionals(args, SED_OPTS)
+                has_script = any(
+                    a.value in ("-e", "--expression", "-f", "--file")
+                    or a.value.startswith(("--expression=", "--file="))
+                    for a in args
+                )
+                targets = pos if has_script else pos[1:]
+        elif name == "tar":
+            targets = self.tar_targets(args)
+        elif name == "unzip":
+            targets = option_values(args, ("-d",))
+        elif name == "curl":
+            targets = option_values(args, ("-o", "--output", "--output-dir"))
+        elif name == "wget":
+            targets = option_values(
+                args, ("-O", "--output-document", "-P", "--directory-prefix")
+            )
+        elif name == "git":
+            pos = positionals(args, ("-C", "-c", "--depth", "-b", "--branch"))
+            if pos and pos[0].value == "clone" and len(pos) >= 3:
+                targets = [pos[2]]
+            if pos and pos[0].value == "config" and any(
+                a.value == "--global" for a in args
+            ):
+                implied.append("~/.gitconfig")
+        elif name == "dd":
+            targets = [synth(a.value[3:], a.line) for a in args if a.value.startswith("of=")]
+        elif name == "find":
+            if any(
+                a.value in ("-delete", "-exec", "-execdir", "-ok", "-fprint")
+                for a in args
+            ):
+                for a in args:
+                    if a.value.startswith(("-", "(", "!")):
+                        break
+                    path, _ = self.home_path(a.value)
+                    if path is not None:
+                        self.emit_home(line, path, True)
+        elif name in ("gsettings", "dconf"):
+            pos = positionals(args, ("--schemadir",))
+            if pos and pos[0].value in (
+                "set",
+                "reset",
+                "reset-recursively",
+                "write",
+                "load",
+            ):
+                implied.append("~/.config/dconf/user")
+        elif name == "xdg-mime":
+            pos = positionals(args, ())
+            if pos and pos[0].value == "default":
+                implied.append("~/.config/mimeapps.list")
+        elif name == "xdg-settings":
+            pos = positionals(args, ())
+            if pos and pos[0].value == "set":
+                implied.append("~/.config/mimeapps.list")
+        elif name == "xdg-user-dirs-update":
+            implied.append("~/.config/user-dirs.dirs")
+        for w in targets:
+            self.home_target(w, line, unc)
+        for path in implied:
+            self.emit_home(line, path, True)
+
+    def tar_targets(self, args):
+        extract = create = False
+        out = []
+        k = 0
+        while k < len(args):
+            v = args[k].value
+            if v in ("--extract", "--get"):
+                extract = True
+            elif v == "--create":
+                create = True
+            elif v.startswith("--directory="):
+                out.append(("C", synth(v.split("=", 1)[1], args[k].line)))
+            elif v.startswith("--file="):
+                out.append(("f", synth(v.split("=", 1)[1], args[k].line)))
+            elif v in ("-C", "--directory", "-f", "--file") and k + 1 < len(args):
+                out.append(("C" if v in ("-C", "--directory") else "f", args[k + 1]))
+                k += 1
+            elif (v.startswith("-") and not v.startswith("--")) or (
+                k == 0 and re.fullmatch(r"[A-Za-z]+", v)
+            ):
+                letters = v.lstrip("-")
+                extract = extract or "x" in letters
+                create = create or any(ch in letters for ch in "cru")
+                if letters.endswith(("f", "C")) and k + 1 < len(args):
+                    out.append((letters[-1], args[k + 1]))
+                    k += 1
+            k += 1
+        targets = []
+        if extract:
+            targets += [w for kind, w in out if kind == "C"]
+        if create:
+            targets += [w for kind, w in out if kind == "f"]
+        return targets
+
+
+# --- Non-shell files ----------------------------------------------------------------
+
+
+def scan_code(text, style):
+    """Blanks comments and collects string literals.
+
+    style: "lua", "js" (also JSON with comments) or "py". Returns the text
+    with comments replaced by spaces and a list of (line, value).
+    """
+    out = list(text)
+    strings = []
+    n = len(text)
+    i = 0
+    line = 1
+    quotes = {"lua": "\"'", "js": "\"'`", "py": "\"'"}[style]
+    line_comment = {"lua": "--", "js": "//", "py": "#"}[style]
+
+    def blank(a, b):
+        for k in range(a, min(b, n)):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1
+            i += 1
+            continue
+        if style == "lua" and text.startswith("--", i):
+            m = LUA_LONG_RE.match(text, i + 2)
+            if m:
+                close = "]" + m.group(1) + "]"
+                j = text.find(close, m.end())
+                j = n if j < 0 else j + len(close)
+            else:
+                j = text.find("\n", i)
+                j = n if j < 0 else j
+            line += text.count("\n", i, j)
+            blank(i, j)
+            i = j
+            continue
+        if style == "lua" and c == "[":
+            m = LUA_LONG_RE.match(text, i)
+            if m:
+                close = "]" + m.group(1) + "]"
+                j = text.find(close, m.end())
+                end = n if j < 0 else j
+                strings.append((line, text[m.end():end]))
+                stop = min(n, end + len(close))
+                line += text.count("\n", i, stop)
+                i = stop
+                continue
+        if style == "js" and text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            line += text.count("\n", i, j)
+            blank(i, j)
+            i = j
+            continue
+        if style != "lua" and text.startswith(line_comment, i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j)
+            i = j
+            continue
+        if c in quotes:
+            j = i + 1
+            buf = []
+            start_line = line
+            while j < n and text[j] != c:
+                d = text[j]
+                if d == "\\" and j + 1 < n:
+                    nx = text[j + 1]
+                    buf.append({"n": "\n", "t": "\t"}.get(nx, nx))
+                    if nx == "\n":
+                        line += 1
+                    j += 2
+                    continue
+                if d == "\n":
+                    if c != "`":
+                        break
+                    line += 1
+                buf.append(d)
+                j += 1
+            strings.append((start_line, "".join(buf)))
+            i = j + 1 if j < n and text[j] == c else j
+            continue
+        i += 1
+    return "".join(out), strings
+
+
+SHEBANG_SHELLS = frozenset(("sh", "bash", "dash", "zsh", "ksh", "mksh"))
+SHELL_NAMES = frozenset(("bashrc", "bash_profile", "profile", "zshrc", "zprofile"))
+HYPR_EXEC_RE = re.compile(
+    r"^\s*(?:exec(?:-once|r|r-once|-shutdown)?\s*=|bind[a-z]*\s*=.*,\s*exec\s*,)",
+    re.M,
+)
+UNIT_EXEC_RE = re.compile(r"^\s*Exec[A-Za-z]*=", re.M)
+DESKTOP_EXEC_RE = re.compile(r"^\s*(?:Exec|TryExec)=", re.M)
+JSON_KEYS = r"action|when|checked|disabled|exec|command|cmd|run|on-click[\w-]*"
+JSON_CMD_RE = re.compile(r'"(?:' + JSON_KEYS + r')"\s*:\s*"((?:[^"\\]|\\.)*)"')
+JSON_ARGV_RE = re.compile(r'"(?:' + JSON_KEYS + r')"\s*:\s*\[([^\]]*)\]')
+KV_CMD_RE = re.compile(
+    r"""^\s*["']?(?:command|cmd|exec|exec-once|run|shell|on-click[\w-]*)["']?\s*[:=]\s*(.+?)\s*,?\s*$""",
+    re.M,
+)
+LUA_CALL_RE = re.compile(
+    r"\b(?:exec_cmd|exec_on_start|launch\w*|bind\w*|rebind|shell_succeeds|popen|execute|notify)\s*\("
+)
+JS_CALL_RE = re.compile(
+    r"\b(?:command|exec\w*|Process|startDetached|execDetached|spawn\w*|popen|system|"
+    r"run|call|check_output|check_call)\b"
+)
+ARGV_LINE_RE = re.compile(r"""\[\s*["'`]""")
+
+
+def shebang_interp(first):
+    parts = first[2:].strip().split()
+    if not parts:
+        return ""
+    name = posixpath.basename(parts[0])
+    if name == "env":
+        for p in parts[1:]:
+            if not p.startswith("-") and "=" not in p:
+                return posixpath.basename(p)
+        return ""
+    return name
+
+
+def file_kind(rel, text):
+    name = posixpath.basename(rel)
+    ext = posixpath.splitext(name)[1].lower()
+    first = text.split("\n", 1)[0]
+    if first.startswith("#!"):
+        interp = shebang_interp(first)
+        if interp in SHEBANG_SHELLS:
+            return "shell"
+        if interp:
+            return "generic"
+    if ext in (".sh", ".bash", ".zsh", ".ksh"):
+        return "shell"
+    parts = rel.split("/")[:-1]
+    if not ext and (
+        name in SHELL_NAMES
+        or ("bash" in parts and name != "inputrc")
+        or "uwsm" in parts
+    ):
+        return "shell"
+    if ext == ".lua":
+        return "lua"
+    if ext in (".qml", ".js", ".mjs"):
+        return "js"
+    if ext in (".json", ".jsonc"):
+        return "json" if JSON_CMD_RE.search(text) or JSON_ARGV_RE.search(text) else None
+    if ext == ".desktop":
+        return "desktop" if DESKTOP_EXEC_RE.search(text) else None
+    if ext in (".service", ".timer", ".socket", ".path", ".target", ".conf") and UNIT_EXEC_RE.search(text):
+        return "unit"
+    if ext == ".conf" and HYPR_EXEC_RE.search(text):
+        return "hypr"
+    if ext in (".toml", ".yaml", ".yml", ".ini") and KV_CMD_RE.search(text):
+        return "kv"
+    return None
+
+
+def clean_detail(detail):
+    d = " ".join(detail.split())
+    if len(d) > DETAIL_MAX:
+        d = d[:DETAIL_MAX].rstrip() + " ..."
+    return d or "-"
+
+
+class Inventory:
+    def __init__(self):
+        self.findings = set()
+        self.kinds = collections.Counter()
+
+    def add(self, rel, line, cls, detail, uncertain):
+        detail = clean_detail(detail)
+        if uncertain:
+            detail += " ?"
+        self.findings.add((rel, int(line), cls, detail))
+
+    def rows(self):
+        certain = {f for f in self.findings if not f[3].endswith(" ?")}
+        rows = [
+            f
+            for f in self.findings
+            if not (f[3].endswith(" ?") and (f[0], f[1], f[2], f[3][:-2]) in certain)
+        ]
+        return sorted(rows)
+
+    # -- walking --
+
+    def scan(self, root):
+        for d in SCAN_DIRS:
+            base = os.path.join(root, d)
+            if not os.path.isdir(base):
+                continue
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames.sort()
+                for f in sorted(filenames):
+                    path = os.path.join(dirpath, f)
+                    if os.path.islink(path) or not os.path.isfile(path):
+                        continue
+                    rel = os.path.relpath(path, root).replace(os.sep, "/")
+                    self.scan_file(rel, path)
+
+    def scan_file(self, rel, path):
+        with open(path, "rb") as f:
+            data = f.read()
+        if b"\0" in data[:8192]:
+            return
+        text = data.decode("utf-8", "surrogateescape")
+        kind = file_kind(rel, text)
+        if kind is None:
+            return
+        self.kinds[kind] += 1
+        getattr(self, "scan_" + kind)(rel, text)
+
+    # -- path references --
+
+    def scan_paths(self, rel, line, code):
+        for m in ARCH_PATH_RE.finditer(code):
+            self.add(rel, line, "arch-path", m.group(0).rstrip(".,:"), False)
+        for m in OP_RE.finditer(code):
+            base = m.group("base")
+            if "OMARCHY_PATH" in base:
+                base = "$OMARCHY_PATH"
+            elif base.startswith("/usr/share"):
+                base = "/usr/share/omarchy"
+            else:
+                base = "~/.local/share/omarchy"
+            sub = (m.group("sub") or "").rstrip(".,:")
+            self.add(rel, line, "omarchy-path", base + ("" if sub == "/" else sub), False)
+
+    def scan_code_refs(self, rel, line, code):
+        for m in CODE_OP_RE.finditer(code):
+            c = CONCAT_RE.search(code, m.end())
+            sub = c.group(1) if c else ""
+            self.add(rel, line, "omarchy-path", "$OMARCHY_PATH" + sub, False)
+
+    # -- file kinds --
+
+    def scan_shell(self, rel, text):
+        lx = ShellLexer(text)
+        cmds = lx.run()
+        for ln, code in enumerate(lx.cleaned().split("\n"), 1):
+            self.scan_paths(rel, ln, code)
+        an = Analyzer(self, rel, build_varmap(cmds))
+        for c in cmds:
+            an.command(c, c.uncertain, 0)
+
+    def _strings_by_line(self, strings):
+        by_line = collections.OrderedDict()
+        for ln, value in strings:
+            by_line.setdefault(ln, []).append(value)
+        return by_line
+
+    def scan_lua(self, rel, text):
+        cleaned, strings = scan_code(text, "lua")
+        lines = cleaned.split("\n")
+        for ln, code in enumerate(lines, 1):
+            self.scan_paths(rel, ln, code)
+            self.scan_code_refs(rel, ln, code)
+        an = Analyzer(self, rel, {})
+        for ln, values in self._strings_by_line(strings).items():
+            certain = bool(LUA_CALL_RE.search(lines[ln - 1]))
+            for v in values:
+                an.snippet(v, ln, not certain, 0)
+
+    def _scan_argv_code(self, rel, text, style):
+        cleaned, strings = scan_code(text, style)
+        lines = cleaned.split("\n")
+        for ln, code in enumerate(lines, 1):
+            self.scan_paths(rel, ln, code)
+            self.scan_code_refs(rel, ln, code)
+        an = Analyzer(self, rel, {})
+        for ln, values in self._strings_by_line(strings).items():
+            code = lines[ln - 1]
+            certain = bool(JS_CALL_RE.search(code))
+            if len(values) > 1 and ARGV_LINE_RE.search(code):
+                an.snippet(" ".join(shlex.quote(v) for v in values), ln, not certain, 0)
+            else:
+                for v in values:
+                    an.snippet(v, ln, not certain, 0)
+
+    def scan_js(self, rel, text):
+        self._scan_argv_code(rel, text, "js")
+
+    def scan_generic(self, rel, text):
+        self._scan_argv_code(rel, text, "py")
+
+    def scan_json(self, rel, text):
+        cleaned, _ = scan_code(text, "js")
+        an = Analyzer(self, rel, {})
+        for ln, code in enumerate(cleaned.split("\n"), 1):
+            self.scan_paths(rel, ln, code)
+            for m in JSON_CMD_RE.finditer(code):
+                try:
+                    value = json.loads('"' + m.group(1) + '"')
+                except ValueError:
+                    value = m.group(1)
+                an.snippet(value, ln, False, 0)
+            for m in JSON_ARGV_RE.finditer(code):
+                values = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+                an.snippet(" ".join(shlex.quote(v) for v in values), ln, False, 0)
+
+    def _hash_lines(self, text):
+        for ln, line in enumerate(text.split("\n"), 1):
+            if line.lstrip().startswith(("#", ";")):
+                continue
+            yield ln, line
+
+    def scan_hypr(self, rel, text):
+        an = Analyzer(self, rel, {})
+        for ln, line in self._hash_lines(text):
+            code = re.sub(r"\s#(?!#).*$", "", line)
+            self.scan_paths(rel, ln, code)
+            m = re.match(r"\s*exec(?:-once|r|r-once|-shutdown)?\s*=\s*(.*)$", code)
+            if m:
+                an.snippet(re.sub(r"^\s*\[[^\]]*\]\s*", "", m.group(1)), ln, False, 0)
+                continue
+            m = re.match(r"\s*bind[a-z]*\s*=\s*(.*)$", code)
+            if m:
+                parts = m.group(1).split(",")
+                for k, p in enumerate(parts):
+                    if p.strip() == "exec":
+                        an.snippet(",".join(parts[k + 1:]).strip(), ln, False, 0)
+                        break
+
+    def scan_desktop(self, rel, text):
+        an = Analyzer(self, rel, {})
+        for ln, line in self._hash_lines(text):
+            self.scan_paths(rel, ln, line)
+            m = re.match(r"\s*(?:Exec|TryExec)=(.*)$", line)
+            if m:
+                cmd = re.sub(r"%[fFuUdDnNickvm]", "", m.group(1)).replace("%%", "%")
+                an.snippet(cmd, ln, False, 0)
+
+    def scan_unit(self, rel, text):
+        an = Analyzer(self, rel, {})
+        for ln, line in self._hash_lines(text):
+            self.scan_paths(rel, ln, line)
+            m = re.match(r"\s*Exec[A-Za-z]*=(.*)$", line)
+            if m:
+                an.snippet(re.sub(r"^[-@:+!|]+", "", m.group(1).strip()), ln, False, 0)
+
+    def scan_kv(self, rel, text):
+        an = Analyzer(self, rel, {})
+        for ln, line in self._hash_lines(text):
+            self.scan_paths(rel, ln, line)
+            m = KV_CMD_RE.match(line)
+            if m:
+                an.snippet(strip_quotes(m.group(1)), ln, True, 0)
+
+
+# --- Summary ----------------------------------------------------------------------
+
+
+def md_code(s, table=False):
+    if table:
+        s = s.replace("|", "\\|")
+    if "`" in s:
+        return "`` " + s + " ``"
+    return "`" + s + "`"
+
+
+def base_detail(detail):
+    return detail[:-2] if detail.endswith(" ?") else detail
+
+
+def first_token(detail):
+    parts = base_detail(detail).split()
+    return strip_quotes(parts[0]) if parts else "-"
+
+
+def file_list(files, limit=3):
+    files = sorted(files)
+    shown = ", ".join(md_code(f) for f in files[:limit])
+    if len(files) > limit:
+        shown += f" and {len(files) - limit} more"
+    return shown
+
+
+def build_summary(pin, rows, kinds):
+    by_class = collections.defaultdict(list)
+    for row in rows:
+        by_class[row[2]].append(row)
+    out = [f"# Call_Inventory for `{pin}`", ""]
+    out.append(
+        f"Generated by `tools/inventory`. Every finding is a line in `{pin}.tsv`. "
+        "A detail that ends in ` ?` is uncertain and needs review."
+    )
+    out.append("")
+    scanned = sum(kinds.values())
+    kind_text = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items()))
+    out.append(f"Files scanned: {scanned} ({kind_text or 'none'}).")
+    out.append(f"Files with findings: {len({r[0] for r in rows})}.")
+    out.append("")
+
+    out += ["## Findings per class", ""]
+    out += ["| Class | Findings | Uncertain | Files |", "|---|---:|---:|---:|"]
+    for cls in CLASSES:
+        items = by_class.get(cls, [])
+        unc = sum(1 for r in items if r[3].endswith(" ?"))
+        out.append(f"| {cls} | {len(items)} | {unc} | {len({r[0] for r in items})} |")
+    out.append(
+        f"| total | {len(rows)} | {sum(1 for r in rows if r[3].endswith(' ?'))} "
+        f"| {len({r[0] for r in rows})} |"
+    )
+    out.append("")
+
+    out += ["## Files with arch-tool or arch-path findings", ""]
+    out.append("These files need an override or a shim.")
+    out.append("")
+    per_file = collections.defaultdict(lambda: {"arch-tool": [], "arch-path": []})
+    for cls in ("arch-tool", "arch-path"):
+        for r in by_class.get(cls, []):
+            per_file[r[0]][cls].append(r)
+    if per_file:
+        out += [
+            "| File | arch-tool | arch-path | Tools and paths |",
+            "|---|---:|---:|---|",
+        ]
+        for f in sorted(per_file):
+            tools = sorted({first_token(r[3]) for r in per_file[f]["arch-tool"]})
+            paths = sorted({base_detail(r[3]) for r in per_file[f]["arch-path"]})
+            names = ", ".join(md_code(x, True) for x in tools + paths)
+            out.append(
+                f"| {md_code(f, True)} | {len(per_file[f]['arch-tool'])} "
+                f"| {len(per_file[f]['arch-path'])} | {names} |"
+            )
+    else:
+        out.append("None found.")
+    out.append("")
+
+    def grouped_table(title, cls, key, header):
+        out.extend([f"## {title}", ""])
+        groups = collections.defaultdict(list)
+        for r in by_class.get(cls, []):
+            groups[key(r[3])].append(r)
+        if not groups:
+            out.extend(["None found.", ""])
+            return
+        out.extend([f"| {header} | Uses | Files |", "|---|---:|---|"])
+        for k in sorted(groups):
+            rs = groups[k]
+            out.append(
+                f"| {md_code(k, True)} | {len(rs)} | {file_list({r[0] for r in rs})} |"
+            )
+        out.append("")
+
+    grouped_table("Privileged commands", "privileged", first_token, "Command")
+
+    out += ["## Home-write targets", ""]
+    targets = collections.defaultdict(list)
+    for r in by_class.get("home-write", []):
+        targets[base_detail(r[3])].append(r)
+    if not targets:
+        out += ["None found.", ""]
+    else:
+        folders = collections.defaultdict(list)
+        for t in targets:
+            path = t.replace(" [namespaced]", "")
+            top = "~" if path == "~" else "~/" + path[2:].split("/", 1)[0]
+            folders[top].append(t)
+        for top in sorted(folders):
+            out += [f"### {md_code(top)}", ""]
+            for t in sorted(folders[top]):
+                rs = targets[t]
+                out.append(f"- {md_code(t)} ({len(rs)}): {file_list({r[0] for r in rs})}")
+            out.append("")
+        out += ["### Shared_File targets", ""]
+        shared = sorted(
+            t for t in targets if t.replace(" [namespaced]", "") in SHARED_FILES
+        )
+        if shared:
+            for t in shared:
+                out.append(f"- {md_code(t)}: {file_list({r[0] for r in targets[t]})}")
+        else:
+            out.append("None found.")
+        out.append("")
+
+    out += ["## User units", ""]
+    units = collections.defaultdict(list)
+    for r in by_class.get("user-unit", []):
+        m = re.fullmatch(r"(.*?) \((.*)\)", base_detail(r[3]))
+        unit, verb = (m.group(1), m.group(2)) if m else (base_detail(r[3]), "write")
+        units[unit].append((verb, r))
+    if units:
+        out += ["| Unit | Operations | Files |", "|---|---|---|"]
+        for u in sorted(units):
+            verbs = sorted({v for v, _ in units[u]})
+            ops = ", ".join(md_code(v, True) for v in verbs)
+            out.append(
+                f"| {md_code(u, True)} | {ops} | {file_list({r[0] for _, r in units[u]})} |"
+            )
+    else:
+        out.append("None found.")
+    out.append("")
+
+    grouped_table("Session tools", "session", first_token, "Tool")
+    session = sorted({base_detail(r[3]) for r in by_class.get("session", [])})
+    if session:
+        out += ["Distinct session commands:", ""]
+        out += [f"- {md_code(s)}" for s in session]
+        out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+# --- Main -------------------------------------------------------------------------
+
+
+def write_atomic(path, text):
+    folder = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(prefix=".inventory-", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace", newline="\n") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="inventory",
+        description="Write the Call_Inventory of an Upstream tree at one pin.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        help="output folder (default: compat/inventory in this repository)",
+    )
+    parser.add_argument("upstream_dir", help="unpacked Upstream tree")
+    parser.add_argument("pin", help="Upstream commit or tag; names the output files")
+    args = parser.parse_args(argv)
+
+    if not PIN_RE.match(args.pin):
+        print(f"inventory: invalid pin '{args.pin}'", file=sys.stderr)
+        return 2
+    if not os.path.isdir(args.upstream_dir):
+        print(f"inventory: not a folder: {args.upstream_dir}", file=sys.stderr)
+        return 2
+    if not any(os.path.isdir(os.path.join(args.upstream_dir, d)) for d in SCAN_DIRS):
+        print(
+            f"inventory: {args.upstream_dir} has none of: "
+            + ", ".join(d + "/" for d in SCAN_DIRS),
+            file=sys.stderr,
+        )
+        return 2
+
+    inv = Inventory()
+    try:
+        inv.scan(args.upstream_dir)
+    except OSError as e:
+        print(f"inventory: {e}", file=sys.stderr)
+        return 2
+    rows = inv.rows()
+
+    out_dir = args.out_dir or os.path.join(REPO, "compat", "inventory")
+    tsv = os.path.join(out_dir, args.pin + ".tsv")
+    summary = os.path.join(out_dir, args.pin + ".summary.md")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        write_atomic(tsv, "".join(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\n" for r in rows))
+        write_atomic(summary, build_summary(args.pin, rows, inv.kinds))
+    except OSError as e:
+        print(f"inventory: cannot write output: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"inventory: {len(rows)} findings in {len({r[0] for r in rows})} files; "
+        f"wrote {tsv} and {summary}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

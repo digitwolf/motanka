@@ -1,0 +1,4 @@
+Source of the motanka metapackage. It installs nothing itself and depends
+on motanka-core, motanka-stack, motanka-archive-keyring and one
+motanka-source-<suite> package. Built by packaging/build.sh through
+test/vm/build.

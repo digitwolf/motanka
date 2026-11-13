@@ -1,0 +1,4 @@
+{
+  // "x": {"action": "sudo pacman -Syu"}
+  "install.fixture": {"label": "Fixture", "action": "omarchy-pkg-add fixture && sudo pacman -S --needed fixture-extra"}
+}

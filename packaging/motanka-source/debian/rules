@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+# Generates one deb822 motanka.sources per suite from motanka.sources.in.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Repository URL written into every motanka.sources. The DEB_ prefix lets
+# sbuild's default environment filter pass an override into the build.
+DEB_MOTANKA_APT_URI ?= https://digitwolf.github.io/motanka/apt
+SUITES := noble noble-edge resolute resolute-edge
+BUILD := debian/build
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	rm -rf $(BUILD)
+	case '$(DEB_MOTANKA_APT_URI)' in \
+		*' '* | *'|'*) echo "invalid DEB_MOTANKA_APT_URI" >&2; exit 1 ;; \
+		https://?* | http://?*) ;; \
+		*) echo "DEB_MOTANKA_APT_URI must be an http or https URL" >&2; exit 1 ;; \
+	esac
+	set -e; for s in $(SUITES); do \
+		mkdir -p $(BUILD)/$$s; \
+		sed -e 's|@URI@|$(DEB_MOTANKA_APT_URI)|' -e "s|@SUITE@|$$s|g" \
+			motanka.sources.in >$(BUILD)/$$s/motanka.sources; \
+		if grep -q '@[A-Z]*@' $(BUILD)/$$s/motanka.sources; then \
+			echo "unreplaced placeholder in $(BUILD)/$$s/motanka.sources" >&2; exit 1; \
+		fi; \
+	done
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(BUILD)

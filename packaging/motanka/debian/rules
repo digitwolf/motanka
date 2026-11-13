@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+# The dependency on motanka-source names the stable source package of the
+# release this build is for (the changelog distribution, stamped by
+# packaging/build.sh), so apt does not pick another suite's provider of the
+# virtual package. An unstamped build falls back to the virtual package.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+DIST := $(shell dpkg-parsechangelog -SDistribution)
+ifneq (,$(filter noble resolute,$(DIST)))
+SOURCE_DEP := motanka-source-$(DIST) | motanka-source
+else
+SOURCE_DEP := motanka-source
+endif
+
+%:
+	dh $@
+
+override_dh_gencontrol:
+	dh_gencontrol -- '-Vmotanka:Source=$(SOURCE_DEP)'

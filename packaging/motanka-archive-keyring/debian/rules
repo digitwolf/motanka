@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+# Builds the binary keyring from the armored public key
+# keys/motanka-archive.asc (imported from packaging/keys/ by
+# packaging/build.sh) and checks that it holds exactly one public key and
+# no secret key.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+ARMORED := keys/motanka-archive.asc
+BUILD := debian/build
+GPG := gpg --homedir $(CURDIR)/$(BUILD)/gnupg --batch --quiet --no-tty
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	rm -rf $(BUILD)
+	install -d -m 0700 $(BUILD)/gnupg
+	test -f $(ARMORED) || { echo "$(ARMORED) is missing" >&2; exit 1; }
+	sed -n '/^-----BEGIN PGP PUBLIC KEY BLOCK-----$$/,/^-----END PGP PUBLIC KEY BLOCK-----$$/p' \
+		$(ARMORED) >$(BUILD)/key.asc
+	test -s $(BUILD)/key.asc || { echo "no public key block in $(ARMORED)" >&2; exit 1; }
+	$(GPG) --dearmor --output $(BUILD)/motanka-archive-keyring.gpg $(BUILD)/key.asc
+	$(GPG) --list-packets $(BUILD)/motanka-archive-keyring.gpg >$(BUILD)/packets.txt
+	test "$$(grep -c '^:public key packet:' $(BUILD)/packets.txt)" -eq 1 || \
+		{ echo "$(ARMORED) must hold exactly one public key" >&2; exit 1; }
+	! grep -q '^:secret' $(BUILD)/packets.txt || \
+		{ echo "$(ARMORED) contains secret key material" >&2; exit 1; }
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(BUILD)

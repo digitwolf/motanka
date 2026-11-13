@@ -1,0 +1,3 @@
+# Files under packaging/ that packaging/build.sh copies into this source
+# package, at the same relative path.
+keys/motanka-archive.asc

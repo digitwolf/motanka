@@ -1,0 +1,22 @@
+Source: motanka-archive-keyring
+Section: misc
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), gpg
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-archive-keyring
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends}
+Description: signing key and apt pin for the Motanka repository
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. This package
+ installs the public key that signs the Motanka apt repository, for use
+ with Signed-By, and an apt pin. Packages from the Motanka repository get
+ priority 500 when their name is motanka or starts with motanka-, and
+ priority -1 otherwise, so the repository cannot replace a package that
+ Motanka does not own.

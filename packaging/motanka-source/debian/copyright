@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: motanka
+Upstream-Contact: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Source: https://github.com/digitwolf/motanka
+
+Files: *
+Copyright: 2026 Ruslan Babych
+License: LicenseRef-motanka-no-license-yet
+ The Motanka repository does not have a license file yet. Until the
+ copyright holder publishes one, no rights are granted beyond those that
+ apply by law.

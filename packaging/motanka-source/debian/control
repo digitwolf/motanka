@@ -1,0 +1,82 @@
+Source: motanka-source
+Section: admin
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-source-noble
+Architecture: all
+Multi-Arch: foreign
+Depends: motanka-archive-keyring, ${misc:Depends}
+Provides: motanka-source
+Conflicts: motanka-source-noble-edge,
+           motanka-source-resolute,
+           motanka-source-resolute-edge,
+Replaces: motanka-source-noble-edge,
+          motanka-source-resolute,
+          motanka-source-resolute-edge,
+Description: Motanka apt source for Ubuntu 24.04 LTS, stable channel
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. This package
+ installs the apt source of the Motanka repository suite "noble" (stable
+ channel for Ubuntu 24.04 LTS), signed by the key in
+ motanka-archive-keyring. Only one motanka-source package can be
+ installed at a time.
+
+Package: motanka-source-noble-edge
+Architecture: all
+Multi-Arch: foreign
+Depends: motanka-archive-keyring, ${misc:Depends}
+Provides: motanka-source
+Conflicts: motanka-source-noble,
+           motanka-source-resolute,
+           motanka-source-resolute-edge,
+Replaces: motanka-source-noble,
+          motanka-source-resolute,
+          motanka-source-resolute-edge,
+Description: Motanka apt source for Ubuntu 24.04 LTS, edge channel
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. This package
+ installs the apt source of the Motanka repository suite "noble-edge"
+ (edge channel for Ubuntu 24.04 LTS), signed by the key in
+ motanka-archive-keyring. Only one motanka-source package can be
+ installed at a time.
+
+Package: motanka-source-resolute
+Architecture: all
+Multi-Arch: foreign
+Depends: motanka-archive-keyring, ${misc:Depends}
+Provides: motanka-source
+Conflicts: motanka-source-noble,
+           motanka-source-noble-edge,
+           motanka-source-resolute-edge,
+Replaces: motanka-source-noble,
+          motanka-source-noble-edge,
+          motanka-source-resolute-edge,
+Description: Motanka apt source for Ubuntu 26.04 LTS, stable channel
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. This package
+ installs the apt source of the Motanka repository suite "resolute"
+ (stable channel for Ubuntu 26.04 LTS), signed by the key in
+ motanka-archive-keyring. Only one motanka-source package can be
+ installed at a time.
+
+Package: motanka-source-resolute-edge
+Architecture: all
+Multi-Arch: foreign
+Depends: motanka-archive-keyring, ${misc:Depends}
+Provides: motanka-source
+Conflicts: motanka-source-noble,
+           motanka-source-noble-edge,
+           motanka-source-resolute,
+Replaces: motanka-source-noble,
+          motanka-source-noble-edge,
+          motanka-source-resolute,
+Description: Motanka apt source for Ubuntu 26.04 LTS, edge channel
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. This package
+ installs the apt source of the Motanka repository suite "resolute-edge"
+ (edge channel for Ubuntu 26.04 LTS), signed by the key in
+ motanka-archive-keyring. Only one motanka-source package can be
+ installed at a time.

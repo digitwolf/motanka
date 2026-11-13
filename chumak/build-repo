@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# Build a static, signed apt repository of Motanka packages.
+#
+# Usage: chumak/build-repo [--key <secret-key.asc>] [--allow-foreign]
+#                          <out-dir> <suite>=<deb-dir>...
+#
+#   <suite>          noble, noble-edge, resolute or resolute-edge; may be
+#                    given more than once to add several folders
+#   --key            armored secret signing key (default:
+#                    ~/.cache/motanka-vm/keys/motanka-test-archive.sec.asc)
+#   --allow-foreign  accept packages that are not Motanka_Packages; only
+#                    for tests of the apt pin. Without it, a package whose
+#                    name is not motanka or motanka-* is refused (3.6).
+#
+# Layout of <out-dir>, which must not exist or be empty:
+#   pool/<suite>/main/<initial>/<source>/<file>.deb
+#   dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
+#   dists/<suite>/main/binary-amd64/by-hash/<hash>/<digest>
+#   dists/<suite>/{Release,InRelease,Release.gpg}
+# Release carries Origin and Label "Motanka", Suite and Codename <suite>,
+# Architectures amd64, Components main, Acquire-By-Hash yes, and a
+# Valid-Until 14 days after its Date, which is set just before signing
+# (requirements 4.2, 4.7). Index checksums are SHA256 only.
+#
+# Runs inside a test VM (needs apt-ftparchive from apt-utils, dpkg-deb and
+# gpg). The key is imported into a temporary GNUPGHOME that is deleted at
+# exit. Exit codes: 0 success, 1 failure, 2 usage error.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+VALID_SECONDS=$((14 * 86400))
+SUITES_RE='^(noble|noble-edge|resolute|resolute-edge)$'
+usage="chumak/build-repo [--key <secret-key.asc>] [--allow-foreign] <out-dir> <suite>=<deb-dir>..."
+
+GNUPGHOME=""
+cleanup() {
+  if [[ -n $GNUPGHOME && -d $GNUPGHOME ]]; then
+    gpgconf --kill all >/dev/null 2>&1 || true
+    rm -rf -- "$GNUPGHOME"
+  fi
+}
+trap cleanup EXIT
+
+log() {
+  printf 'build-repo: %s\n' "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  exit 1
+}
+
+die_usage() {
+  log "$1"
+  printf 'usage: %s\n' "$usage" >&2
+  exit 2
+}
+
+key=$HOME/.cache/motanka-vm/keys/motanka-test-archive.sec.asc
+allow_foreign=false
+args=()
+while (($# > 0)); do
+  case $1 in
+    --key)
+      if (($# < 2)); then
+        die_usage "--key needs a value"
+      fi
+      key=$2
+      shift 2
+      ;;
+    --allow-foreign)
+      allow_foreign=true
+      shift
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$usage"
+      exit 0
+      ;;
+    -*) die_usage "unknown option '$1'" ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+if ((${#args[@]} < 2)); then
+  die_usage "need an output folder and at least one <suite>=<deb-dir>"
+fi
+out=${args[0]}
+specs=("${args[@]:1}")
+
+for tool in apt-ftparchive dpkg-deb gpg gzip xz sha256sum sha512sum; do
+  command -v "$tool" >/dev/null || die "$tool is missing (apt-ftparchive is in apt-utils)"
+done
+if [[ ! -s $key ]]; then
+  die "no signing key at $key; run chumak/gen-test-key on the host and copy the key into the VM"
+fi
+if [[ -e $out && -n $(ls -A "$out") ]]; then
+  die "$out exists and is not empty"
+fi
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+
+declare -A SEEN=()
+suites=()
+
+# add_deb <suite> <deb>
+add_deb() {
+  local suite=$1 deb=$2 pkg arch src initial dest
+  pkg=$(dpkg-deb --field "$deb" Package)
+  arch=$(dpkg-deb --field "$deb" Architecture)
+  src=$(dpkg-deb --field "$deb" Source)
+  src=${src%% *}
+  src=${src:-$pkg}
+  if [[ $pkg != motanka && $pkg != motanka-* ]] && ! $allow_foreign; then
+    die "$deb: package $pkg is not a Motanka_Package; the repository publishes only motanka and motanka-* (use --allow-foreign for tests)"
+  fi
+  case $arch in
+    all | amd64) ;;
+    *) die "$deb: architecture $arch is not amd64 or all" ;;
+  esac
+  if [[ ! $src =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+    die "$deb: invalid source name '$src'"
+  fi
+  if [[ $src == lib?* ]]; then
+    initial=${src:0:4}
+  else
+    initial=${src:0:1}
+  fi
+  dest=$out/pool/$suite/main/$initial/$src/$(basename "$deb")
+  if [[ -e $dest ]]; then
+    cmp -s "$deb" "$dest" || die "$deb: a different file named $(basename "$deb") is already in $suite"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  cp "$deb" "$dest"
+  chmod 0644 "$dest"
+  log "$suite: $pkg $(dpkg-deb --field "$deb" Version)"
+}
+
+for spec in "${specs[@]}"; do
+  if [[ $spec != *=* ]]; then
+    die_usage "expected <suite>=<deb-dir>, got '$spec'"
+  fi
+  suite=${spec%%=*}
+  dir=${spec#*=}
+  if [[ ! $suite =~ $SUITES_RE ]]; then
+    die_usage "unknown suite '$suite' (expected noble, noble-edge, resolute or resolute-edge)"
+  fi
+  if [[ ! -d $dir ]]; then
+    die "no such folder: $dir"
+  fi
+  if [[ -z ${SEEN[$suite]:-} ]]; then
+    SEEN[$suite]=1
+    suites+=("$suite")
+    mkdir -p "$out/pool/$suite"
+  fi
+  shopt -s nullglob
+  for deb in "$dir"/*.deb; do
+    add_deb "$suite" "$deb"
+  done
+  shopt -u nullglob
+done
+
+FTP_HASHES=(
+  -o APT::FTPArchive::MD5=false
+  -o APT::FTPArchive::SHA1=false
+  -o APT::FTPArchive::SHA512=false
+  -o APT::FTPArchive::Release::MD5=false
+  -o APT::FTPArchive::Release::SHA1=false
+  -o APT::FTPArchive::Release::SHA512=false
+)
+
+GNUPGHOME=$(mktemp -d)
+export GNUPGHOME
+chmod 0700 "$GNUPGHOME"
+gpg --batch --quiet --import "$key" 2>/dev/null || die "could not import the key $key"
+fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+if [[ ! $fpr =~ ^[0-9A-F]{40}$ ]]; then
+  die "$key holds no secret key"
+fi
+log "signing with key $fpr"
+
+# by_hash <dist-dir> <hash-name> <tool>: links each index into by-hash.
+by_hash() {
+  local dist=$1 name=$2 tool=$3 f digest bdir
+  bdir=$dist/main/binary-amd64/by-hash/$name
+  mkdir -p "$bdir"
+  for f in Packages Packages.gz Packages.xz; do
+    digest=$("$tool" "$dist/main/binary-amd64/$f" | cut -d' ' -f1)
+    cp -f "$dist/main/binary-amd64/$f" "$bdir/$digest"
+    if ! grep -q " $digest .* main/binary-amd64/$f\$" "$dist/Release"; then
+      die "the $name of main/binary-amd64/$f is not in $dist/Release"
+    fi
+  done
+}
+
+for suite in "${suites[@]}"; do
+  dist=$out/dists/$suite
+  mkdir -p "$dist/main/binary-amd64"
+  (cd "$out" && apt-ftparchive "${FTP_HASHES[@]}" packages "pool/$suite") \
+    >"$dist/main/binary-amd64/Packages"
+  gzip -9n -c "$dist/main/binary-amd64/Packages" >"$dist/main/binary-amd64/Packages.gz"
+  xz -9 -c "$dist/main/binary-amd64/Packages" >"$dist/main/binary-amd64/Packages.xz"
+
+  now=$(date -u +%s)
+  date_str=$(LC_ALL=C date -u -d "@$now" '+%a, %d %b %Y %H:%M:%S UTC')
+  until_str=$(LC_ALL=C date -u -d "@$((now + VALID_SECONDS))" '+%a, %d %b %Y %H:%M:%S UTC')
+  tmp_release=$(mktemp)
+  (cd "$dist" && apt-ftparchive "${FTP_HASHES[@]}" \
+    -o APT::FTPArchive::Release::Origin=Motanka \
+    -o APT::FTPArchive::Release::Label=Motanka \
+    -o APT::FTPArchive::Release::Suite="$suite" \
+    -o APT::FTPArchive::Release::Codename="$suite" \
+    -o APT::FTPArchive::Release::Architectures=amd64 \
+    -o APT::FTPArchive::Release::Components=main \
+    -o APT::FTPArchive::Release::Description="Motanka packages, suite $suite" \
+    -o APT::FTPArchive::Release::Acquire-By-Hash=yes \
+    -o APT::FTPArchive::Release::Date="$date_str" \
+    -o APT::FTPArchive::Release::Valid-Until="$until_str" \
+    release .) >"$tmp_release"
+  mv -f "$tmp_release" "$dist/Release"
+  chmod 0644 "$dist/Release"
+  for field in "Origin: Motanka" "Label: Motanka" "Suite: $suite" "Codename: $suite" \
+    "Architectures: amd64" "Components: main" "Acquire-By-Hash: yes" \
+    "Date: $date_str" "Valid-Until: $until_str"; do
+    grep -qxF "$field" "$dist/Release" || die "$dist/Release lacks '$field'"
+  done
+  grep -q '^SHA256:$' "$dist/Release" || die "$dist/Release has no SHA256 section"
+
+  by_hash "$dist" SHA256 sha256sum
+  if grep -q '^SHA512:$' "$dist/Release"; then
+    by_hash "$dist" SHA512 sha512sum
+  fi
+
+  gpg --batch --yes --quiet --local-user "$fpr" --digest-algo SHA512 \
+    --clearsign --output "$dist/InRelease" "$dist/Release"
+  gpg --batch --yes --quiet --local-user "$fpr" --digest-algo SHA512 \
+    --armor --detach-sign --output "$dist/Release.gpg" "$dist/Release"
+  gpg --batch --quiet --verify "$dist/InRelease" 2>/dev/null ||
+    die "InRelease of $suite does not verify"
+  gpg --batch --quiet --verify "$dist/Release.gpg" "$dist/Release" 2>/dev/null ||
+    die "Release.gpg of $suite does not verify"
+  log "$suite: signed, valid until $until_str"
+done
+
+find "$out" -type d -exec chmod 0755 {} +
+find "$out" -type f -exec chmod 0644 {} +
+log "repository ready in $out (suites: ${suites[*]})"

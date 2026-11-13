@@ -1,0 +1,4 @@
+# Shipping the apt pin that limits the Motanka repository to Motanka
+# packages is the purpose of this package (DESIGN.md, "Repository";
+# requirements 4.4 and 4.6).
+package-installs-apt-preferences

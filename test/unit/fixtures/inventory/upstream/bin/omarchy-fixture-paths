@@ -1,0 +1,14 @@
+#!/bin/bash
+# Fixture: Arch paths. /etc/pacman.conf in this comment is not reported.
+set -euo pipefail
+grep -q '^\[multilib\]' /etc/pacman.conf
+sudo cp "$OMARCHY_PATH/default/limine/limine.conf" /boot/limine.conf
+for f in /etc/mkinitcpio.conf.d/*.conf; do
+  echo "$f"
+done
+# shellcheck source=/dev/null
+source ~/.local/share/omarchy/install/helpers/pacman.sh
+cat <<'EOF'
+/var/lib/pacman inside a here-doc
+EOF
+bash -c "sudo mkinitcpio -P"
