@@ -27,9 +27,11 @@ Build-Depends: debhelper-compat (= 13),
                libpcre2-dev,
                libpng-dev,
                libssl-dev,
+               libtiff-dev,
                libudev-dev,
                libvulkan-dev,
                libwayland-dev,
+               libwebp-dev,
                libx11-dev,
                libx11-xcb-dev,
                libxcb-cursor-dev,
@@ -61,18 +63,19 @@ Vcs-Git: https://github.com/digitwolf/motanka.git
 
 Package: motanka-qt6
 Architecture: amd64
-Depends: motanka-stack-libs,
+Depends: ${motanka:Depends},
          ${shlibs:Depends},
          ${misc:Depends},
-Description: Qt 6 for the Motanka Stack on Ubuntu 24.04
+Description: Qt 6 for the Motanka Stack
  Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its desktop
- shell, Quickshell, needs Qt 6.6 or later; Ubuntu 24.04 has Qt 6.4.
+ shell needs Qt 6.11 or later; Ubuntu 24.04 and 26.04 have older versions.
  .
- This package holds Qt 6.10 (Base, Declarative, Wayland, SVG and Shader
- Tools): the libraries in /opt/motanka/lib and the plugins and QML modules
- in /opt/motanka/lib/qt6. Only programs of the Motanka Stack, which find
- these libraries through RUNPATH, use it; Ubuntu's own Qt is unchanged.
- It depends on motanka-stack-libs for GCC 16's C++ runtime.
+ This package holds Qt 6.12 (Base, Declarative, Wayland, SVG, Shader Tools
+ and the WebP and TIFF image format plugins): the libraries in
+ /opt/motanka/lib and the plugins and QML modules in /opt/motanka/lib/qt6.
+ Only programs of the Motanka Stack, which find these libraries through
+ RUNPATH, use it; Ubuntu's own Qt is unchanged. On Ubuntu 24.04 it depends
+ on motanka-stack-libs for GCC 16's C++ runtime.
 
 Package: motanka-qt6-dev
 Architecture: amd64
@@ -87,8 +90,10 @@ Depends: motanka-qt6 (= ${binary:Version}),
          libgles-dev,
          libglib2.0-dev,
          libharfbuzz-dev,
+         libtiff-dev,
          libvulkan-dev,
          libwayland-dev,
+         libwebp-dev,
          libxkbcommon-dev,
          perl,
          pkgconf,
@@ -96,11 +101,11 @@ Depends: motanka-qt6 (= ${binary:Version}),
          ${shlibs:Depends},
          ${misc:Depends},
 XB-Motanka-Build-Only: yes
-Description: Qt 6 for the Motanka Stack on Ubuntu 24.04 - build files
+Description: Qt 6 for the Motanka Stack - build files
  Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its desktop
- shell, Quickshell, needs Qt 6.6 or later; Ubuntu 24.04 has Qt 6.4.
+ shell needs Qt 6.11 or later; Ubuntu 24.04 and 26.04 have older versions.
  .
  This package holds the headers, CMake files, tools and mkspecs of the Qt
- 6.10 in motanka-qt6, under /opt/motanka. The motanka-stack-shell build
+ 6.12 in motanka-qt6, under /opt/motanka. The motanka-stack-shell build
  uses it. It is a build-time package only and is never published in a
  Motanka repository suite.

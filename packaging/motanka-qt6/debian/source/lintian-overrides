@@ -1,8 +1,10 @@
 # The orig-<component> tarballs are Qt's release tarballs, used unmodified
 # and pinned by SHA-256 in stack/qt6-components.tsv. Their test data,
-# examples, documentation sources and bundled third-party trees are not
-# rebuilt from source because nothing from them is built or shipped
-# (tests and examples are off).
+# examples, documentation sources and bundled third-party trees (among
+# them qtimageformats' copies of libwebp, libtiff, libmng and jasper) are
+# not rebuilt from source because nothing from them is built or shipped
+# (tests and examples are off; the image plugins use the archive's
+# libraries, or on noble Qt's libwebp copy if 24.04's is not accepted).
 source-is-missing
 source-contains-prebuilt-binary
 source-contains-prebuilt-windows-binary

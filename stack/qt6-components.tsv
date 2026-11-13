@@ -1,6 +1,7 @@
 #@source motanka-qt6
 #@packages motanka-qt6
-# Upstream components of motanka-qt6, Qt 6 for the Stack on Ubuntu 24.04.
+# Upstream components of motanka-qt6, the Stack's Qt 6 on Ubuntu 24.04 and
+# 26.04.
 #
 # Same format as stack/components.tsv (see the comment there); build "qt"
 # is a Qt submodule built by packaging/motanka-qt6/debian/qt6-build.sh, in
@@ -8,15 +9,18 @@
 # motanka-qt6; the build splits the files into motanka-qt6 (runtime) and
 # motanka-qt6-dev (build files, never published) by path.
 #
-# Spike S1 addendum (design.md): Quickshell 0.3.2 needs Qt >= 6.6; 24.04
-# has 6.4.2, 26.04 has 6.10.2 in its archive. So every line is noble only,
-# and packaging/motanka-qt6/suites skips the package for resolute.
+# design.md, "Qt for both releases": Upstream's shell declares
+# `var native = ...`, which Qt's QML grammar accepts from 6.11 on. Both
+# Ubuntu archives carry Qt 6.10.2, so every line is built for both suites
+# (requirement 1.2), at Arch's version on 2026-11-13. qtimageformats adds
+# the WebP and TIFF plugins: themes ship .webp backgrounds.
 #
 # Download, verify and pin: stack/fetch-sources --components stack/qt6-components.tsv
 #
 # name	version	url	sha256	build	suites	package
-qtbase	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtbase-everywhere-src-6.10.2.tar.xz	aeb78d29291a2b5fd53cb55950f8f5065b4978c25fb1d77f627d695ab9adf21e	qt	noble	motanka-qt6
-qtshadertools	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtshadertools-everywhere-src-6.10.2.tar.xz	18d9dbbc4f7e6e96e6ed89a9965dc032e2b58158b65156c035537826216716c9	qt	noble	motanka-qt6
-qtsvg	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtsvg-everywhere-src-6.10.2.tar.xz	f07ff80f38caf235187200345392ca7479445ddf49a36c3694cd52a735dad6e1	qt	noble	motanka-qt6
-qtdeclarative	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtdeclarative-everywhere-src-6.10.2.tar.xz	a249914ff66cdcdbf0df8b5ffad997a2ee6dce01cc17d43c6cc56fdc1d0f4b0f	qt	noble	motanka-qt6
-qtwayland	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtwayland-everywhere-src-6.10.2.tar.xz	391998eb432719df26a6a67d8efdc67f8bf2afdd76c1ee3381ebff4fe7527ee2	qt	noble	motanka-qt6
+qtbase	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtbase-everywhere-src-6.12.0.tar.xz	a951bd163c7b80fc6b8c88d7668fb56abf91c152373e13c10666763238131307	qt	both	motanka-qt6
+qtshadertools	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtshadertools-everywhere-src-6.12.0.tar.xz	c7d84f436e1aaef39fdcadebf2bd71bdf24dc69497e13f2e0198873cbbfea2ab	qt	both	motanka-qt6
+qtsvg	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtsvg-everywhere-src-6.12.0.tar.xz	e4ab39534ec97987b1b9b60ef7f4d3253d5912a69f8c713a01753174a4029331	qt	both	motanka-qt6
+qtdeclarative	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtdeclarative-everywhere-src-6.12.0.tar.xz	311f3a2603e1973bb59baef9dfa740a376de713157d4782ee043681e889c9260	qt	both	motanka-qt6
+qtwayland	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtwayland-everywhere-src-6.12.0.tar.xz	ae14d9bcf1bb3c300a3ab2e6a53f50284e5c6c966a4ac4cc5aedcb1bc74e4d02	qt	both	motanka-qt6
+qtimageformats	6.12.0	https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/qtimageformats-everywhere-src-6.12.0.tar.xz	0943132b5db8de6b6a7f1d162682173e8763c7ed94e80fd39113292845f67762	qt	both	motanka-qt6

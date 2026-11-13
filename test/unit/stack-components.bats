@@ -153,15 +153,15 @@ cfield() {
   assert_output --partial 'components, valid (source motanka-qt6)'
 }
 
-@test "Qt is 6.10.2, noble only, in the build order of spike S1" {
-  local want=(qtbase qtshadertools qtsvg qtdeclarative qtwayland) got c
+@test "Qt is 6.12.0 for both releases, in the build order of spike S1 plus qtimageformats" {
+  local want=(qtbase qtshadertools qtsvg qtdeclarative qtwayland qtimageformats) got c
   mapfile -t got < <(awk -F'\t' '!/^#/ && NF == 7 { print $1 }' "$REPO/$QT6_TSV_REL")
   [[ ${got[*]} == "${want[*]}" ]] || fail "order is '${got[*]}'"
   for c in "${want[@]}"; do
-    [[ $(cfield "$QT6_TSV_REL" "$c" 2) == 6.10.2 ]] || fail "$c is not 6.10.2"
-    [[ $(cfield "$QT6_TSV_REL" "$c" 6) == noble ]] || fail "$c is not noble only"
+    [[ $(cfield "$QT6_TSV_REL" "$c" 2) == 6.12.0 ]] || fail "$c is not 6.12.0"
+    [[ $(cfield "$QT6_TSV_REL" "$c" 6) == both ]] || fail "$c is not for both releases"
     [[ $(cfield "$QT6_TSV_REL" "$c" 5) == qt ]] || fail "$c is not a qt build"
-    [[ $(cfield "$QT6_TSV_REL" "$c" 3) == "https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/$c-everywhere-src-6.10.2.tar.xz" ]] ||
+    [[ $(cfield "$QT6_TSV_REL" "$c" 3) == "https://download.qt.io/official_releases/qt/6.12/6.12.0/submodules/$c-everywhere-src-6.12.0.tar.xz" ]] ||
       fail "$c has an unexpected URL"
   done
 }
@@ -242,20 +242,20 @@ cfield() {
   assert_output --partial 'duplicate #@source'
 }
 
-@test "motanka-qt6 is built for noble only; motanka-stack-shell has no suites file" {
-  run grep -v '^#' "$REPO/packaging/motanka-qt6/suites"
-  assert_success
-  assert_output 'noble'
+@test "motanka-qt6 and motanka-stack-shell are built for both releases (no suites file)" {
+  [[ ! -e $REPO/packaging/motanka-qt6/suites ]]
   [[ ! -e $REPO/packaging/motanka-stack-shell/suites ]]
 }
 
-@test "the noble shell build gets Qt and the C++ runtime from local .debs" {
+@test "the shell build gets the Stack's Qt from local .debs on both releases" {
   run grep -E '^noble ' "$REPO/packaging/motanka-stack-shell/sbuild-local"
   assert_success
   assert_output --partial 'motanka-qt6-dev'
   assert_output --partial 'motanka-stack-libs'
   run grep -E '^resolute ' "$REPO/packaging/motanka-stack-shell/sbuild-local"
-  assert_failure
+  assert_success
+  assert_output --partial 'motanka-qt6-dev'
+  refute_output --partial 'motanka-stack-libs'
 }
 
 @test "motanka-qt6-dev is marked build-only and motanka-qt6 is not" {

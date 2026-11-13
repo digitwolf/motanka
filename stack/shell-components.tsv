@@ -5,8 +5,7 @@
 #
 # Same format as stack/components.tsv (see the comment there). Built by
 # packaging/motanka-stack-shell/debian/shell-build.sh in file order, for
-# both suites: against motanka-qt6 on noble and the archive's Qt 6.10 on
-# resolute.
+# both suites, against the Stack's Qt 6.12 (motanka-qt6) on both.
 #
 #   wayland-protocols  build time only, the Stack's version (1.50, same
 #                      tarball and checksum as stack/components.tsv), so

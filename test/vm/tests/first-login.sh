@@ -16,9 +16,9 @@
 # This test builds nothing. It reads the .debs of the current version
 # (packaging/version.sh) from ~/.cache/motanka-vm/debs/<release>/:
 # motanka-stack-libs, motanka-stack-hyprland, motanka-stack-tools,
-# motanka-stack, motanka-stack-shell, motanka-core, and on noble also
-# motanka-qt6. It fails with the list of missing files and the build
-# commands when any is missing. The VM is the multiuser variant
+# motanka-stack, motanka-qt6, motanka-stack-shell and motanka-core. It
+# fails with the list of missing files and the build commands when any is
+# missing. The VM is the multiuser variant
 # (users alice and bob) started with MOTANKA_VM_GPU=gl.
 #
 # The guest half is test/vm/first-login-guest.sh; its header lists every
@@ -42,10 +42,7 @@ results=${MOTANKA_VM_RESULTS:-$MV_RESULTS/$run_id-first-login}
 mkdir -p "$results"
 export MOTANKA_VM_RESULTS="$results"
 GUEST_T=/tmp/motanka-first-login
-PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack motanka-stack-shell motanka-core)
-if [[ $release == noble ]]; then
-  PKGS+=(motanka-qt6)
-fi
+PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack motanka-qt6 motanka-stack-shell motanka-core)
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 failures=0
@@ -87,11 +84,8 @@ if ((${#missing[@]} > 0)); then
   fail "missing .debs of version $ver in $MV_DEBS/$release/: ${missing[*]}"
   mv_log "build them first, for example:"
   mv_log "  test/vm/build --suite $release packaging/motanka-stack"
-  mv_log "  test/vm/build --suite $release packaging/motanka-stack-shell"
+  mv_log "  test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
   mv_log "  test/vm/build --suite $release packaging/motanka-core"
-  if [[ $release == noble ]]; then
-    mv_log "  test/vm/build --suite $release packaging/motanka-qt6"
-  fi
   finish
 fi
 

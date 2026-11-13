@@ -3,38 +3,45 @@
 # user tester (passwordless sudo in the VM). Never run it on a real machine:
 # it installs and purges packages and configures tty1 autologin.
 #
-# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version>
+# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version>
 #
 # Work folder /tmp/motanka-stack-test (T): debs/ holds the Stack .debs
-# (motanka-stack, motanka-stack-shell and, on noble, motanka-qt6), debcheck
-# is tools/debcheck, logs/ collects output, shot.png and shot-shell.png are
-# the screenshots, qs/shell.qml is the Quickshell test config. Every check
-# prints "PASS: ..." or "FAIL: ..."; the exit code is 1 if any check failed
-# in the phase.
+# (motanka-stack, motanka-qt6 and motanka-stack-shell), debcheck is
+# tools/debcheck, logs/ collects output, shot.png and shot-shell.png are
+# the screenshots, qs/shell.qml is the Quickshell test config and
+# qs/probe.webp a 1x1 WebP image it loads. Every check prints "PASS: ..." or
+# "FAIL: ..."; the exit code is 1 if any check failed in the phase.
 #
 # Phases, in the order the host runs them:
-#   prepare  install the test tools (binutils, grim; Ubuntu's hyprland on
-#            resolute) and record the package list and the state of
-#            Ubuntu's hyprland. The host takes the "before" Fingerprint
-#            after this phase.
+#   prepare  install the test tools (binutils, grim), Ubuntu's own Qt 6
+#            (ARCHIVE_QT) and, on resolute, Ubuntu's hyprland, and record
+#            the package list and the state of those host packages. The
+#            host takes the "before" Fingerprint after this phase.
 #   install  apt-get install the local .debs; tools/debcheck; paths;
 #            RUNPATH, RPATH and ldd of every ELF under /opt/motanka; which
-#            libstdc++ the Stack uses; quickshell --version, and every Qt
-#            library ldd resolves for it comes from /opt/motanka on noble
-#            and from the system on resolute; Ubuntu's hyprland unchanged.
+#            libstdc++ the Stack and its Qt use; the Stack's Qt is
+#            <qt-version> and has the WebP plugin; quickshell --version,
+#            and every Qt library ldd resolves for it comes from
+#            /opt/motanka; Ubuntu's hyprland and Qt packages unchanged.
 #   session  start /opt/motanka/bin/start-hyprland on tty1 through getty
 #            autologin; Hyprland runs from /opt/motanka, hyprctl lists
 #            Virtual-1, grim takes a screenshot, no process has
 #            LD_LIBRARY_PATH, the loaded libstdc++ is the expected one.
-#            Then Quickshell runs qs/shell.qml, a magenta PanelWindow with
-#            the layer namespace motanka-test: hyprctl layers lists it, a
-#            pixel inside it is magenta, grim takes shot-shell.png, and every
+#            Then Quickshell runs qs/shell.qml: a magenta PanelWindow whose
+#            layer namespace motanka-test comes from a function declaring
+#            `var native` (Qt 6.10's QML grammar rejects it, and the whole
+#            file then fails to load), and a cyan PanelWindow with the
+#            namespace motanka-webp that is shown only once qs/probe.webp
+#            has loaded. hyprctl layers lists both, a pixel inside the
+#            magenta one is magenta, grim takes shot-shell.png, and every
 #            Qt library and plugin the running Quickshell maps comes from
-#            /opt/motanka on noble and from the system on resolute. The
-#            autologin drop-in and ~/.bash_profile are removed afterwards.
+#            /opt/motanka, including the WebP plugin; none comes from
+#            Ubuntu's Qt, which is installed next to it. The autologin
+#            drop-in and ~/.bash_profile are removed afterwards.
 #   purge    purge the Stack packages and exactly the packages their install
-#            pulled in; Ubuntu's hyprland unchanged; /opt/motanka gone. The
-#            host takes the "after" Fingerprint after this phase.
+#            pulled in; Ubuntu's hyprland and Qt packages unchanged;
+#            /opt/motanka gone. The host takes the "after" Fingerprint after
+#            this phase.
 set -euo pipefail
 export LC_ALL=C.UTF-8
 export DEBIAN_FRONTEND=noninteractive
@@ -42,6 +49,7 @@ export DEBIAN_FRONTEND=noninteractive
 T=/tmp/motanka-stack-test
 L=$T/logs
 PREFIX=/opt/motanka
+TRIPLET_LIBDIR=/usr/lib/x86_64-linux-gnu
 # The release's packages are set in main (set_pkgs).
 STACK_PKGS=()
 SYSTEM_LIB_DIRS=(/lib /lib64 /usr/lib /usr/lib64 /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu)
@@ -49,13 +57,25 @@ DROPIN_DIR=/etc/systemd/system/getty@tty1.service.d
 DROPIN=$DROPIN_DIR/autologin.conf
 PROFILE=$HOME/.bash_profile
 APT=(sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300)
+# Ubuntu's own Qt 6 (6.4 on noble, 6.10 on resolute), installed before the
+# Stack so the checks see the Stack's Qt next to it: it must stay unchanged
+# and Quickshell must never load it.
+ARCHIVE_QT=(qml6-module-qtquick qt6-wayland)
+WEBP_PLUGIN=$PREFIX/lib/qt6/plugins/imageformats/libqwebp.so
+# A 1x1 lossy WebP image (the test image of Google's WebP FAQ).
+PROBE_WEBP_B64=UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA
 
 # Quickshell test: a PanelWindow across the top of Virtual-1 (1280x800).
 # The pixel is sampled well below the top edge, where Hyprland draws its
-# "autogenerated config" warning bar.
+# "autogenerated config" warning bar. The WebP panel sits at the bottom.
 QS_NAMESPACE=motanka-test
+QS_WEBP_NAMESPACE=motanka-webp
 QS_HEIGHT=300
 QS_PIXEL="100,200"
+# QML load errors in Quickshell's output; the first is what Qt 6.10 prints
+# for `var native` ("Type BackgroundIntro unavailable ... Expected token
+# `identifier'").
+QML_ERRORS='Expected token|is not a type|Type [^ ]+ unavailable'
 
 fails=0
 pass() { echo "PASS: $*"; }
@@ -78,36 +98,53 @@ guard() {
   fi
 }
 
-# hyprland_state: version, status and dpkg --verify of Ubuntu's hyprland.
-hyprland_state() {
-  # shellcheck disable=SC2016 # dpkg-query fields
-  dpkg-query -W -f='${Package} ${Version} ${db:Status-Abbrev}\n' hyprland 2>/dev/null || echo "hyprland absent"
-  sudo dpkg --verify hyprland 2>&1 || true
-  if [[ -e /usr/bin/Hyprland ]]; then
-    sha256sum /usr/bin/Hyprland
-  fi
-}
-
-check_hyprland_unchanged() {
-  local when=$1
-  if [[ $RELEASE != resolute ]]; then
-    pass "$when: Ubuntu's hyprland check skipped ($RELEASE has no hyprland package)"
-    return 0
-  fi
-  hyprland_state >"$L/hyprland-$when.txt"
-  if cmp -s "$T/hyprland-before.txt" "$L/hyprland-$when.txt"; then
-    pass "$when: Ubuntu's hyprland is installed and unchanged ($(head -n 1 "$L/hyprland-$when.txt"))"
-  else
-    fail "$when: Ubuntu's hyprland changed"
-    diff "$T/hyprland-before.txt" "$L/hyprland-$when.txt" | show
-  fi
-}
-
 installed_list() {
   # shellcheck disable=SC2016 # dpkg-query fields
   dpkg-query -W -f='${binary:Package}\t${db:Status-Status}\n' |
     awk -F'\t' '$2 == "installed" || $2 == "config-files" || $2 == "half-installed" || $2 == "unpacked" || $2 == "half-configured" { print $1 }' |
     sed 's/:amd64$//' | LC_ALL=C sort -u
+}
+
+# host_state: version, status and dpkg --verify of the host packages the
+# Stack must leave alone: Ubuntu's hyprland (resolute) and every installed
+# archive Qt 6 package (libqt6*, qt6-*, qml6-*), plus the checksum of
+# Ubuntu's libQt6Core.
+host_state() {
+  local -a qt=()
+  if [[ $RELEASE == resolute ]]; then
+    # shellcheck disable=SC2016 # dpkg-query fields
+    dpkg-query -W -f='${Package} ${Version} ${db:Status-Abbrev}\n' hyprland 2>/dev/null || echo "hyprland absent"
+    sudo dpkg --verify hyprland 2>&1 || true
+    if [[ -e /usr/bin/Hyprland ]]; then
+      sha256sum /usr/bin/Hyprland
+    fi
+  fi
+  mapfile -t qt < <(installed_list | grep -E '^(libqt6|qt6-|qml6-)' || true)
+  echo "archive Qt packages: ${#qt[@]}"
+  if ((${#qt[@]} > 0)); then
+    # shellcheck disable=SC2016 # dpkg-query fields
+    dpkg-query -W -f='${Package} ${Version} ${db:Status-Abbrev}\n' "${qt[@]}"
+    sudo dpkg --verify "${qt[@]}" 2>&1 || true
+  fi
+  if [[ -e $TRIPLET_LIBDIR/libQt6Core.so.6 ]]; then
+    sha256sum "$(readlink -f "$TRIPLET_LIBDIR/libQt6Core.so.6")"
+  else
+    echo "no $TRIPLET_LIBDIR/libQt6Core.so.6"
+  fi
+}
+
+check_host_unchanged() {
+  local when=$1 what="Ubuntu's Qt packages"
+  if [[ $RELEASE == resolute ]]; then
+    what="Ubuntu's hyprland and Qt packages"
+  fi
+  host_state >"$L/host-$when.txt"
+  if cmp -s "$T/host-before.txt" "$L/host-$when.txt"; then
+    pass "$when: $what are installed and unchanged ($(grep -c . "$L/host-$when.txt") lines of state)"
+  else
+    fail "$when: $what changed"
+    diff "$T/host-before.txt" "$L/host-$when.txt" | show
+  fi
 }
 
 is_elf() {
@@ -131,7 +168,8 @@ in_system_dir() {
 # --- phases -----------------------------------------------------------------
 
 phase_prepare() {
-  local -a tools=(binutils grim)
+  local -a tools=(binutils grim "${ARCHIVE_QT[@]}")
+  local qt
   mkdir -p "$L"
   if [[ $RELEASE == resolute ]]; then
     tools+=(hyprland)
@@ -142,12 +180,18 @@ phase_prepare() {
     return
   }
   if "${APT[@]}" install --no-install-recommends "${tools[@]}" >"$L/prepare.log" 2>&1; then
-    pass "installed the test tools: ${tools[*]}"
+    pass "installed the test tools and Ubuntu's packages: ${tools[*]}"
   else
-    fail "could not install the test tools: ${tools[*]}"
+    fail "could not install the test tools and Ubuntu's packages: ${tools[*]}"
     show "$L/prepare.log"
   fi
-  hyprland_state >"$T/hyprland-before.txt"
+  host_state >"$T/host-before.txt"
+  if [[ -e $TRIPLET_LIBDIR/libQt6Core.so.6 ]]; then
+    qt=$(readlink -f "$TRIPLET_LIBDIR/libQt6Core.so.6")
+    pass "Ubuntu's Qt is installed next to the Stack's: ${qt##*/}"
+  else
+    fail "Ubuntu's Qt ($TRIPLET_LIBDIR/libQt6Core.so.6) is not installed"
+  fi
   installed_list >"$T/pkgs-before.txt"
   if [[ -e $DROPIN || -e $PROFILE ]]; then
     fail "$DROPIN or $PROFILE exists before the test"
@@ -242,27 +286,37 @@ check_elves() {
   fi
 }
 
-check_cxx_runtime() {
-  local got gcc
-  got=$(ldd "$PREFIX/bin/Hyprland" | awk '$1 == "libstdc++.so.6" { print $3 }')
-  gcc=$(ldd "$PREFIX/bin/Hyprland" | awk '$1 == "libgcc_s.so.1" { print $3 }')
+# check_cxx_runtime_of <label> <elf>: noble loads the bundled libstdc++,
+# resolute the system one.
+check_cxx_runtime_of() {
+  local label=$1 elf=$2 got gcc out
+  out=$(ldd "$elf" 2>&1 || true)
+  got=$(awk '$1 == "libstdc++.so.6" { print $3 }' <<<"$out")
+  gcc=$(awk '$1 == "libgcc_s.so.1" { print $3 }' <<<"$out")
   if [[ $RELEASE == noble ]]; then
     if [[ $got == "$PREFIX/lib/libstdc++.so.6" ]]; then
-      pass "noble: Hyprland uses the bundled libstdc++ ($got)"
+      pass "noble: $label uses the bundled libstdc++ ($got)"
     else
-      fail "noble: Hyprland uses libstdc++ from '${got:-nowhere}', expected $PREFIX/lib/libstdc++.so.6"
+      fail "noble: $label uses libstdc++ from '${got:-nowhere}', expected $PREFIX/lib/libstdc++.so.6"
     fi
     if [[ -z $gcc || $gcc == "$PREFIX/lib/libgcc_s.so.1" ]]; then
-      pass "noble: libgcc_s is the bundled one (${gcc:-not needed directly})"
+      pass "noble: $label's libgcc_s is the bundled one (${gcc:-not needed directly})"
     else
-      fail "noble: Hyprland uses libgcc_s from $gcc"
+      fail "noble: $label uses libgcc_s from $gcc"
     fi
   else
-    if [[ $got == /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ]]; then
-      pass "resolute: Hyprland uses the system libstdc++ ($got)"
+    if [[ $got == "$TRIPLET_LIBDIR/libstdc++.so.6" ]]; then
+      pass "resolute: $label uses the system libstdc++ ($got)"
     else
-      fail "resolute: Hyprland uses libstdc++ from '${got:-nowhere}', expected the system one"
+      fail "resolute: $label uses libstdc++ from '${got:-nowhere}', expected the system one"
     fi
+  fi
+}
+
+check_cxx_runtime() {
+  check_cxx_runtime_of Hyprland "$PREFIX/bin/Hyprland"
+  check_cxx_runtime_of "the Stack's libQt6Core" "$PREFIX/lib/libQt6Core.so.6"
+  if [[ $RELEASE == resolute ]]; then
     if compgen -G "$PREFIX/lib/libstdc++*" >/dev/null || compgen -G "$PREFIX/lib/libgcc_s*" >/dev/null; then
       fail "resolute: a C++ runtime is bundled in $PREFIX/lib"
     else
@@ -278,33 +332,43 @@ qt_path() {
   [[ $1 =~ /libQt6[^/]*\.so || $1 =~ /qt6/(plugins|qml)/ ]]
 }
 
-# check_qt_origin <label> <file with one path per line>: on noble every Qt
-# path is under /opt/motanka, on resolute none is.
+# check_qt_origin <label> <file with one path per line>: every Qt path is
+# under /opt/motanka on both releases; none is Ubuntu's Qt
+# (/usr/lib/x86_64-linux-gnu/libQt6*, .../qt6/plugins, .../qt6/qml).
 check_qt_origin() {
   local label=$1 list=$2 p n=0
   local -a bad=()
   while IFS= read -r p; do
     qt_path "$p" || continue
     n=$((n + 1))
-    if [[ $RELEASE == noble && $p != "$PREFIX"/* ]]; then
-      bad+=("$p")
-    elif [[ $RELEASE != noble && $p == "$PREFIX"/* ]]; then
+    if [[ $p != "$PREFIX"/* ]]; then
       bad+=("$p")
     fi
   done <"$list"
   if ((n == 0)); then
     fail "$label: no Qt library at all"
   elif ((${#bad[@]} > 0)); then
-    if [[ $RELEASE == noble ]]; then
-      fail "$label: ${#bad[@]} of $n Qt files are not from $PREFIX:"
-    else
-      fail "$label: ${#bad[@]} of $n Qt files are from $PREFIX instead of the system:"
-    fi
+    fail "$label: ${#bad[@]} of $n Qt files are not from $PREFIX:"
     printf '%s\n' "${bad[@]}" | show
-  elif [[ $RELEASE == noble ]]; then
-    pass "$label: all $n Qt files are from $PREFIX"
   else
-    pass "$label: all $n Qt files are from the system"
+    pass "$label: all $n Qt files are from $PREFIX, none from Ubuntu's Qt"
+  fi
+}
+
+# check_stack_qt: the Stack's Qt is QT_VERSION and has the WebP plugin.
+check_stack_qt() {
+  local core owner
+  core=$(readlink -f "$PREFIX/lib/libQt6Core.so.6" 2>/dev/null || true)
+  if [[ $core == "$PREFIX/lib/libQt6Core.so.$QT_VERSION" ]]; then
+    pass "the Stack's Qt is $QT_VERSION ($core)"
+  else
+    fail "the Stack's libQt6Core.so.6 is '${core:-missing}', expected $PREFIX/lib/libQt6Core.so.$QT_VERSION"
+  fi
+  owner=$(dpkg-query -S "$WEBP_PLUGIN" 2>/dev/null || true)
+  if [[ -f $WEBP_PLUGIN && $owner == motanka-qt6:* ]]; then
+    pass "motanka-qt6 ships the WebP image plugin $WEBP_PLUGIN"
+  else
+    fail "$WEBP_PLUGIN is missing or not owned by motanka-qt6"
   fi
 }
 
@@ -359,12 +423,10 @@ check_shell_install() {
       fail "noble: quickshell uses libstdc++ from '${std:-nowhere}'"
     fi
   else
-    # shellcheck disable=SC2016 # dpkg-query field
-    if [[ $(dpkg-query -W -f='${db:Status-Abbrev}' motanka-qt6 2>/dev/null || true) == "ii " ]] ||
-      compgen -G "$PREFIX/lib/libQt6*" >/dev/null; then
-      fail "resolute: motanka-qt6 or a Qt library in $PREFIX/lib is installed"
+    if [[ $std == "$TRIPLET_LIBDIR/libstdc++.so.6" ]]; then
+      pass "resolute: quickshell uses the system libstdc++"
     else
-      pass "resolute: no Qt in $PREFIX"
+      fail "resolute: quickshell uses libstdc++ from '${std:-nowhere}', expected the system one"
     fi
   fi
 }
@@ -399,6 +461,7 @@ phase_install() {
   check_paths
   check_elves
   check_cxx_runtime
+  check_stack_qt
   check_shell_install
   v=$("$PREFIX/bin/Hyprland" --version 2>&1 | head -n 3 || true)
   if grep -qF "$HYPR_VERSION" <<<"$v"; then
@@ -412,7 +475,7 @@ phase_install() {
   else
     pass "no ld.so.conf.d entry and no LD_LIBRARY_PATH in /etc/environment"
   fi
-  check_hyprland_unchanged after-install
+  check_host_unchanged after-install
 }
 
 session_teardown() {
@@ -534,7 +597,7 @@ EOF
   if [[ $RELEASE == noble ]]; then
     want=$PREFIX/lib/libstdc++.so.6
   else
-    want=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
+    want=$TRIPLET_LIBDIR/libstdc++.so.6
   fi
   if [[ $(readlink -f "${lib:-/nonexistent}" 2>/dev/null) == "$(readlink -f "$want")" ]]; then
     pass "the running Hyprland has $lib mapped"
@@ -546,20 +609,32 @@ EOF
   else
     fail "Quickshell test skipped: no Wayland socket or Hyprland instance"
   fi
-  check_hyprland_unchanged after-session
+  check_host_unchanged after-session
 }
 
 write_shell_qml() {
   mkdir -p "$T/qs"
+  base64 -d <<<"$PROBE_WEBP_B64" >"$T/qs/probe.webp"
   cat >"$T/qs/shell.qml" <<EOF
-// Quickshell test config of test/vm/stack-guest.sh: one magenta panel.
+// Quickshell test config of test/vm/stack-guest.sh: one magenta panel, and
+// a cyan one that is shown once a WebP image has loaded.
 import Quickshell
 import Quickshell.Wayland
 import QtQuick
 
 ShellRoot {
+  id: root
+
+  // Regression check for the Qt 6.10 QML grammar, which rejects \`native\`
+  // as a JavaScript identifier (Upstream's shell declares \`var native\`).
+  // A parse error stops the whole file, so no panel would appear.
+  function nativeNamespace() {
+    var native = "$QS_NAMESPACE"
+    return native
+  }
+
   PanelWindow {
-    WlrLayershell.namespace: "$QS_NAMESPACE"
+    WlrLayershell.namespace: root.nativeNamespace()
     anchors {
       top: true
       left: true
@@ -567,6 +642,25 @@ ShellRoot {
     }
     implicitHeight: $QS_HEIGHT
     color: "#ff00ff"
+
+    Image {
+      id: webpProbe
+      source: "file://$T/qs/probe.webp"
+      width: 1
+      height: 1
+    }
+  }
+
+  PanelWindow {
+    visible: webpProbe.status === Image.Ready
+    WlrLayershell.namespace: "$QS_WEBP_NAMESPACE"
+    anchors {
+      bottom: true
+      left: true
+      right: true
+    }
+    implicitHeight: 40
+    color: "#00ffff"
   }
 }
 EOF
@@ -576,6 +670,24 @@ EOF
 pixel_rgb() {
   XDG_RUNTIME_DIR=$1 WAYLAND_DISPLAY=$2 grim -g "$QS_PIXEL 1x1" -t ppm - 2>>"$L/grim-shell.log" |
     tail -c 3 | od -An -tu1 | xargs
+}
+
+# wait_layer <runtime-dir> <signature> <namespace> <pid> <seconds>: returns 0
+# once hyprctl layers lists the namespace, 1 on timeout or when the process
+# exits.
+wait_layer() {
+  local rt=$1 sig=$2 ns=$3 pid=$4 secs=$5
+  for _ in $(seq "$secs"); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    if HYPRLAND_INSTANCE_SIGNATURE=$sig XDG_RUNTIME_DIR=$rt "$PREFIX/bin/hyprctl" layers \
+      >"$L/hyprctl-layers.txt" 2>&1 && grep -qF "$ns" "$L/hyprctl-layers.txt"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 # shell_run <runtime-dir> <wayland-socket> <hyprland-signature>
@@ -595,17 +707,9 @@ shell_run() {
   setsid env -i "${envs[@]}" "$qs" -p "$T/qs/shell.qml" </dev/null >"$L/quickshell.log" 2>&1 &
   pid=$!
 
-  for _ in $(seq 60); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      break
-    fi
-    if HYPRLAND_INSTANCE_SIGNATURE=$sig XDG_RUNTIME_DIR=$rt "$PREFIX/bin/hyprctl" layers \
-      >"$L/hyprctl-layers.txt" 2>&1 && grep -qF "$QS_NAMESPACE" "$L/hyprctl-layers.txt"; then
-      found=true
-      break
-    fi
-    sleep 1
-  done
+  if wait_layer "$rt" "$sig" "$QS_NAMESPACE" "$pid" 60; then
+    found=true
+  fi
   if ! kill -0 "$pid" 2>/dev/null; then
     fail "Quickshell exited within 60 s"
     show "$L/quickshell.log"
@@ -618,10 +722,22 @@ shell_run() {
     fail "the started process runs '$exe', not $qs"
   fi
   if $found; then
-    pass "hyprctl layers lists the Quickshell panel: $(grep -m1 -F "$QS_NAMESPACE" "$L/hyprctl-layers.txt" | sed 's/^[[:space:]]*//')"
+    pass "hyprctl layers lists the Quickshell panel, whose namespace comes from a function declaring 'var native': $(grep -m1 -F "$QS_NAMESPACE" "$L/hyprctl-layers.txt" | sed 's/^[[:space:]]*//')"
   else
     fail "hyprctl layers does not list the namespace $QS_NAMESPACE within 60 s"
     show "$L/hyprctl-layers.txt"
+    show "$L/quickshell.log"
+  fi
+  if grep -qE "$QML_ERRORS" "$L/quickshell.log"; then
+    fail "Quickshell reported a QML load error:"
+    grep -E "$QML_ERRORS" "$L/quickshell.log" | head -n 5 | show
+  else
+    pass "Quickshell's log has no QML parse or type error"
+  fi
+  if wait_layer "$rt" "$sig" "$QS_WEBP_NAMESPACE" "$pid" 20; then
+    pass "the WebP probe image loaded: hyprctl layers lists $QS_WEBP_NAMESPACE"
+  else
+    fail "hyprctl layers does not list $QS_WEBP_NAMESPACE within 20 s (the WebP image did not load)"
     show "$L/quickshell.log"
   fi
 
@@ -653,10 +769,21 @@ shell_run() {
 
   sudo cat "/proc/$pid/maps" 2>/dev/null | awk '$6 ~ /^\// { print $6 }' | LC_ALL=C sort -u >"$L/quickshell-maps.txt" || true
   check_qt_origin "running Quickshell" "$L/quickshell-maps.txt"
+  if grep -q "^$TRIPLET_LIBDIR/libQt6" "$L/quickshell-maps.txt"; then
+    fail "the running Quickshell maps Ubuntu's Qt libraries:"
+    grep "^$TRIPLET_LIBDIR/libQt6" "$L/quickshell-maps.txt" | show
+  else
+    pass "the running Quickshell maps no $TRIPLET_LIBDIR/libQt6* library"
+  fi
   if grep -qE '/qt6/plugins/platforms/libqwayland' "$L/quickshell-maps.txt"; then
     pass "the running Quickshell loaded the Qt Wayland platform plugin: $(grep -m1 -E '/qt6/plugins/platforms/libqwayland' "$L/quickshell-maps.txt")"
   else
     fail "the running Quickshell has no Qt Wayland platform plugin mapped"
+  fi
+  if grep -qxF "$WEBP_PLUGIN" "$L/quickshell-maps.txt"; then
+    pass "the running Quickshell loaded the Stack's WebP plugin $WEBP_PLUGIN"
+  else
+    fail "the running Quickshell does not map $WEBP_PLUGIN"
   fi
   if [[ $RELEASE == noble ]]; then
     if grep -qxF "$PREFIX/lib/libstdc++.so.6" "$L/quickshell-maps.txt"; then
@@ -725,27 +852,25 @@ phase_purge() {
   else
     pass "the package set equals the one before the install"
   fi
-  check_hyprland_unchanged after-purge
+  check_host_unchanged after-purge
 }
 
-# set_pkgs: the Stack packages of the release, as the host stages them.
+# set_pkgs: the Stack packages, as the host stages them (the same on both
+# releases).
 set_pkgs() {
-  STACK_PKGS=(motanka-stack motanka-stack-hyprland motanka-stack-tools motanka-stack-shell)
-  if [[ $RELEASE == noble ]]; then
-    STACK_PKGS+=(motanka-qt6)
-  fi
-  STACK_PKGS+=(motanka-stack-libs)
+  STACK_PKGS=(motanka-stack motanka-stack-hyprland motanka-stack-tools motanka-stack-shell motanka-qt6 motanka-stack-libs)
 }
 
 main() {
-  (($# == 4)) || {
-    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version>" >&2
+  (($# == 5)) || {
+    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version>" >&2
     exit 2
   }
   PHASE=$1
   RELEASE=$2
   HYPR_VERSION=$3
   QS_VERSION=$4
+  QT_VERSION=$5
   case $RELEASE in
     noble | resolute) ;;
     *)
@@ -753,6 +878,10 @@ main() {
       exit 2
       ;;
   esac
+  if [[ ! $QT_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "invalid Qt version '$QT_VERSION'" >&2
+    exit 2
+  fi
   set_pkgs
   guard
   case $PHASE in

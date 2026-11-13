@@ -16,13 +16,17 @@ License: LicenseRef-motanka-no-license-yet
  apply by law.
 
 Files: qtbase/* qtshadertools/* qtsvg/* qtdeclarative/* qtwayland/*
+ qtimageformats/*
 Copyright: 2008-2026 The Qt Company Ltd. and other contributors
 License: LGPL-3 or GPL-2 or GPL-3
 Comment: Qt's build tools (moc, rcc, qmlcachegen and others, shipped only in
  the build-only motanka-qt6-dev) are under GPL-3 with the Qt GPL Exception
  1.0. The submodules also contain third-party code under their own
  permissive licences (BSD-3-clause, Expat and others), listed in each
- component's qt_attribution.json files.
+ component's qt_attribution.json files. qtimageformats/src/3rdparty holds
+ copies of libwebp (BSD-3-clause), libtiff (libtiff licence), libmng and
+ jasper; only the libwebp copy can be built, on noble, when 24.04's
+ libwebp is not accepted.
 
 License: LGPL-3
  This library is free software; you can redistribute it and/or modify it

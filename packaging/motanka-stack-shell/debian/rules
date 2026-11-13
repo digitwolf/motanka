@@ -31,8 +31,9 @@ override_dh_auto_install:
 override_dh_dwz:
 
 # Libraries in /opt/motanka/lib are outside the ldconfig path: no ldconfig
-# trigger, no shipped shlibs file. debian/shlibs.local covers libcpptrace
-# and, on noble, the libraries of motanka-qt6 and motanka-stack-libs.
+# trigger, no shipped shlibs file. debian/shlibs.local covers libcpptrace,
+# the libraries of motanka-qt6 (exact version: Qt private API) and, on
+# noble, those of motanka-stack-libs.
 override_dh_makeshlibs:
 	bash debian/shell-build.sh shlibs $(DIST) $(VERSION)
 

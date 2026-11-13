@@ -17,16 +17,21 @@
 #          next component finds it (.pc files rewritten into
 #          debian/shell-build/pkgconfig, CMAKE_PREFIX_PATH, -L and
 #          -rpath-link). Qt comes from motanka-qt6-dev in /opt/motanka on
-#          noble and from the archive on resolute. Installed binaries carry
-#          only RUNPATH /opt/motanka/lib (from LDFLAGS; CMake's rpath
-#          handling is off). A finished component leaves a stamp.
+#          both suites; the build stops if the archive's Qt development
+#          files are in the chroot. Installed binaries carry only RUNPATH
+#          /opt/motanka/lib (from LDFLAGS; CMake's rpath handling is off).
+#          A finished component leaves a stamp.
 # install  copies the shipped files of cpptrace and Quickshell into
 #          debian/motanka-stack-shell/opt/motanka, leaving out headers, .pc
-#          and CMake files, static libraries and build-only data.
+#          and CMake files, static libraries and build-only data, and
+#          checks that every Qt library they load resolves from
+#          /opt/motanka/lib.
 # shlibs   writes debian/shlibs.local: the libraries this package ships
-#          (libcpptrace) and, on noble, every library that installed
-#          Motanka packages put in /opt/motanka/lib (motanka-qt6,
-#          motanka-stack-libs), mapped to the package that owns it.
+#          (libcpptrace) and every library that installed Motanka packages
+#          put in /opt/motanka/lib (motanka-qt6; on noble also
+#          motanka-stack-libs), mapped to the package that owns it. Qt's
+#          private API ties Quickshell to the Qt it was built against, so
+#          motanka-qt6 gets an exact-version dependency.
 #
 # Build-time only: LD_LIBRARY_PATH points at the staging lib folder so that
 # build tools find staged libraries inside the chroot. Nothing shipped sets
@@ -44,6 +49,8 @@ DEST=$W/dest
 STAMPS=$W/stamps
 TSV=$TOP/stack/shell-components.tsv
 PKG=motanka-stack-shell
+PKG_QT=motanka-qt6
+TRIPLET_LIBDIR=/usr/lib/x86_64-linux-gnu
 
 C_NAME=()
 C_VERSION=()
@@ -129,14 +136,23 @@ set_env() {
   export PATH=$STAGE$PREFIX/bin:$PATH
   export LD_LIBRARY_PATH=$STAGE$PREFIX/lib
   export PYTHONDONTWRITEBYTECODE=1
-  # noble: Qt is motanka-qt6-dev in /opt/motanka (a build dependency).
-  # resolute: the archive's Qt in /usr.
-  CMAKE_PREFIXES="$STAGE$PREFIX"
-  if [[ $SUITE == noble ]]; then
-    [[ -f $PREFIX/lib/cmake/Qt6/Qt6Config.cmake ]] ||
-      die "$PREFIX/lib/cmake/Qt6/Qt6Config.cmake is missing; motanka-qt6-dev must be installed in the chroot (sbuild-local)"
-    CMAKE_PREFIXES="$CMAKE_PREFIXES;$PREFIX"
-  fi
+  # Qt is motanka-qt6-dev in /opt/motanka (a build dependency) on both
+  # suites. The archive's Qt must not be visible at all.
+  [[ -f $PREFIX/lib/cmake/Qt6/Qt6Config.cmake ]] ||
+    die "$PREFIX/lib/cmake/Qt6/Qt6Config.cmake is missing; motanka-qt6-dev must be installed in the chroot (sbuild-local)"
+  check_no_archive_qt
+  CMAKE_PREFIXES="$STAGE$PREFIX;$PREFIX"
+}
+
+# The archive's Qt development files must not be in the chroot: CMake could
+# then mix Ubuntu's Qt 6.10 into the build.
+check_no_archive_qt() {
+  local f
+  for f in "$TRIPLET_LIBDIR/cmake/Qt6/Qt6Config.cmake" "$TRIPLET_LIBDIR/libQt6Core.so"; do
+    if [[ -e $f ]]; then
+      die "$f exists in the chroot; no Build-Depends may pull in the archive's Qt development files"
+    fi
+  done
 }
 
 # build_cmake <name> <src> [cmake args...]
@@ -304,6 +320,37 @@ is_elf() {
   [[ $(head -c 4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n') == 7f454c46 ]]
 }
 
+# check_qt_resolution: every Qt library that a shipped ELF loads, directly
+# or through another library, resolves from /opt/motanka/lib (motanka-qt6,
+# installed in the chroot), never from the archive.
+check_qt_resolution() {
+  local f dyn line target n=0 bad=0
+  while IFS= read -r -d '' f; do
+    is_elf "$f" || continue
+    dyn=$(readelf -d "$f" 2>/dev/null || true)
+    grep -q '(NEEDED).*\[libQt6' <<<"$dyn" || continue
+    n=$((n + 1))
+    while IFS= read -r line; do
+      [[ $line == *libQt6* ]] || continue
+      if [[ $line == *"not found"* ]]; then
+        log "${f#"$TOP"/}: Qt library not found: ${line//[[:space:]]/ }"
+        bad=$((bad + 1))
+        continue
+      fi
+      [[ $line == *" => "* ]] || continue
+      target=${line#*=> }
+      target=${target%% (*}
+      if [[ $target != "$PREFIX/lib/"* ]]; then
+        log "${f#"$TOP"/}: loads ${line%% =>*} from $target, not from $PREFIX/lib"
+        bad=$((bad + 1))
+      fi
+    done < <(env -u LD_LIBRARY_PATH ldd "$f" 2>&1 || true)
+  done < <(find "$TOP/debian/$PKG$PREFIX" -type f -print0)
+  ((n > 0)) || die "no shipped ELF loads a Qt library; expected at least bin/quickshell"
+  ((bad == 0)) || die "$bad Qt librar(y/ies) of $PKG resolve outside $PREFIX/lib"
+  log "$n ELF files load Qt, all of it from $PREFIX/lib"
+}
+
 cmd_install() {
   local i name d rel n leaks=0 f dyn runpath bad=0
   rm -rf -- "${TOP:?}/debian/$PKG$PREFIX"
@@ -341,6 +388,7 @@ cmd_install() {
     fi
   done < <(find "$TOP/debian/$PKG$PREFIX" -type f -print0)
   ((bad == 0)) || die "$bad ELF problem(s) in $PKG"
+  check_qt_resolution
 
   while IFS= read -r f; do
     if is_elf "$f"; then
@@ -375,18 +423,23 @@ cmd_shlibs() {
   while IFS= read -r -d '' f; do
     shlibs_line "$f" "$PKG" "= $version" >>"$out"
   done < <(find "$TOP/debian/$PKG$PREFIX/lib" -maxdepth 1 -type f -name '*.so*' -print0)
-  # Libraries of installed Motanka packages (noble: motanka-qt6 and
+  # Libraries of installed Motanka packages (motanka-qt6; on noble also
   # motanka-stack-libs). They have no symbols or shlibs files, so without
   # these lines dpkg-shlibdeps finds no dependency information for them.
-  if [[ -d $PREFIX/lib ]]; then
-    while IFS= read -r -d '' f; do
-      owner=$(dpkg-query -S "$f" 2>/dev/null | head -n 1 | cut -d: -f1 || true)
-      [[ $owner =~ ^motanka(-[a-z0-9][a-z0-9+.-]*)?$ ]] || die "$f belongs to no Motanka package (dpkg-query -S: '${owner:-none}')"
-      # shellcheck disable=SC2016 # dpkg-query field
-      over=$(dpkg-query -W -f='${Version}' "$owner")
+  # Quickshell uses Qt's private API, which changes between Qt versions, so
+  # the dependency on motanka-qt6 is on exactly the version built against.
+  [[ -f $PREFIX/lib/libQt6Core.so.6 ]] || die "$PREFIX/lib/libQt6Core.so.6 is missing; $PKG_QT must be installed in the chroot"
+  while IFS= read -r -d '' f; do
+    owner=$(dpkg-query -S "$f" 2>/dev/null | head -n 1 | cut -d: -f1 || true)
+    [[ $owner =~ ^motanka(-[a-z0-9][a-z0-9+.-]*)?$ ]] || die "$f belongs to no Motanka package (dpkg-query -S: '${owner:-none}')"
+    # shellcheck disable=SC2016 # dpkg-query field
+    over=$(dpkg-query -W -f='${Version}' "$owner")
+    if [[ $owner == "$PKG_QT" ]]; then
+      shlibs_line "$f" "$owner" "= $over" >>"$out"
+    else
       shlibs_line "$f" "$owner" ">= $over" >>"$out"
-    done < <(find "$PREFIX/lib" -maxdepth 1 -type f -name '*.so*' -print0)
-  fi
+    fi
+  done < <(find "$PREFIX/lib" -maxdepth 1 -type f -name '*.so*' -print0)
   LC_ALL=C sort -u "$out" >"$TOP/debian/shlibs.local"
   rm -f "$out"
   log "shlibs.local: $(wc -l <"$TOP/debian/shlibs.local") libraries"

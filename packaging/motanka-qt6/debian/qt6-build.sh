@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 # Build driver of the motanka-qt6 source package, called by debian/rules
-# from the top of the unpacked source tree inside the noble sbuild chroot.
+# from the top of the unpacked source tree inside the sbuild chroot of the
+# suite (noble or resolute).
 #
 # Usage: bash debian/qt6-build.sh build   <suite>
 #        bash debian/qt6-build.sh install <suite>
 #        bash debian/qt6-build.sh shlibs  <suite> <debian-version>
 #
 # build    builds the Qt submodules of stack/qt6-components.tsv in file order
-#          (qtbase, qtshadertools, qtsvg, qtdeclarative, qtwayland) with GCC
-#          16 and prefix /opt/motanka. Each one is unpacked by dpkg-source in
-#          the folder <name>/, configured and built out of tree in
-#          debian/qt6-build/build/<name>, and installed with DESTDIR into the
-#          shared staging root debian/qt6-build/stage. Later modules find
-#          the staged Qt through CMAKE_PREFIX_PATH (Qt's CMake packages are
-#          relocatable). Layout under /opt/motanka, as Arch's Qt under /usr:
+#          (qtbase, qtshadertools, qtsvg, qtdeclarative, qtwayland,
+#          qtimageformats) with GCC 16 and prefix /opt/motanka. GCC 16 is
+#          the toolchain PPA's on noble and the archive's on resolute. Each
+#          module is unpacked by dpkg-source in the folder <name>/,
+#          configured and built out of tree in debian/qt6-build/build/<name>,
+#          and installed with DESTDIR into the shared staging root
+#          debian/qt6-build/stage. Later modules find the staged Qt through
+#          CMAKE_PREFIX_PATH (Qt's CMake packages are relocatable). Layout
+#          under /opt/motanka, as Arch's Qt under /usr:
 #            lib/                libQt6*.so.*, CMake and pkg-config files
 #            lib/qt6/plugins, lib/qt6/qml   plugins and QML modules
 #            lib/qt6/bin, lib/qt6/libexec   tools (moc, qmlcachegen, ...),
 #                                kept out of /opt/motanka/bin, which is on
 #                                the session PATH
 #            lib/qt6/{mkspecs,metatypes,modules}, include/qt6, share/qt6
+#          Qt finds its plugins and QML modules relative to libQt6Core
+#          (QLibraryInfo, the default relocatable build): with the library
+#          in /opt/motanka/lib that is /opt/motanka/lib/qt6/{plugins,qml},
+#          never Ubuntu's /usr/lib/x86_64-linux-gnu/qt6.
 #          Every ELF gets RUNPATH /opt/motanka/lib from LDFLAGS; CMake's and
 #          Qt's own rpath handling is off (CMAKE_SKIP_RPATH). A finished
 #          module leaves a stamp, so a rerun continues where it stopped.
@@ -47,6 +54,8 @@ TSV=$TOP/stack/qt6-components.tsv
 PKG_RT=motanka-qt6
 PKG_DEV=motanka-qt6-dev
 PACKAGES=("$PKG_RT" "$PKG_DEV")
+TRIPLET_LIBDIR=/usr/lib/x86_64-linux-gnu
+WEBP_PLUGIN=lib/qt6/plugins/imageformats/libqwebp.so
 
 C_NAME=()
 C_VERSION=()
@@ -70,13 +79,15 @@ read_components() {
       die "$TSV: line for '$name' does not have exactly 7 fields"
     fi
     [[ $build == qt ]] || die "$TSV: $name has build '$build'; this package builds only Qt submodules (qt)"
-    [[ $suites == noble ]] || die "$TSV: $name is for '$suites'; motanka-qt6 is built for noble only"
+    # Requirement 1.3: the same Qt on both releases.
+    [[ $suites == both ]] || die "$TSV: $name is for '$suites'; every Qt module of motanka-qt6 is built for both suites"
     [[ $package == "$PKG_RT" ]] || die "$TSV: $name names package '$package', expected $PKG_RT"
     C_NAME+=("$name")
     C_VERSION+=("$version")
     : "$url" "$sha"
   done <"$TSV"
   ((${#C_NAME[@]} > 0)) || die "$TSV lists no components"
+  [[ ${C_NAME[0]} == qtbase ]] || die "$TSV: qtbase must be the first module"
 }
 
 # Parallel jobs: DEB_BUILD_OPTIONS parallel=N, else the CPU count, at most
@@ -115,16 +126,30 @@ set_env() {
   export PYTHONDONTWRITEBYTECODE=1
 }
 
+# The archive's Qt development files must not be in the chroot: a module
+# could then pick up Ubuntu's Qt 6.10 instead of the staged one.
+check_no_archive_qt() {
+  local f
+  for f in "$TRIPLET_LIBDIR/cmake/Qt6/Qt6Config.cmake" "$TRIPLET_LIBDIR/libQt6Core.so"; do
+    if [[ -e $f ]]; then
+      die "$f exists in the chroot; no Build-Depends may pull in the archive's Qt development files"
+    fi
+  done
+}
+
 # Arguments of qtbase only; the other modules read the layout and the
 # features from the staged qtbase. From spike S1, plus libinput off: Qt
 # uses libinput only for its eglfs and linuxfb input handlers, which a
 # Wayland client such as Quickshell never loads, and leaving it out keeps
-# 24.04's old libinput out of the package.
+# 24.04's old libinput out of the package. The plugin and QML folders are
+# named explicitly although they are the defaults below lib/qt6.
 qtbase_args() {
   printf '%s\n' \
     -DINSTALL_BINDIR=lib/qt6/bin \
     -DINSTALL_LIBEXECDIR=lib/qt6/libexec \
     -DINSTALL_ARCHDATADIR=lib/qt6 \
+    -DINSTALL_PLUGINSDIR=lib/qt6/plugins \
+    -DINSTALL_QMLDIR=lib/qt6/qml \
     -DINSTALL_DATADIR=share/qt6 \
     -DINSTALL_INCLUDEDIR=include/qt6 \
     -DINSTALL_MKSPECSDIR=lib/qt6/mkspecs \
@@ -141,14 +166,34 @@ qtbase_args() {
     -DFEATURE_vulkan=ON
 }
 
+# Arguments of qtimageformats: the WebP and TIFF plugins against the
+# archive's libwebp and libtiff (both releases have them, and they get the
+# archive's security updates), plus the dependency-free ICNS, TGA and WBMP
+# plugins. JPEG 2000 (jasper) and MNG need libraries the Stack does not
+# otherwise use; Upstream's themes ship no such files. resolute requires
+# the system libwebp; on noble Qt falls back to its bundled copy if it
+# rejects 24.04's libwebp 1.3, and the build log says which one is used.
+qtimageformats_args() {
+  printf '%s\n' \
+    -DFEATURE_webp=ON \
+    -DFEATURE_tiff=ON \
+    -DFEATURE_system_tiff=ON \
+    -DFEATURE_jasper=OFF \
+    -DFEATURE_mng=OFF
+  if [[ $SUITE == resolute ]]; then
+    printf '%s\n' -DFEATURE_system_webp=ON
+  fi
+}
+
 # build_module <name>
 build_module() {
   local name=$1 src=$TOP/$1 ldp
   local -a extra=()
   [[ -d $src ]] || die "module source $name/ is missing; the source package lacks motanka-qt6_*.orig-$name.tar.*"
-  if [[ $name == qtbase ]]; then
-    mapfile -t extra < <(qtbase_args)
-  fi
+  case $name in
+    qtbase) mapfile -t extra < <(qtbase_args) ;;
+    qtimageformats) mapfile -t extra < <(qtimageformats_args) ;;
+  esac
   rm -rf -- "${BUILD:?}/$name"
   mkdir -p "$BUILD"
   ldp="$BUILD/$name/lib:$STAGE$PREFIX/lib"
@@ -168,6 +213,23 @@ build_module() {
     "${extra[@]}"
   LD_LIBRARY_PATH=$ldp cmake --build "$BUILD/$name" -j "$JOBS"
   LD_LIBRARY_PATH=$ldp DESTDIR="$STAGE" cmake --install "$BUILD/$name"
+  if [[ $name == qtimageformats ]]; then
+    check_webp_plugin
+  fi
+}
+
+# The WebP plugin exists and the log says which libwebp it uses.
+check_webp_plugin() {
+  local f=$STAGE$PREFIX/$WEBP_PLUGIN dyn
+  [[ -f $f ]] || die "qtimageformats installed no $WEBP_PLUGIN"
+  dyn=$(readelf -d "$f")
+  if grep -q '(NEEDED).*\[libwebp\.so\.' <<<"$dyn"; then
+    log "WebP plugin: system libwebp ($(sed -n 's/.*(NEEDED).*\[\(libwebp[^]]*\)\]$/\1/p' <<<"$dyn" | xargs))"
+  elif [[ $SUITE == resolute ]]; then
+    die "the resolute WebP plugin does not link the archive's libwebp"
+  else
+    log "WebP plugin: Qt's bundled libwebp (the archive's was not accepted)"
+  fi
 }
 
 check_stage() {
@@ -185,6 +247,7 @@ cmd_build() {
   local i name
   set_jobs
   set_env
+  check_no_archive_qt
   mkdir -p "$STAMPS" "$STAGE$PREFIX/lib"
   log "suite $SUITE, $($CXX --version | head -n 1), cmake $(cmake --version | head -n 1)"
   for i in "${!C_NAME[@]}"; do
@@ -286,6 +349,13 @@ cmd_install() {
     [[ -d $TOP/debian/$p$PREFIX ]] || die "$p would be empty"
   done
   [[ -e $TOP/debian/$PKG_RT$PREFIX/lib/qt6/plugins/platforms ]] || die "$PKG_RT has no platform plugins"
+  [[ -f $TOP/debian/$PKG_RT$PREFIX/$WEBP_PLUGIN ]] || die "$PKG_RT has no WebP plugin ($WEBP_PLUGIN)"
+  # The C++ runtime is never part of this package: motanka-stack-libs
+  # bundles GCC 16's on noble, resolute uses the archive's.
+  if compgen -G "$TOP/debian/$PKG_RT$PREFIX/lib/libstdc++*" >/dev/null ||
+    compgen -G "$TOP/debian/$PKG_RT$PREFIX/lib/libgcc_s*" >/dev/null; then
+    die "$PKG_RT would ship a C++ runtime in $PREFIX/lib"
+  fi
 
   # qmake's .prl files record the build folder; Debian's Qt drops the line.
   while IFS= read -r -d '' f; do
@@ -348,9 +418,10 @@ main() {
   (($# >= 2)) || die "usage: bash debian/qt6-build.sh <build|install|shlibs> <suite> [version]"
   local cmd=$1
   SUITE=$2
-  if [[ $SUITE != noble ]]; then
-    die "motanka-qt6 is built for noble only (got '$SUITE'); Ubuntu 26.04 has Qt 6.10 in its archive"
-  fi
+  case $SUITE in
+    noble | resolute) ;;
+    *) die "the changelog distribution must be noble or resolute (got '$SUITE'); build with packaging/build.sh" ;;
+  esac
   read_components
   case $cmd in
     build) cmd_build ;;

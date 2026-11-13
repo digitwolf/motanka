@@ -1,6 +1,8 @@
 # Locally built Motanka .debs that sbuild gets with --extra-package, at
 # build time only (packaging/build.sh). Format: <suite> <binary package>...
 # Each must be <name>_<version>_amd64.deb of the version being built.
-# noble: Qt 6.10 (motanka-qt6-dev pulls motanka-qt6), and motanka-stack-libs,
-# which motanka-qt6 depends on for GCC 16's C++ runtime.
+# Both suites build against the Stack's Qt 6.12 (motanka-qt6-dev pulls
+# motanka-qt6). noble also needs motanka-stack-libs, which motanka-qt6
+# depends on there for GCC 16's C++ runtime; resolute uses the archive's.
 noble motanka-qt6 motanka-qt6-dev motanka-stack-libs
+resolute motanka-qt6 motanka-qt6-dev

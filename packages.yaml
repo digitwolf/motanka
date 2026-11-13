@@ -348,26 +348,19 @@ qmk-hid:
 qrencode:
   all: {apt: qrencode}
 qt6-base:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qt6-qpa-plugins, reason: "Qt GUI runtime and platform plugins"}
+  all: {motanka: motanka-qt6, reason: "Upstream's shell needs Qt 6.11 or later and both archives have 6.10, so the Stack ships Qt 6.12"}
 qt6-declarative:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qml6-module-qtquick, reason: "QML and Qt Quick runtime"}
+  all: {motanka: motanka-qt6, reason: "Upstream's shell needs Qt 6.11 or later and both archives have 6.10, so the Stack ships Qt 6.12"}
 qt6-imageformats:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qt6-image-formats-plugins}
+  all: {motanka: motanka-qt6, reason: "the Stack's Qt 6.12 includes the WebP, TIFF, ICNS, TGA and WBMP plugins"}
 qt6-multimedia:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qml6-module-qtmultimedia, reason: "Qt Multimedia runtime and its QML module"}
+  all: {skip: "not in the Stack's Qt; Upstream's shell draws stills only and leaves video to owe, which is not ported"}
 qt6-svg:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qt6-svg-plugins}
+  all: {motanka: motanka-qt6, reason: "Upstream's shell needs Qt 6.11 or later and both archives have 6.10, so the Stack ships Qt 6.12"}
 qt6-wayland:
-  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
-  resolute: {apt: qt6-wayland}
+  all: {motanka: motanka-qt6, reason: "Upstream's shell needs Qt 6.11 or later and both archives have 6.10, so the Stack ships Qt 6.12"}
 quickshell:
-  noble: {motanka: motanka-stack-shell, reason: "Stack build of Quickshell, using the bundled motanka-qt6"}
-  resolute: {motanka: motanka-stack-shell, reason: "Stack build of Quickshell against the system Qt"}
+  all: {motanka: motanka-stack-shell, reason: "Stack build of Quickshell on the Stack's Qt 6.12 (motanka-qt6)"}
 ripgrep:
   all: {apt: ripgrep}
 ruby:

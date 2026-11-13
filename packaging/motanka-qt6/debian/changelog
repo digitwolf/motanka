@@ -2,5 +2,9 @@ motanka-qt6 (0.1.0-1) UNRELEASED; urgency=medium
 
   * Initial package: Qt 6.10.2 (qtbase, qtshadertools, qtsvg, qtdeclarative,
     qtwayland) under /opt/motanka for Ubuntu 24.04, built with GCC 16.
+  * Qt 6.12.0 for both Ubuntu 24.04 and 26.04: Upstream's shell needs Qt
+    6.11 or later, and both archives carry 6.10. On 26.04 it uses the
+    archive's GCC 16 and C++ runtime.
+  * Add qtimageformats (WebP, TIFF, ICNS, TGA and WBMP plugins).
 
  -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

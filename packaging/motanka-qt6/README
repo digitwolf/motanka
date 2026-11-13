@@ -1,21 +1,38 @@
-Source of motanka-qt6 and motanka-qt6-dev: Qt 6.10.2 (qtbase,
-qtshadertools, qtsvg, qtdeclarative, qtwayland) under /opt/motanka for
-Ubuntu 24.04 only. Quickshell (motanka-stack-shell) needs Qt 6.6 or later;
-24.04 has 6.4.2, while 26.04 has 6.10.2 in its archive, so the suites file
-lists noble and packaging/build.sh skips the package for resolute.
+Source of motanka-qt6 and motanka-qt6-dev: Qt 6.12.0 (qtbase,
+qtshadertools, qtsvg, qtdeclarative, qtwayland, qtimageformats) under
+/opt/motanka, for Ubuntu 24.04 and 26.04. Upstream's desktop shell declares
+`var native = ...` in QML, which Qt accepts from 6.11 on; both archives
+carry Qt 6.10, so the Stack ships its own Qt on both releases
+(requirement 1.2; design.md, "Qt for both releases"). When a release's
+archive has Qt 6.11 or later, that release can go back to it.
 
 The upstream tarballs are listed in stack/qt6-components.tsv (imported by
 build-imports). test/vm/build downloads and verifies them with
 stack/fetch-sources --components stack/qt6-components.tsv and passes them
 to packaging/build.sh as dpkg-source 3.0 (quilt) orig-<component>
-tarballs. GCC 16 comes from the Ubuntu toolchain PPA (sbuild-repos), at
-build time only.
+tarballs.
+
+Per release:
+  noble     GCC 16 from the Ubuntu toolchain PPA (sbuild-repos), at build
+            time only. GCC 16's libstdc++ and libgcc_s come from
+            motanka-stack-libs in /opt/motanka/lib, so motanka-qt6 depends
+            on it (debian/rules sets ${motanka:Depends}).
+  resolute  the archive's GCC 16 and C++ runtime; nothing is bundled and
+            motanka-qt6 depends on the archive's libstdc++6.
+Both: every ELF has RUNPATH /opt/motanka/lib only. Qt derives its plugin
+and QML folders from the location of libQt6Core, so they are
+/opt/motanka/lib/qt6/plugins and /opt/motanka/lib/qt6/qml; Ubuntu's Qt in
+/usr is never searched. No ld.so.conf.d entry and no LD_LIBRARY_PATH.
+
+Image formats (qtimageformats): WebP and TIFF against the archive's
+libwebp and libtiff, plus ICNS, TGA and WBMP; no JPEG 2000 and no MNG.
+qtbase adds JPEG, GIF, ICO and PNG; qtsvg adds SVG. The resolute build
+requires the archive's libwebp; on noble Qt falls back to its bundled
+libwebp if it rejects 24.04's 1.3, and the build log names the one used.
 
 Packages:
   motanka-qt6      libraries (/opt/motanka/lib/libQt6*.so.*), plugins and
-                   QML modules (/opt/motanka/lib/qt6/{plugins,qml}). Depends
-                   on motanka-stack-libs, which ships GCC 16's libstdc++ in
-                   /opt/motanka/lib.
+                   QML modules (/opt/motanka/lib/qt6/{plugins,qml}).
   motanka-qt6-dev  headers, CMake and pkg-config files, tools, mkspecs and
                    static helper libraries. Build time only: its control
                    carries "Motanka-Build-Only: yes", chumak/build-repo
@@ -25,4 +42,5 @@ Packages:
 
 Build order on noble: packaging/motanka-stack (for motanka-stack-libs, which
 the shell build installs as a dependency of motanka-qt6), then
+packaging/motanka-qt6, then packaging/motanka-stack-shell. On resolute:
 packaging/motanka-qt6, then packaging/motanka-stack-shell.

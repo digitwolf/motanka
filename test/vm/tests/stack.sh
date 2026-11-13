@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # VM test for the Stack packages (tasks 7.1 to 7.6): install the Stack
-# .debs of one release (motanka-stack, motanka-stack-shell and, on noble,
-# motanka-qt6) in a fresh VM with a virgl GPU, check library resolution,
-# RUNPATH, the C++ runtime and debcheck, start Hyprland on tty1, take a
-# screenshot, run Quickshell with a one-panel config, take a second
-# screenshot, purge, and compare Fingerprints.
+# .debs of one release (motanka-stack, motanka-qt6 and motanka-stack-shell)
+# in a fresh VM with a virgl GPU and Ubuntu's own Qt installed, check
+# library resolution, RUNPATH, the C++ runtime and debcheck, start Hyprland
+# on tty1, take a screenshot, run Quickshell with a one-panel config, take a
+# second screenshot, purge, and compare Fingerprints.
 #
 # Usage: test/vm/tests/stack.sh     (test/run-all runs it)
 #
@@ -19,7 +19,7 @@
 # package with a missing .deb (or with MOTANKA_STACK_REBUILD=1),
 # test/vm/build builds it for the release first, in one build VM and in
 # this order: packaging/motanka-stack (more than an hour),
-# packaging/motanka-qt6 (noble only) and packaging/motanka-stack-shell.
+# packaging/motanka-qt6 and packaging/motanka-stack-shell.
 # motanka-qt6-dev is needed for the shell build only and is not installed.
 #
 # Checks (requirements 1.3, 3.4, 5.14, 8.1, 8.2, 8.4, 8.5, 8.8; the guest
@@ -31,19 +31,27 @@
 #   - every ELF under /opt/motanka: no RPATH, RUNPATH only /opt/motanka/lib,
 #     ldd resolves every library from /opt/motanka/lib or the system
 #     library folders
-#   - noble uses the bundled libstdc++, resolute the system one
-#   - on resolute, Ubuntu's hyprland (installed first) stays installed and
-#     unchanged through install, session and purge
+#   - noble uses the bundled libstdc++, resolute the system one, for
+#     Hyprland, the Stack's Qt and Quickshell
+#   - Ubuntu's Qt 6 (installed first, on both releases) and, on resolute,
+#     Ubuntu's hyprland stay installed and unchanged through install,
+#     session and purge
+#   - the Stack's Qt is the version in stack/qt6-components.tsv and
+#     motanka-qt6 ships the WebP image plugin
 #   - start-hyprland on tty1 (getty autologin) runs /opt/motanka/bin/Hyprland,
 #     hyprctl monitors lists Virtual-1, grim captures a screenshot into the
 #     results folder, and no process has LD_LIBRARY_PATH
 #   - quickshell --version reports the version in stack/shell-components.tsv;
 #     every Qt library ldd resolves for it, and every Qt library and plugin
-#     the running Quickshell maps, is under /opt/motanka on noble and from
-#     the system on resolute
-#   - in the running Hyprland session, Quickshell shows a magenta
-#     PanelWindow: hyprctl layers lists its namespace, a pixel inside it is
-#     magenta, and grim saves shot-shell-<release>.png to the results folder
+#     the running Quickshell maps, is under /opt/motanka on both releases
+#     (none is /usr/lib/x86_64-linux-gnu/libQt6*)
+#   - in the running Hyprland session, Quickshell loads a config whose
+#     panel namespace comes from a function declaring `var native` (the
+#     Qt 6.10 grammar problem) and shows a magenta PanelWindow: hyprctl
+#     layers lists its namespace, a pixel inside it is magenta, and grim
+#     saves shot-shell-<release>.png to the results folder; a second panel
+#     appears once a WebP image has loaded, and the running Quickshell maps
+#     the Stack's WebP plugin
 #   - after purging the Stack and the packages it pulled in, the
 #     Fingerprint equals the one taken before the install, apart from the
 #     Allowlist (this includes sysctl.txt, so the Stack changed no sysctl)
@@ -70,10 +78,7 @@ GUEST_T=/tmp/motanka-stack-test
 STACK_DEBS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
 QT_DEBS=(motanka-qt6 motanka-qt6-dev)
 SHELL_DEBS=(motanka-stack-shell)
-PKGS=("${STACK_DEBS[@]}" "${SHELL_DEBS[@]}")
-if [[ $release == noble ]]; then
-  PKGS+=(motanka-qt6)
-fi
+PKGS=("${STACK_DEBS[@]}" motanka-qt6 "${SHELL_DEBS[@]}")
 
 failures=0
 pass() { mv_log "PASS: $*"; }
@@ -99,6 +104,10 @@ qs_version=$(awk -F'\t' '$1 == "quickshell" { print $2 }' "$MV_REPO/stack/shell-
 if [[ -z $qs_version ]]; then
   mv_die "stack/shell-components.tsv has no quickshell line"
 fi
+qt_version=$(awk -F'\t' '$1 == "qtbase" { print $2 }' "$MV_REPO/stack/qt6-components.tsv")
+if [[ -z $qt_version ]]; then
+  mv_die "stack/qt6-components.tsv has no qtbase line"
+fi
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 # --- 1. the .debs -------------------------------------------------------------
@@ -115,7 +124,7 @@ if [[ $rebuild == 1 ]] || ! have_debs "${STACK_DEBS[@]}"; then
   to_build+=("$MV_REPO/packaging/motanka-stack")
 fi
 qt_rebuilt=false
-if [[ $release == noble ]] && { [[ $rebuild == 1 ]] || ! have_debs "${QT_DEBS[@]}"; }; then
+if [[ $rebuild == 1 ]] || ! have_debs "${QT_DEBS[@]}"; then
   to_build+=("$MV_REPO/packaging/motanka-qt6")
   qt_rebuilt=true
 fi
@@ -155,7 +164,7 @@ mv_copy_to_vm "$tvm" "$stage" "$GUEST_T"
 # phase <name>: runs one guest phase, logs it and counts its checks.
 phase() {
   local name=$1 rc=0 f p
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" \
+  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" \
     </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)
