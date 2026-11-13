@@ -96,6 +96,18 @@ subids() {
   fi
 }
 
+# sbuild's unshare mode unpacks the chroot under /tmp, which is a RAM-backed
+# tmpfs on 26.04: the Stack build ran out of space linking Hyprland. Use the
+# disk-backed /var/tmp instead.
+sbuild_config() {
+  local conf=$HOME/.config/sbuild/config.pl
+  mkdir -p "$(dirname "$conf")"
+  cat >"$conf" <<'EOF'
+$unshare_tmpdir_template = '/var/tmp/tmp.sbuild.XXXXXXXXXX';
+1;
+EOF
+}
+
 chroot_tarball() {
   local suite=$1 dest tmp
   dest=$CHROOTS/$suite-amd64.tar.zst
@@ -136,6 +148,7 @@ main() {
   userns
   tools
   subids
+  sbuild_config
   for suite in "$@"; do
     chroot_tarball "$suite"
   done
