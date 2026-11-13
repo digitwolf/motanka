@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test exports are intended
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # scripts are single-quoted on purpose
 # Unit tests for task 13.3: the default-deny sudo dispatcher, the boot and

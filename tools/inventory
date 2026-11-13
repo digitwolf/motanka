@@ -671,7 +671,14 @@ class ShellLexer:
         def flush():
             if st.words or st.redirs:
                 self.cmds.append(Cmd(st.line, st.words, st.redirs))
-                if first_word(st.words) == "esac" and self.case_stack:
+                # first_word() skips keywords, esac among them, so the
+                # closing word is checked directly.
+                if (
+                    self.case_stack
+                    and st.words
+                    and not st.words[0].quoted
+                    and st.words[0].value == "esac"
+                ):
                     self.case_stack.pop()
             st.words = []
             st.redirs = []
@@ -859,10 +866,9 @@ def short_flags(args):
 
 
 def words_detail(words, limit):
-    text = " ".join(w.raw for w in words[:limit])
-    if len(words) > limit:
-        text += " ..."
-    return text
+    """The first `limit` words as written. Later words are dropped without a
+    marker, so a detail is the same for every call with the same start."""
+    return " ".join(w.raw for w in words[:limit])
 
 
 def strip_quotes(s):

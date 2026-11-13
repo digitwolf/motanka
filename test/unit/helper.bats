@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test exports are intended
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # stub scripts are single-quoted on purpose
 # Unit tests for task 13.4: the Helper (7.7, 7.11, 7.12, 7.13).
@@ -133,10 +134,23 @@ random_name() {
   printf '%s\n' "$s"
 }
 
+# is_accepted <name>: 0 if the name is one the Package_Map fixture or the
+# property test's ledger line makes acceptable. Compares strings only, so
+# empty names and names with characters a bash subscript cannot hold are
+# checked safely.
+is_accepted() {
+  local a
+  for a in fd-find fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 gvfs-backends \
+    motanka-stack-tools flatpak libbar1; do
+    if [[ $1 == "$a" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 @test "property: any name outside the Package_Map and the ledger is refused without pkexec or apt-get" {
   local seed=${HELPER_SEED:-$(date +%s)} i name
-  local -A accepted=([fd-find]=1 [fcitx5-frontend-gtk3]=1 [fcitx5-frontend-gtk4]=1 [gvfs-backends]=1
-    [motanka-stack-tools]=1 [flatpak]=1 [libbar1]=1)
   ledger_line pkg-installed libbar1 1.0-1 auto
   RANDOM=$seed
   local -a names=('' '-y' '--allow-unauthenticated' 'Fd-find' 'fd find' 'fd-find;id' '../fd-find'
@@ -145,7 +159,7 @@ random_name() {
     names+=("$(random_name)")
   done
   for name in "${names[@]}"; do
-    if [[ -n ${accepted[$name]:-} ]]; then
+    if is_accepted "$name"; then
       continue
     fi
     run "$HELPER" install "$name"
@@ -179,11 +193,22 @@ random_name() {
 @test "flatpak is accepted only when the map has a Flatpak outcome" {
   run "$HELPER" install flatpak
   assert_success
+  run apt_calls
+  assert_line --index 0 '-s -q install --no-remove --no-install-recommends flatpak'
+  assert_equal "${#lines[@]}" 2
+  run ledger_verbs
+  assert_output "$(printf 'menu-install\t%s\tflatpak\tapt' "$UID_NOW")"
+  # Start the second part from the state before the first install: the
+  # ledger line above would make flatpak acceptable on its own (a name in
+  # the System_Ledger is accepted), and the stubbed dpkg database lists it.
+  rm -f "$LEDGER" "$LOGS/apt-get" "$LOGS/pkexec"
+  : >"$FAKE_DPKG"
   grep -v '^chromium' "$MOTANKA_PACKAGE_MAP" >"$T/map" && mv "$T/map" "$MOTANKA_PACKAGE_MAP"
-  rm -f "$LOGS/apt-get"
   run "$HELPER" install flatpak
   assert_failure 2
-  [[ ! -e $LOGS/apt-get ]]
+  assert_output --partial 'not an outcome in the Package_Map'
+  [[ ! -e $LOGS/apt-get && ! -e $LOGS/pkexec ]]
+  [[ ! -e $LEDGER ]]
 }
 
 @test "remove accepts only installed packages from the System_Ledger and never motanka-*" {

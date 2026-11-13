@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test exports are intended
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # Unit tests for task 13.5: src/lib/outcomes.sh, the binary and Flatpak
 # outcomes (4.8, 4.9, 7.15), desktop entries limited to the Motanka session
@@ -13,7 +14,7 @@ setup() {
   load 'fixtures/compat/common'
   compat_setup
   use_helper_stub
-  MK_CMD=test
+  MK_CMD="test"
   # shellcheck source=../../src/lib/common.sh
   source "$SRC/lib/common.sh"
   # shellcheck source=../../src/lib/sysledger.sh

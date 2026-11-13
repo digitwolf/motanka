@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test exports are intended
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # scripts and expected texts are single-quoted on purpose
 # Unit tests for task 13.1: upstream.pin, tools/vendor, tools/genwrappers,
@@ -117,7 +118,19 @@ env_script() {
   fi
   run "$REPO/tools/vendor" --tarball "$tarball" stable "$T/out"
   assert_success
-  run diff -r --no-dereference "$REPO/.cache/upstream/omarchy" "$T/out"
+  # The cached tree has Upstream's top-level AGENTS.md and CLAUDE.md renamed
+  # to *.upstream-ref.md, so AI tools working in this repository do not
+  # read them as instructions. Undo exactly those two renames in a copy;
+  # every other difference fails the comparison.
+  local cached=$T/cached f
+  cp -a -- "$REPO/.cache/upstream/omarchy" "$cached"
+  for f in AGENTS CLAUDE; do
+    if [[ -e $cached/$f.upstream-ref.md || -L $cached/$f.upstream-ref.md ]]; then
+      [[ ! -e $cached/$f.md && ! -L $cached/$f.md ]]
+      mv -- "$cached/$f.upstream-ref.md" "$cached/$f.md"
+    fi
+  done
+  run diff -r --no-dereference "$cached" "$T/out"
   assert_success
 }
 

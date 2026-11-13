@@ -106,7 +106,7 @@ bin/omarchy-channel-set	128	omarchy-path	$OMARCHY_PATH/install/helpers/pacman.sh
 bin/omarchy-channel-set	144	omarchy-path	$OMARCHY_PATH
 bin/omarchy-channel-set	144	omarchy-path	/usr/share/omarchy
 bin/omarchy-channel-set	151	omarchy-path	$OMARCHY_PATH/bin:$PATH
-bin/omarchy-channel-set	159	arch-tool	pacman -S --needed --noconfirm ...
+bin/omarchy-channel-set	159	arch-tool	pacman -S --needed --noconfirm
 bin/omarchy-channel-set	159	privileged	pacman -S --needed --noconfirm --ask 4 "${packages[@]}"
 bin/omarchy-channel-set	169	omarchy-path	$OMARCHY_PATH/bin
 bin/omarchy-channel-set	174	omarchy-path	/usr/share/omarchy
@@ -138,8 +138,8 @@ bin/omarchy-dev-install-ydoo	42	user-unit	ydotool.service (start)
 bin/omarchy-dev-link	113	privileged	tee /etc/omarchy.conf
 bin/omarchy-dev-link	115	privileged	install -Dm440 -o root -g root "$staged_sudoers" "$sudoers_file"
 bin/omarchy-dev-notification-demo	57	session	hyprland (argument of 14) ?
-bin/omarchy-dev-pkg-test	125	arch-tool	makepkg -s --skipchecksums --noconfirm ...
-bin/omarchy-dev-pkg-test	136	arch-tool	pacman -U --noconfirm --overwrite='*' ...
+bin/omarchy-dev-pkg-test	125	arch-tool	makepkg -s --skipchecksums --noconfirm
+bin/omarchy-dev-pkg-test	136	arch-tool	pacman -U --noconfirm --overwrite='*'
 bin/omarchy-dev-pkg-test	136	privileged	pacman -U --noconfirm --overwrite='*' "$built_pkg"
 bin/omarchy-dev-status	8	omarchy-path	/usr/share/omarchy
 bin/omarchy-dev-status	20	omarchy-path	$OMARCHY_PATH
@@ -176,11 +176,11 @@ bin/omarchy-done	30	home-write	~/.local/state/omarchy/done/$name [namespaced] ?
 bin/omarchy-done	33	home-write	~/.local/state/omarchy/done [namespaced] ?
 bin/omarchy-done	34	home-write	~/.local/state/omarchy/done/$name [namespaced] ?
 bin/omarchy-drive-password	16	omarchy-path	$OMARCHY_PATH/install/provisioning/luks-rekey.sh
-bin/omarchy-drive-password	48	privileged	cryptsetup open --test-passphrase --verbose --token-type passphrase-only --key-file - ...
+bin/omarchy-drive-password	48	privileged	cryptsetup open --test-passphrase --verbose --token-type passphrase-only --key-file -
 bin/omarchy-drive-password	57	privileged	cryptsetup luksDump "$1"
-bin/omarchy-drive-password	73	privileged	cryptsetup open --test-passphrase --token-type passphrase-only --key-slot "$slot" --key-file ...
+bin/omarchy-drive-password	73	privileged	cryptsetup open --test-passphrase --token-type passphrase-only --key-slot "$slot" --key-file
 bin/omarchy-drive-password	86	privileged	cryptsetup luksKillSlot -q --key-file - "$drive" "$slot"
-bin/omarchy-drive-password	93	privileged	cryptsetup open --test-passphrase --token-type passphrase-only --key-slot "$slot" --key-file ...
+bin/omarchy-drive-password	93	privileged	cryptsetup open --test-passphrase --token-type passphrase-only --key-slot "$slot" --key-file
 bin/omarchy-drive-password	107	privileged	cryptsetup isLuks --type luks2 "$drive"
 bin/omarchy-drive-password	112	privileged	bash -c 'IFS= read -r current; drive=$1; shift; exec cryptsetup luksChangeKey "$@" --key-file <(printf "%s" "$current") "$drive" <(cat)' bash "$drive" "${pbkdf[@]}"
 bin/omarchy-drive-password	132	omarchy-path	$OMARCHY_PATH/bin/omarchy-lifecycle-dispatch
@@ -221,7 +221,7 @@ bin/omarchy-hibernation-setup	35	arch-tool	limine-mkinitcpio (argument of omarch
 bin/omarchy-hibernation-setup	40	arch-path	/etc/mkinitcpio.conf.d/omarchy_resume.conf
 bin/omarchy-hibernation-setup	42	arch-path	/etc/limine-entry-tool.d/resume.conf
 bin/omarchy-hibernation-setup	51	privileged	/usr/bin/mktemp -- "${destination%/*}/.${destination##*/}.omarchy.XXXXXX"
-bin/omarchy-hibernation-setup	54	privileged	/usr/bin/install -m "$mode" -o root -g root -T ...
+bin/omarchy-hibernation-setup	54	privileged	/usr/bin/install -m "$mode" -o root -g root -T
 bin/omarchy-hibernation-setup	55	privileged	/usr/bin/mv -Tf -- "$stage" "$destination"
 bin/omarchy-hibernation-setup	58	privileged	/usr/bin/rm -f -- "$stage"
 bin/omarchy-hibernation-setup	108	privileged	install -Dm644 /dev/null "$RESUME_REBUILD_PENDING"
@@ -283,6 +283,7 @@ bin/omarchy-hyprland-window-transparency	30	home-write	~/.local/state/omarchy/to
 bin/omarchy-hyprland-window-width	83	home-write	~/.local/state/omarchy/windows [namespaced] ?
 bin/omarchy-hyprland-workspace-layout-default	14	home-write	~/.local/state/omarchy [namespaced] ?
 bin/omarchy-hyprland-workspace-layout-default	14	home-write	~/.local/state/omarchy/workspace-layout-notification [namespaced] ?
+bin/omarchy-hyprland-workspace-layout-default	40	home-write	~/.local/state/omarchy/workspace-layouts [namespaced] ?
 bin/omarchy-hyprland-workspace-layout-default	80	home-write	~/.local/state/omarchy/workspace-layouts/$workspace.lua [namespaced] ?
 bin/omarchy-hyprland-workspace-layout-default	87	home-write	~/.local/state/omarchy/workspace-layouts/[0-9]*.lua [namespaced] ?
 bin/omarchy-hyprland-workspace-layout-default	92	home-write	~/.local/state/omarchy/workspace-layouts/default.lua [namespaced] ?
@@ -319,12 +320,12 @@ bin/omarchy-install-dictation-voxtype	19	home-write	~/.config/voxtype ?
 bin/omarchy-install-dictation-voxtype	21	home-write	~/.config/voxtype ?
 bin/omarchy-install-dictation-voxtype	21	omarchy-path	$OMARCHY_PATH/default/voxtype/config.toml
 bin/omarchy-install-dictation-voxtype	32	user-unit	voxtype.service (enable)
-bin/omarchy-install-docker-dbs	18	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:3306:3306" --name=mysql8 ...
-bin/omarchy-install-docker-dbs	19	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:5432:5432" --name=postgres18 ...
-bin/omarchy-install-docker-dbs	20	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:3306:3306" --name=mariadb11 ...
-bin/omarchy-install-docker-dbs	21	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:6379:6379" --name=redis ...
-bin/omarchy-install-docker-dbs	22	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:27017:27017" --name ...
-bin/omarchy-install-docker-dbs	23	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:1433:1433" --name ...
+bin/omarchy-install-docker-dbs	18	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:3306:3306" --name=mysql8
+bin/omarchy-install-docker-dbs	19	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:5432:5432" --name=postgres18
+bin/omarchy-install-docker-dbs	20	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:3306:3306" --name=mariadb11
+bin/omarchy-install-docker-dbs	21	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:6379:6379" --name=redis
+bin/omarchy-install-docker-dbs	22	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:27017:27017" --name
+bin/omarchy-install-docker-dbs	23	privileged	docker run -d --restart unless-stopped -p "127.0.0.1:1433:1433" --name
 bin/omarchy-install-editor-emacs	9	session	uwsm-app -- gtk-launch emacsclient
 bin/omarchy-install-editor-helix	8	home-write	~/.config/helix/themes
 bin/omarchy-install-editor-helix	11	home-write	~/.config/helix/themes/omarchy.toml
@@ -387,8 +388,8 @@ bin/omarchy-install-service-once	10	privileged	systemctl enable --now once-backg
 bin/omarchy-install-service-once	13	privileged	once
 bin/omarchy-install-service-signal	12	session	uwsm-app -- /usr/bin/signal-desktop
 bin/omarchy-install-service-spotify	13	session	uwsm-app -- /usr/bin/spotify
-bin/omarchy-install-service-sunshine	25	privileged	ufw allow in proto "$proto" from "$cidr" to ...
-bin/omarchy-install-service-sunshine	34	privileged	ufw allow in on tailscale0 to any port ...
+bin/omarchy-install-service-sunshine	25	privileged	ufw allow in proto "$proto" from "$cidr" to
+bin/omarchy-install-service-sunshine	34	privileged	ufw allow in on tailscale0 to any port
 bin/omarchy-install-service-sunshine	56	privileged	ufw reload
 bin/omarchy-install-service-sunshine	64	home-write	~/.config/hypr ?
 bin/omarchy-install-service-sunshine	65	home-write	~/.config/hypr/autostart.lua ?
@@ -447,22 +448,22 @@ bin/omarchy-launch-about	140	home-write	~/.local/state/omarchy/windows [namespac
 bin/omarchy-launch-about	143	home-write	~/.local/state/omarchy/windows/about.fit [namespaced] ?
 bin/omarchy-launch-battlenet	58	home-write	~/Games/battlenet/user.reg ?
 bin/omarchy-launch-browser	42	session	uwsm-app -- "$browser_exec" "${@/--private/$private_flag}"
-bin/omarchy-launch-discord-community	8	session	uwsm-app -- discord --url ...
+bin/omarchy-launch-discord-community	8	session	uwsm-app -- discord --url
 bin/omarchy-launch-docker-tui	17	privileged	lazydocker
-bin/omarchy-launch-editor	35	session	uwsm-app -- "$editor" -- ...
-bin/omarchy-launch-floating-terminal-with-presentation	14	session	uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal ...
+bin/omarchy-launch-editor	35	session	uwsm-app -- "$editor" --
+bin/omarchy-launch-floating-terminal-with-presentation	14	session	uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal
 bin/omarchy-launch-nautilus	5	session	uwsm-app -- nautilus --new-window
-bin/omarchy-launch-nautilus-cwd	5	session	uwsm-app -- nautilus --new-window ...
-bin/omarchy-launch-screensaver	33	session	hyprctl dispatch exec -- "[workspace $workspace]" bash ...
+bin/omarchy-launch-nautilus-cwd	5	session	uwsm-app -- nautilus --new-window
+bin/omarchy-launch-screensaver	33	session	hyprctl dispatch exec -- "[workspace $workspace]" bash
 bin/omarchy-launch-screensaver	60	omarchy-path	$OMARCHY_PATH/default/alacritty/screensaver.toml
 bin/omarchy-launch-screensaver	63	omarchy-path	$OMARCHY_PATH/default/ghostty/screensaver
 bin/omarchy-launch-screensaver	66	omarchy-path	$OMARCHY_PATH/default/foot/screensaver.ini
 bin/omarchy-launch-shell	21	omarchy-path	$OMARCHY_PATH/shell
 bin/omarchy-launch-signal	12	session	uwsm-app -- /usr/bin/signal-desktop
 bin/omarchy-launch-spotify	12	session	uwsm-app -- /usr/bin/spotify
-bin/omarchy-launch-terminal	12	session	uwsm-app -- xdg-terminal-exec --dir="$(omarchy-cmd-terminal-cwd "$pid")" ...
-bin/omarchy-launch-tui	13	session	uwsm-app -- xdg-terminal-exec --app-id=$APP_ID ...
-bin/omarchy-launch-webapp	34	session	uwsm-app -- $browser_exec --app="$1" ...
+bin/omarchy-launch-terminal	12	session	uwsm-app -- xdg-terminal-exec --dir="$(omarchy-cmd-terminal-cwd "$pid")"
+bin/omarchy-launch-tui	13	session	uwsm-app -- xdg-terminal-exec --app-id=$APP_ID
+bin/omarchy-launch-webapp	34	session	uwsm-app -- $browser_exec --app="$1"
 bin/omarchy-lifecycle-dispatch	162	arch-path	/var/lib/pacman/local/$package
 bin/omarchy-locale-generate	22	omarchy-path	/usr/share/omarchy/default/i18n/locales.json
 bin/omarchy-menu-images	114	home-write	~/.cache/omarchy/image-selector [namespaced] ?
@@ -508,14 +509,15 @@ bin/omarchy-mise-default-tools	55	home-write	~/.config/mise/miserc.toml ?
 bin/omarchy-mise-default-tools	57	home-write	~/.config/mise/miserc.toml ?
 bin/omarchy-mise-default-tools	66	home-write	~/.config/mise/miserc.toml ?
 bin/omarchy-mise-default-tools	68	home-write	~/.config/mise/miserc.toml ?
+bin/omarchy-mise-install	28	home-write	~/.local/bin
 bin/omarchy-mise-install	51	home-write	~/.local/bin/$command
 bin/omarchy-mise-install	52	home-write	~/.local/bin/$command
 bin/omarchy-mise-install	59	home-write	~/.local/bin/$command
-bin/omarchy-pkg-add	10	arch-tool	pacman -S --noconfirm --needed ...
-bin/omarchy-pkg-add	12	arch-tool	pacman -S --noconfirm --needed ...
+bin/omarchy-pkg-add	10	arch-tool	pacman -S --noconfirm --needed
+bin/omarchy-pkg-add	12	arch-tool	pacman -S --noconfirm --needed
 bin/omarchy-pkg-add	12	privileged	pacman -S --noconfirm --needed -- "$@"
 bin/omarchy-pkg-add	18	arch-tool	pacman -Q -- "$pkg"
-bin/omarchy-pkg-aur-add	7	arch-tool	yay -S --noconfirm --needed ...
+bin/omarchy-pkg-aur-add	7	arch-tool	yay -S --noconfirm --needed
 bin/omarchy-pkg-aur-add	12	arch-tool	pacman -Q -- "$pkg"
 bin/omarchy-pkg-aur-install	8	arch-tool	yay -Siia {1} ?
 bin/omarchy-pkg-aur-install	20	arch-tool	yay -Slqa
@@ -784,6 +786,10 @@ bin/omarchy-remove-ai-perplexity	39	home-write	~/.config/Perplexity
 bin/omarchy-remove-ai-perplexity	39	home-write	~/.local/state/perplexity
 bin/omarchy-remove-ai-perplexity	42	home-write	~/.config/perplexity-flags.conf
 bin/omarchy-remove-ai-t3-code	13	home-write	~/.local/bin/t3
+bin/omarchy-remove-ai-t3-code	17	home-write	~/.local/share/applications/com.t3tools.T3Code.desktop
+bin/omarchy-remove-ai-t3-code	17	home-write	~/.local/share/applications/t3code.desktop
+bin/omarchy-remove-ai-t3-code	17	home-write	~/.local/share/icons/com.t3tools.T3Code.desktop.png
+bin/omarchy-remove-ai-t3-code	17	home-write	~/.local/share/icons/hicolor/*/apps/t3code.png
 bin/omarchy-remove-ai-t3-code	22	home-write	~/.local/share/applications
 bin/omarchy-remove-ai-t3-code	26	home-write	~/.cache/t3code-updater
 bin/omarchy-remove-ai-t3-code	26	home-write	~/.config/t3code
@@ -930,7 +936,7 @@ bin/omarchy-security-functions	60	omarchy-path	$OMARCHY_PATH
 bin/omarchy-security-functions	60	omarchy-path	/usr/share/omarchy
 bin/omarchy-setup-direct-boot	42	privileged	efibootmgr --bootnum "$boot_num" --delete-bootnum
 bin/omarchy-setup-direct-boot	47	privileged	find /boot/EFI/Linux/ -name "omarchy*.efi" -printf "%f\n"
-bin/omarchy-setup-direct-boot	61	privileged	efibootmgr --create --disk "$disk" --part "$part" --label "Omarchy" ...
+bin/omarchy-setup-direct-boot	61	privileged	efibootmgr --create --disk "$disk" --part "$part" --label "Omarchy"
 bin/omarchy-setup-git	18	home-write	~/.gitconfig ?
 bin/omarchy-setup-git	19	home-write	~/.gitconfig ?
 bin/omarchy-setup-git	75	home-write	~/.gitconfig ?
@@ -942,7 +948,7 @@ bin/omarchy-setup-keyboard	7	omarchy-path	$OMARCHY_PATH/default/input-methods/ty
 bin/omarchy-setup-security-fido2	23	privileged	sed -i '1i auth sufficient pam_u2f.so cue authfile=/etc/fido2/fido2' /etc/pam.d/sudo
 bin/omarchy-setup-security-fido2	29	privileged	sed -i '1i auth sufficient pam_u2f.so cue authfile=/etc/fido2/fido2' /etc/pam.d/polkit-1
 bin/omarchy-setup-security-fido2	32	privileged	tee /etc/pam.d/polkit-1
-bin/omarchy-setup-security-fido2	78	privileged	install -d -m 755 -o root -g root ...
+bin/omarchy-setup-security-fido2	78	privileged	install -d -m 755 -o root -g root
 bin/omarchy-setup-security-fido2	108	privileged	rm -f -- "$stage"
 bin/omarchy-setup-security-fido2	115	privileged	mktemp "$authfile.new.XXXXXX"
 bin/omarchy-setup-security-fido2	122	privileged	tee "$stage"
@@ -954,8 +960,8 @@ bin/omarchy-setup-security-fingerprint	29	privileged	sed -i "/pam_fprintd\.so/i 
 bin/omarchy-setup-security-fingerprint	36	privileged	sed -i '1i auth sufficient pam_fprintd.so' /etc/pam.d/polkit-1
 bin/omarchy-setup-security-fingerprint	40	privileged	sed -i "/pam_fprintd\.so/i $fprintd_gate" /etc/pam.d/polkit-1
 bin/omarchy-setup-security-fingerprint	47	privileged	tee /etc/pam.d/polkit-1
-bin/omarchy-setup-security-fingerprint	155	arch-tool	pacman -S --needed --noconfirm ...
-bin/omarchy-setup-security-fingerprint	155	privileged	pacman -S --needed --noconfirm --ask 4 -- libfprint-git ...
+bin/omarchy-setup-security-fingerprint	155	arch-tool	pacman -S --needed --noconfirm
+bin/omarchy-setup-security-fingerprint	155	privileged	pacman -S --needed --noconfirm --ask 4 -- libfprint-git
 bin/omarchy-setup-security-fingerprint	162	privileged	true
 bin/omarchy-setup-security-fingerprint	164	privileged	sudo -v
 bin/omarchy-setup-security-fingerprint	184	privileged	omarchy-lifecycle-dispatch enable-fingerprint
@@ -992,9 +998,9 @@ bin/omarchy-snapshot	16	arch-tool	snapper (argument of omarchy-cmd-missing) ?
 bin/omarchy-snapshot	26	arch-tool	snapper --csvout list-configs
 bin/omarchy-snapshot	26	privileged	snapper --csvout list-configs
 bin/omarchy-snapshot	33	omarchy-path	$OMARCHY_PATH/install/config/snapper.sh\
-bin/omarchy-snapshot	40	arch-tool	snapper -c "$config" create ...
+bin/omarchy-snapshot	40	arch-tool	snapper -c "$config" create
 bin/omarchy-snapshot	40	privileged	snapper -c "$config" create -c number -d "$DESC"
-bin/omarchy-snapshot	41	arch-tool	snapper -c "$config" cleanup ...
+bin/omarchy-snapshot	41	arch-tool	snapper -c "$config" cleanup
 bin/omarchy-snapshot	41	privileged	snapper -c "$config" cleanup number
 bin/omarchy-snapshot	47	arch-tool	limine-snapper-restore
 bin/omarchy-snapshot	47	privileged	limine-snapper-restore
@@ -1102,7 +1108,7 @@ bin/omarchy-toggle	21	home-write	~/.local/state/omarchy/toggles/$FLAG_NAME [name
 bin/omarchy-toggle-crash-capture	13	user-unit	omarchy-crash-watch.service (stop)
 bin/omarchy-toggle-crash-capture	16	user-unit	omarchy-crash-watch.service (start)
 bin/omarchy-toggle-hybrid-gpu	12	privileged	/usr/bin/mktemp -- "${destination%/*}/.${destination##*/}.omarchy.XXXXXX"
-bin/omarchy-toggle-hybrid-gpu	15	privileged	/usr/bin/install -m "$mode" -o root -g root -T ...
+bin/omarchy-toggle-hybrid-gpu	15	privileged	/usr/bin/install -m "$mode" -o root -g root -T
 bin/omarchy-toggle-hybrid-gpu	16	privileged	/usr/bin/mv -Tf -- "$stage" "$destination"
 bin/omarchy-toggle-hybrid-gpu	19	privileged	/usr/bin/rm -f -- "$stage"
 bin/omarchy-toggle-hybrid-gpu	39	privileged	tee /etc/supergfxd.conf
@@ -1118,6 +1124,9 @@ bin/omarchy-toggle-hybrid-gpu	107	privileged	sed -i -e 's/"mode": ".*"/"mode": "
 bin/omarchy-toggle-idle	34	home-write	~/.local/state/omarchy/indicators [namespaced] ?
 bin/omarchy-toggle-idle	35	home-write	~/.local/state/omarchy/indicators/stay-awake [namespaced] ?
 bin/omarchy-toggle-idle	38	home-write	~/.local/state/omarchy/indicators/stay-awake [namespaced] ?
+bin/omarchy-toggle-input-device	54	home-write	~/.local/state/omarchy/toggles/hypr/$KIND-disabled-name [namespaced] ?
+bin/omarchy-toggle-input-device	67	home-write	~/.local/state/omarchy/toggles/hypr [namespaced] ?
+bin/omarchy-toggle-input-device	68	home-write	~/.local/state/omarchy/toggles/hypr/$KIND-disabled-name [namespaced] ?
 bin/omarchy-toggle-nightlight	41	session	uwsm-app -- hyprsunset
 bin/omarchy-tui-install	34	home-write	~/.local/share/icons/hicolor/256x256/apps ?
 bin/omarchy-tui-install	35	home-write	~/.local/share/icons/hicolor/256x256/apps/$name.$ext ?
@@ -1139,7 +1148,7 @@ bin/omarchy-update	19	privileged	true
 bin/omarchy-update	32	privileged	true
 bin/omarchy-update	150	omarchy-path	$OMARCHY_PATH/bin/omarchy-update-restart
 bin/omarchy-update-aur-pkgs	12	arch-tool	pacman -Qem
-bin/omarchy-update-aur-pkgs	15	arch-tool	yay -Sua --noconfirm --cleanafter ...
+bin/omarchy-update-aur-pkgs	15	arch-tool	yay -Sua --noconfirm --cleanafter
 bin/omarchy-update-available	9	omarchy-path	$OMARCHY_PATH
 bin/omarchy-update-available	9	omarchy-path	/usr/share/omarchy
 bin/omarchy-update-available	10	omarchy-path	$OMARCHY_PATH
@@ -1162,7 +1171,7 @@ bin/omarchy-update-firmware	14	privileged	install -D /usr/lib/fwupd/efi/fwupdx64
 bin/omarchy-update-firmware	18	privileged	fwupdmgr update
 bin/omarchy-update-keyring	11	arch-tool	pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
 bin/omarchy-update-keyring	11	privileged	pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
-bin/omarchy-update-keyring	12	arch-tool	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver ...
+bin/omarchy-update-keyring	12	arch-tool	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver
 bin/omarchy-update-keyring	12	privileged	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver keys.openpgp.org
 bin/omarchy-update-keyring	13	arch-tool	pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
 bin/omarchy-update-keyring	13	privileged	pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
@@ -1174,11 +1183,11 @@ bin/omarchy-update-keyring	35	arch-path	/etc/pacman.d/gnupg
 bin/omarchy-update-keyring	35	privileged	gpg --homedir /etc/pacman.d/gnupg --no-permission-warning --batch --with-colons --list-keys "$alarm_key"
 bin/omarchy-update-keyring	40	arch-tool	pacman-key --populate archlinuxarm
 bin/omarchy-update-keyring	40	privileged	pacman-key --populate archlinuxarm
-bin/omarchy-update-keyring	42	arch-tool	pacman-key --recv-keys "$alarm_key" --keyserver ...
+bin/omarchy-update-keyring	42	arch-tool	pacman-key --recv-keys "$alarm_key" --keyserver
 bin/omarchy-update-keyring	42	privileged	pacman-key --recv-keys "$alarm_key" --keyserver keyserver.ubuntu.com
 bin/omarchy-update-keyring	43	arch-tool	pacman-key --lsign-key "$alarm_key"
 bin/omarchy-update-keyring	43	privileged	pacman-key --lsign-key "$alarm_key"
-bin/omarchy-update-keyring	78	arch-tool	pacman -Sy --needed --noconfirm ...
+bin/omarchy-update-keyring	78	arch-tool	pacman -Sy --needed --noconfirm
 bin/omarchy-update-keyring	78	privileged	pacman -Sy --needed --noconfirm "${keyrings[@]}" >(grep -vE '^warning: [a-z0-9@._+-]+-keyring-[^ ]+ is up to date -- skipping$' >&2)
 bin/omarchy-update-keyring	87	arch-tool	pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
 bin/omarchy-update-keyring	87	privileged	pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
@@ -1237,13 +1246,13 @@ bin/omarchy-upgrade-to-quattro	436	arch-path	/etc/pacman.conf
 bin/omarchy-upgrade-to-quattro	436	privileged	install -m 0644 "$tmp" /etc/pacman.conf ?
 bin/omarchy-upgrade-to-quattro	447	arch-path	/var/cache/pacman/pkg
 bin/omarchy-upgrade-to-quattro	447	privileged	find /var/cache/pacman/pkg -maxdepth 1 -name 'omarchy-*' -delete ?
-bin/omarchy-upgrade-to-quattro	454	arch-tool	pacman -Syy --noconfirm archlinux-keyring ...
+bin/omarchy-upgrade-to-quattro	454	arch-tool	pacman -Syy --noconfirm archlinux-keyring
 bin/omarchy-upgrade-to-quattro	454	privileged	pacman -Syy --noconfirm archlinux-keyring omarchy-keyring ?
-bin/omarchy-upgrade-to-quattro	456	arch-tool	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver ...
+bin/omarchy-upgrade-to-quattro	456	arch-tool	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver
 bin/omarchy-upgrade-to-quattro	456	privileged	pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571 --keyserver keys.openpgp.org ?
 bin/omarchy-upgrade-to-quattro	457	arch-tool	pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
 bin/omarchy-upgrade-to-quattro	457	privileged	pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571 ?
-bin/omarchy-upgrade-to-quattro	458	arch-tool	pacman -Syy --noconfirm archlinux-keyring ...
+bin/omarchy-upgrade-to-quattro	458	arch-tool	pacman -Syy --noconfirm archlinux-keyring
 bin/omarchy-upgrade-to-quattro	458	privileged	pacman -Syy --noconfirm archlinux-keyring omarchy-keyring ?
 bin/omarchy-upgrade-to-quattro	463	arch-tool	pacman -Q omarchy-installer
 bin/omarchy-upgrade-to-quattro	467	arch-tool	pacman -Rdd --noconfirm omarchy-installer
@@ -1297,39 +1306,39 @@ bin/omarchy-upgrade-to-quattro	715	privileged	"$apply_lock" ?
 bin/omarchy-upgrade-to-quattro	717	omarchy-path	/usr/share/omarchy
 bin/omarchy-upgrade-to-quattro	754	arch-tool	pacman -Rdd --noconfirm "$pkg"
 bin/omarchy-upgrade-to-quattro	754	privileged	pacman -Rdd --noconfirm "$pkg" ?
-bin/omarchy-upgrade-to-quattro	765	arch-tool	pacman -S --noconfirm --ask ...
+bin/omarchy-upgrade-to-quattro	765	arch-tool	pacman -S --noconfirm --ask
 bin/omarchy-upgrade-to-quattro	765	privileged	pacman -S --noconfirm --ask 4 1password ?
-bin/omarchy-upgrade-to-quattro	773	arch-tool	pacman -S --needed --noconfirm ...
+bin/omarchy-upgrade-to-quattro	773	arch-tool	pacman -S --needed --noconfirm
 bin/omarchy-upgrade-to-quattro	773	privileged	pacman -S --needed --noconfirm --ask 4 lazydocker ?
-bin/omarchy-upgrade-to-quattro	804	arch-tool	pacman -Syu --needed --noconfirm ...
+bin/omarchy-upgrade-to-quattro	804	arch-tool	pacman -Syu --needed --noconfirm
 bin/omarchy-upgrade-to-quattro	804	privileged	pacman -Syu --needed --noconfirm --ask 4 --overwrite='*' "${core_packages[@]}" ?
 bin/omarchy-upgrade-to-quattro	807	omarchy-path	/usr/share/omarchy/install/omarchy-base.packages
 bin/omarchy-upgrade-to-quattro	809	omarchy-path	/usr/share/omarchy/install/omarchy-base.packages
 bin/omarchy-upgrade-to-quattro	811	omarchy-path	/usr/share/omarchy/install/omarchy-x86_64-only.packages
 bin/omarchy-upgrade-to-quattro	813	omarchy-path	/usr/share/omarchy/install/omarchy-x86_64-only.packages
-bin/omarchy-upgrade-to-quattro	816	arch-tool	pacman -S --needed --noconfirm ...
+bin/omarchy-upgrade-to-quattro	816	arch-tool	pacman -S --needed --noconfirm
 bin/omarchy-upgrade-to-quattro	816	privileged	pacman -S --needed --noconfirm --ask 4 --overwrite='*' "${base_packages[@]}" ?
 bin/omarchy-upgrade-to-quattro	820	omarchy-path	/usr/share/omarchy/install/omarchy-base.packages
-bin/omarchy-upgrade-to-quattro	835	arch-tool	pacman -S --needed --noconfirm ...
+bin/omarchy-upgrade-to-quattro	835	arch-tool	pacman -S --needed --noconfirm
 bin/omarchy-upgrade-to-quattro	835	privileged	pacman -S --needed --noconfirm --ask 4 --overwrite='*' "${audio_packages[@]}" ?
-bin/omarchy-upgrade-to-quattro	858	arch-tool	pacman -S --needed --noconfirm ...
+bin/omarchy-upgrade-to-quattro	858	arch-tool	pacman -S --needed --noconfirm
 bin/omarchy-upgrade-to-quattro	858	privileged	pacman -S --needed --noconfirm "${hardware_packages[@]}" ?
 bin/omarchy-upgrade-to-quattro	939	arch-tool	pacman -Rs --print "${installed_retired[@]}"
-bin/omarchy-upgrade-to-quattro	940	arch-tool	pacman -Rns --noconfirm --ask ...
+bin/omarchy-upgrade-to-quattro	940	arch-tool	pacman -Rns --noconfirm --ask
 bin/omarchy-upgrade-to-quattro	940	privileged	pacman -Rns --noconfirm --ask 4 "${installed_retired[@]}" ?
 bin/omarchy-upgrade-to-quattro	969	arch-tool	pacman -Rs --print "${installed_group[@]}"
-bin/omarchy-upgrade-to-quattro	970	arch-tool	pacman -Rns --noconfirm --ask ...
+bin/omarchy-upgrade-to-quattro	970	arch-tool	pacman -Rns --noconfirm --ask
 bin/omarchy-upgrade-to-quattro	970	privileged	pacman -Rns --noconfirm --ask 4 "${installed_group[@]}" ?
 bin/omarchy-upgrade-to-quattro	979	arch-tool	pacman -Rs --print "$pkg"
-bin/omarchy-upgrade-to-quattro	980	arch-tool	pacman -Rns --noconfirm --ask ...
+bin/omarchy-upgrade-to-quattro	980	arch-tool	pacman -Rns --noconfirm --ask
 bin/omarchy-upgrade-to-quattro	980	privileged	pacman -Rns --noconfirm --ask 4 "$pkg" ?
 bin/omarchy-upgrade-to-quattro	982	arch-tool	pacman -Qi "$pkg"
 bin/omarchy-upgrade-to-quattro	1159	privileged	systemctl disable "$networkd_unit" ?
 bin/omarchy-upgrade-to-quattro	1161	privileged	systemctl disable systemd-networkd-wait-online.service ?
 bin/omarchy-upgrade-to-quattro	1162	privileged	systemctl mask systemd-networkd-wait-online.service ?
 bin/omarchy-upgrade-to-quattro	1188	omarchy-path	/usr/share/omarchy
-bin/omarchy-upgrade-to-quattro	1279	arch-tool	pacman -Syu --noconfirm --ask ...
-bin/omarchy-upgrade-to-quattro	1279	privileged	pacman -Syu --noconfirm --ask 4 --overwrite '/etc/docker/daemon.json' --overwrite ... ?
+bin/omarchy-upgrade-to-quattro	1279	arch-tool	pacman -Syu --noconfirm --ask
+bin/omarchy-upgrade-to-quattro	1279	privileged	pacman -Syu --noconfirm --ask 4 --overwrite '/etc/docker/daemon.json' --overwrite ?
 bin/omarchy-upgrade-to-quattro	1282	arch-path	/etc/mkinitcpio.conf.d/omarchy_hooks.conf
 bin/omarchy-upgrade-to-quattro	1283	arch-path	/etc/mkinitcpio.conf.d/thunderbolt_module.conf
 bin/omarchy-upgrade-to-quattro	1336	privileged	systemctl enable "$unit" ?
@@ -1366,7 +1375,7 @@ bin/omarchy-upgrade-to-quattro	1475	privileged	test -f /etc/sddm.conf.d/autologi
 bin/omarchy-upgrade-to-quattro	1476	privileged	awk -F= '/^User=/ { print $2; exit }' /etc/sddm.conf.d/autologin.conf ?
 bin/omarchy-upgrade-to-quattro	1482	privileged	tee /etc/sddm.conf.d/autologin.conf ?
 bin/omarchy-upgrade-to-quattro	1488	privileged	rm -f /etc/sddm.conf.d/autologin.conf ?
-bin/omarchy-upgrade-to-quattro	1491	privileged	install -d -m 0755 -o sddm -g sddm ... ?
+bin/omarchy-upgrade-to-quattro	1491	privileged	install -d -m 0755 -o sddm -g sddm ?
 bin/omarchy-upgrade-to-quattro	1491	privileged	install -d -m 0755 /var/lib/sddm ?
 bin/omarchy-upgrade-to-quattro	1494	privileged	tee /var/lib/sddm/state.conf ?
 bin/omarchy-upgrade-to-quattro	1499	privileged	chown sddm:sddm /var/lib/sddm /var/lib/sddm/state.conf ?
@@ -1512,13 +1521,13 @@ default/uwsm/env.d/10-omarchy	4	omarchy-path	/usr/share/omarchy/default/bash/env
 default/uwsm/env.d/10-omarchy	8	omarchy-path	$OMARCHY_PATH/default/uwsm/default
 default/uwsm/env.d/10-omarchy	9	omarchy-path	$OMARCHY_PATH/default/uwsm/default
 default/wayland-sessions/omarchy.desktop	4	session	Hyprland (argument of uwsm) ?
-default/wayland-sessions/omarchy.desktop	4	session	uwsm start -g -1 ...
+default/wayland-sessions/omarchy.desktop	4	session	uwsm start -g -1
 default/wayland-sessions/omarchy.desktop	5	session	uwsm
 install/config/browser-policy.sh	1	omarchy-path	$OMARCHY_PATH/install/helpers/browser-policy.sh
 install/config/language.sh	9	omarchy-path	$OMARCHY_PATH/bin/omarchy-locale-generate
 install/config/snapper.sh	3	omarchy-path	$OMARCHY_PATH/default/snapper/root
-install/config/snapper.sh	13	arch-tool	snapper --no-dbus -c root ...
-install/config/snapper.sh	13	arch-tool	snapper -c root create-config ...
+install/config/snapper.sh	13	arch-tool	snapper --no-dbus -c root
+install/config/snapper.sh	13	arch-tool	snapper -c root create-config
 install/config/snapper.sh	24	arch-tool	limine-snapper-sync.service (argument of systemctl) ?
 install/hardware/apple/fix-spi-keyboard.sh	9	arch-path	/etc/mkinitcpio.conf.d
 install/hardware/apple/fix-spi-keyboard.sh	9	privileged	mkdir -p /etc/mkinitcpio.conf.d
@@ -1591,14 +1600,14 @@ install/hardware/qualcomm/kernel-params.sh	3	arch-path	/etc/limine-entry-tool.d/
 install/hardware/qualcomm/kernel-params.sh	6	arch-path	/etc/limine-entry-tool.d
 install/hardware/set-wireless-regdom.sh	23	privileged	tee -a "$regdom_file"
 install/helpers/as-root.sh	5	privileged	"$@"
-install/helpers/browser-policy.sh	37	privileged	find "$dir" -mindepth 1 -maxdepth 1 ! -user ... ?
+install/helpers/browser-policy.sh	37	privileged	find "$dir" -mindepth 1 -maxdepth 1 ! -user ?
 install/helpers/browser-policy.sh	67	privileged	rm -rf -- "$dir" ?
-install/helpers/browser-policy.sh	69	privileged	install -d -m 0755 -o root -g root ... ?
+install/helpers/browser-policy.sh	69	privileged	install -d -m 0755 -o root -g root ?
 install/helpers/browser-policy.sh	87	omarchy-path	$OMARCHY_PATH/default/chromium/policies/omarchy.json
-install/helpers/browser-policy.sh	89	privileged	install -m 644 -o root -g root -T ... ?
+install/helpers/browser-policy.sh	89	privileged	install -m 644 -o root -g root -T ?
 install/helpers/browser-policy.sh	167	omarchy-path	$OMARCHY_PATH/default/firefox/policies.json
-install/helpers/browser-policy.sh	169	privileged	install -m 644 -o root -g root -T ... ?
-install/helpers/browser-policy.sh	183	privileged	install -m 644 -o root -g root -T ... ?
+install/helpers/browser-policy.sh	169	privileged	install -m 644 -o root -g root -T ?
+install/helpers/browser-policy.sh	183	privileged	install -m 644 -o root -g root -T ?
 install/helpers/browser-policy.sh	190	omarchy-path	$OMARCHY_PATH/default/firefox/policies.json
 install/helpers/pacman.sh	10	omarchy-path	$OMARCHY_PATH/default/pacman
 install/helpers/pacman.sh	11	omarchy-path	$OMARCHY_PATH/default/pacman/$1
@@ -1720,17 +1729,17 @@ migrations/1784521870.sh	9	user-unit	omarchy-update-user-notify.path (restart)
 migrations/1784521870.sh	10	user-unit	omarchy-update-user-notify.service (enable)
 migrations/1784568652.sh	7	privileged	"$@"
 migrations/1784568652.sh	15	privileged	systemctl mask NetworkManager-wait-online.service ?
-migrations/1784672586.sh	7	arch-tool	pacman -S --noconfirm --ask ...
+migrations/1784672586.sh	7	arch-tool	pacman -S --noconfirm --ask
 migrations/1784672586.sh	7	privileged	pacman -S --noconfirm --ask 4 quickshell-git
 migrations/1784767406.sh	3	home-write	~/.local/state/omarchy/toggles/hypr/voxtype.lua [namespaced]
 migrations/1784809452.sh	9	privileged	"$@"
 migrations/1784809452.sh	13	arch-tool	snapper (argument of command) ?
 migrations/1784809452.sh	23	privileged	grep -qFx 'TIMELINE_CREATE="no"' "$SNAPPER_CONFIG_PATH" ?
-migrations/1784809452.sh	30	arch-tool	snapper -c root --csvout ...
+migrations/1784809452.sh	30	arch-tool	snapper -c root --csvout
 migrations/1784809452.sh	30	privileged	snapper -c root --csvout list --columns number,cleanup ?
-migrations/1784809452.sh	45	arch-tool	snapper -c root delete ...
+migrations/1784809452.sh	45	arch-tool	snapper -c root delete
 migrations/1784809452.sh	45	privileged	snapper -c root delete "${batch[@]}" ?
-migrations/1784809452.sh	51	arch-tool	snapper -c root delete ...
+migrations/1784809452.sh	51	arch-tool	snapper -c root delete
 migrations/1784809452.sh	51	privileged	snapper -c root delete "${batch[@]}" ?
 migrations/1784818437.sh	21	privileged	sed -i "/pam_fprintd\.so/i $gate" "$pam"
 migrations/1784914435.sh	7	privileged	"$@"
@@ -1749,6 +1758,7 @@ migrations/1784961000.sh	11	privileged	systemctl daemon-reload
 migrations/1784961000.sh	19	privileged	systemctl restart dev-zram0.swap
 migrations/1784970000.sh	8	privileged	systemctl reload systemd-logind
 migrations/1784989000.sh	38	home-write	~/.config/omarchy/shell.json [namespaced] ?
+migrations/1785002349.sh	22	home-write	~/.config/nvim/lua/plugins/theme.lua ?
 migrations/1785013000.sh	20	arch-tool	pacman -Qo "$zram_conf"
 migrations/1785013000.sh	31	privileged	rm -f "$zram_conf"
 migrations/1785095882.sh	16	user-unit	omarchy-update-user-notify.path (stop)
@@ -1861,16 +1871,16 @@ migrations/1786719479.sh	31	home-write	~/.local/bin/gemini
 migrations/1786719479.sh	35	home-write	~/.gemini/config/skills
 migrations/1786719479.sh	39	home-write	~/.gemini/config/skills/${name##*/}
 migrations/1786782461.sh	17	home-write	~/.config/foot/foot.ini ?
-migrations/1786952219.sh	16	arch-tool	pacman -S --noconfirm --ask=4 ...
+migrations/1786952219.sh	16	arch-tool	pacman -S --noconfirm --ask=4
 migrations/1786952219.sh	16	privileged	pacman -S --noconfirm --ask=4 mise-bin
-migrations/1787399318.sh	8	arch-tool	pacman -S --noconfirm --ask ...
+migrations/1787399318.sh	8	arch-tool	pacman -S --noconfirm --ask
 migrations/1787399318.sh	8	privileged	pacman -S --noconfirm --ask 4 quickshell
 migrations/1787481315.sh	19	omarchy-path	$OMARCHY_PATH/themes/$theme_name
-migrations/1787494718.sh	45	privileged	find "$authdir" -mindepth 1 -maxdepth 1 -name "${authfile##*/}" ...
+migrations/1787494718.sh	45	privileged	find "$authdir" -mindepth 1 -maxdepth 1 -name "${authfile##*/}"
 migrations/1787494718.sh	55	privileged	chmod 755 "$authdir"
 migrations/1787494718.sh	107	privileged	rm -f -- "$stage"
 migrations/1787494718.sh	114	privileged	mktemp "$authfile.new.XXXXXX"
-migrations/1787494718.sh	121	privileged	install -T -m 644 -o root -g root ...
+migrations/1787494718.sh	121	privileged	install -T -m 644 -o root -g root
 migrations/1787494718.sh	122	privileged	mv -Tf "$stage" "$authfile"
 migrations/1787515927.sh	3	omarchy-path	$OMARCHY_PATH/install/helpers/browser-policy.sh
 migrations/1787580187.sh	21	home-write	~/.local/share/applications/Docker.desktop ?
@@ -1972,10 +1982,10 @@ migrations/1788662350.sh	140	privileged	/usr/bin/readlink -- "$path" ?
 migrations/1788662350.sh	159	privileged	/usr/bin/cmp -s -- "$source" "$destination" ?
 migrations/1788662350.sh	172	privileged	/usr/bin/sha256sum -- "$destination" ?
 migrations/1788662350.sh	194	privileged	/usr/bin/mktemp -- "${destination%/*}/.${destination##*/}.omarchy.XXXXXX" ?
-migrations/1788662350.sh	197	privileged	/usr/bin/install -m "$mode" -o root -g root -T ... ?
+migrations/1788662350.sh	197	privileged	/usr/bin/install -m "$mode" -o root -g root -T ?
 migrations/1788662350.sh	198	privileged	/usr/bin/mv -Tf -- "$stage" "$destination" ?
 migrations/1788662350.sh	201	privileged	/usr/bin/rm -f -- "$stage" ?
-migrations/1788662350.sh	211	privileged	/usr/bin/install -d -m 0700 -o root -g root ... ?
+migrations/1788662350.sh	211	privileged	/usr/bin/install -d -m 0700 -o root -g root ?
 migrations/1788662350.sh	215	privileged	/usr/bin/mktemp -d -- "$quarantine_root/${label}.XXXXXX" ?
 migrations/1788662350.sh	221	privileged	/usr/bin/cp -a --no-dereference -T -- "$path" "$backup" ?
 migrations/1788662350.sh	224	privileged	/usr/bin/rm -rf -- "$backup_dir" ?
@@ -1992,6 +2002,7 @@ migrations/1788862626.sh	12	privileged	udevadm trigger --action=add --subsystem-
 migrations/1788862626.sh	13	privileged	udevadm settle
 migrations/1788862626.sh	14	privileged	setfacl -b /dev/camlink4k
 migrations/1788862626.sh	19	privileged	systemctl start v4l2-relayd@camlink.service
+migrations/1788996284.sh	37	arch-tool	pacman -Q omarchy-nvim
 migrations/1788996284.sh	38	arch-tool	vercmp "${nvim_package#* }" "2026.9.21-2"
 migrations/1788996284.sh	50	home-write	~/.config/nvim/lua/config/remote_clipboard.lua ?
 migrations/1789095456.sh	14	home-write	~/Work ?
@@ -2021,7 +2032,7 @@ migrations/1789764927.sh	10	home-write	~/.config/systemd/user/graphical-session.
 migrations/1789764927.sh	10	user-unit	~/.config/systemd/user/graphical-session.target.wants/owed.service ?
 migrations/1789764927.sh	16	user-unit	owed.service (start)
 migrations/1789928586.sh	3	arch-path	/etc/default/limine
-migrations/1789928586.sh	9	arch-tool	pacman -Qqd limine limine-mkinitcpio-hook ...
+migrations/1789928586.sh	9	arch-tool	pacman -Qqd limine limine-mkinitcpio-hook
 migrations/1789928586.sh	12	arch-tool	pacman -D --asexplicit "${recovery_packages[@]}"
 migrations/1789928586.sh	12	privileged	pacman -D --asexplicit "${recovery_packages[@]}"
 migrations/1790114905.sh	14	omarchy-path	$OMARCHY_PATH/default/audio/filter-chain-host.conf
@@ -2139,7 +2150,7 @@ migrations/1791403252.sh	22	arch-path	/etc/pacman.conf
 migrations/1791403252.sh	22	arch-path	/etc/pacman.conf.bak
 migrations/1791403252.sh	22	privileged	cp -a /etc/pacman.conf /etc/pacman.conf.bak
 migrations/1791403252.sh	23	arch-path	/etc/pacman.conf
-migrations/1791403252.sh	23	privileged	install -m 644 -o root -g root "$pacman_config" ...
+migrations/1791403252.sh	23	privileged	install -m 644 -o root -g root "$pacman_config"
 migrations/1791408113.sh	14	privileged	install -Dm644 /dev/stdin "$conf"
 migrations/1791408113.sh	26	arch-tool	limine-mkinitcpio
 migrations/1791408113.sh	26	privileged	limine-mkinitcpio
@@ -2148,7 +2159,7 @@ migrations/1791470456.sh	9	omarchy-path	$OMARCHY_PATH/themes/$theme/backgrounds
 migrations/1791470456.sh	52	home-write	~/.local/state/omarchy/current/background [namespaced] ?
 migrations/1791470456.sh	62	home-write	~/.local/state/omarchy/theme-backgrounds/* [namespaced] ?
 migrations/1791479273.sh	8	home-write	~/.config/omarchy/defaults/dictation [namespaced] ?
-migrations/1791554699.sh	10	arch-tool	pacman -S --noconfirm --ask ...
+migrations/1791554699.sh	10	arch-tool	pacman -S --noconfirm --ask
 migrations/1791554699.sh	10	privileged	pacman -S --noconfirm --ask 4 omarchy-power-profiles-daemon
 migrations/1791554699.sh	17	privileged	systemctl try-restart power-profiles-daemon.service
 migrations/1791581004.sh	11	arch-path	/etc/limine-entry-tool.d/omarchy-defaults.conf
@@ -2191,7 +2202,7 @@ migrations/1791769486.sh	43	privileged	systemctl daemon-reload
 migrations/1791769486.sh	45	privileged	cat "$tb_dir/policy.json"
 migrations/1791769486.sh	46	privileged	cat "$tb_dir/boot-recovery.json"
 migrations/1791769486.sh	62	privileged	boltctl config device.policy "$uid" "$policy"
-migrations/1791769486.sh	79	privileged	busctl --system set-property org.freedesktop.bolt "/org/freedesktop/bolt/domains/${uid//-/_}" org.freedesktop.bolt1.Domain BootACL as ...
+migrations/1791769486.sh	79	privileged	busctl --system set-property org.freedesktop.bolt "/org/freedesktop/bolt/domains/${uid//-/_}" org.freedesktop.bolt1.Domain BootACL as
 migrations/1791769486.sh	92	privileged	boltctl config device.policy "$uid" auto
 migrations/1791769486.sh	101	privileged	cat "$tb_dir/setup-recovery.json"
 migrations/1791769486.sh	112	privileged	boltctl config global.auth-mode "$mode"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test exports are intended
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # scripts are single-quoted on purpose
 # Unit tests for tasks 13.6 and 13.7: the omarchy-pkg-* and web-app
@@ -186,8 +187,8 @@ echo "config=$XDG_CONFIG_HOME"
 # --- overrides for Arch tools and paths --------------------------------------
 
 @test "every unsupported override prints why, logs and exits 64" {
-  local file choice reason name
-  while IFS=$'\t' read -r file choice reason; do
+  local file choice _reason name
+  while IFS=$'\t' read -r file choice _reason; do
     [[ -n $file && $file != '#'* && $choice == unsupported ]] || continue
     name=${file#bin/}
     run "$O/$name" some-argument </dev/null

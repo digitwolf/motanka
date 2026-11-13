@@ -85,6 +85,13 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - Create `test/vm/tests/stack.sh`: start the Stack compositor in 26.04 and 24.04 VMs, check library paths resolve under `/opt/motanka` and `LD_LIBRARY_PATH` is unset
   - _Requirements: 1.3, 5.14, 8.2, 8.5_
 
+- [ ] 7.5 `motanka-qt6` for 24.04 (added after spike S1)
+  - Create `packaging/motanka-qt6/` and its component list: Qt 6.10.2 qtbase, qtshadertools, qtsvg, qtdeclarative, qtwayland built with GCC 16 under `/opt/motanka`, noble only; build in the build VM (noble chroot)
+  - _Requirements: 3.4, 3.5, 8.1, 8.2_
+- [ ] 7.6 `motanka-stack-shell` (Quickshell) for both releases (added after spike S1)
+  - Create `packaging/motanka-stack-shell/`: cpptrace 1.0.4 with libunwind and libdwarf-lite as an orig component, Quickshell 0.3.2; against `motanka-qt6` on noble and the archive Qt on resolute; extend `test/vm/tests/stack.sh` to start `quickshell --version` and a trivial shell config in the session
+  - _Requirements: 1.3, 3.4, 8.1, 8.2_
+
 - [ ] 8. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
   - _Requirements: 13.1_
 
