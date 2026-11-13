@@ -72,7 +72,7 @@ c_cpptrace() {
   [[ -d $SRC/cpptrace ]] || git clone -q --depth 1 --branch v1.0.4 https://github.com/jeremy-rifkin/cpptrace.git "$SRC/cpptrace"
   cmake -S "$SRC/cpptrace" -B "$SRC/cpptrace/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_INSTALL_RPATH="$PREFIX/lib" -DBUILD_SHARED_LIBS=ON \
-    -DCPPTRACE_USE_EXTERNAL_LIBDWARF=ON -DCPPTRACE_UNWIND_WITH_LIBUNWIND=OFF
+    -DCPPTRACE_USE_EXTERNAL_LIBDWARF=OFF -DCPPTRACE_UNWIND_WITH_LIBUNWIND=ON
   cmake --build "$SRC/cpptrace/build" -j "$JOBS"
   cmake --install "$SRC/cpptrace/build"
 }

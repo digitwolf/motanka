@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # mk_cmd_install is called by src/motanka
 # motanka install: option parsing. Preflight, the apt simulation and the
 # real install are added by tasks 11.1 to 11.3.
 

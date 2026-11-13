@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # mk_cmd_rollback is called by src/motanka
 # motanka rollback: option parsing. Rollback is added by task 21.4.
 
 mk_rollback_usage() {

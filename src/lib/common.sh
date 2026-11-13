@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034 # exit codes and options are used by the files that source this one
+# shellcheck disable=SC2034,SC2329 # library: its variables and functions are used by the files that source it
 # Shared library of the motanka CLI: exit codes, output with NO_COLOR
 # support, journal logging, the system lock, fsync and identifiers.
 #

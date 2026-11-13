@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # library: its functions are called by the files that source it
 # Safety guards that install, remove, update and rollback run before
 # anything else (design.md, Guards; requirements 14.8 and 14.11).
 #

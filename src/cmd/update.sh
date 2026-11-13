@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # mk_cmd_update is called by src/motanka
 # motanka update: option parsing. The update flow is added by task 21.2.
 
 mk_update_usage() {

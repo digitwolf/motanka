@@ -69,6 +69,7 @@ Build-Depends: debhelper-compat (= 13),
 #if resolute
                libdisplay-info-dev,
                libei-dev,
+               libeis-dev,
                libinput-dev,
                liblua5.5-dev,
                libpipewire-0.3-dev,

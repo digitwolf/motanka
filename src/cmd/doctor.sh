@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # mk_cmd_doctor is called by src/motanka
 # motanka doctor: option parsing. The report is added by task 22.1 and
 # --fix by task 22.2. Doctor runs no guards: without --fix it changes
 # nothing.

@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2329 # mk_cmd_remove is called by src/motanka
 # motanka remove: option parsing. The user and system phases are added by
 # tasks 19.1 to 19.3.
 
