@@ -1,0 +1,23 @@
+{
+ "format": 1,
+ "meta": {
+  "os": {"ID": "ubuntu", "PRETTY_NAME": "Ubuntu 26.04 LTS"},
+  "upstream_root": "/opt/motanka/share/omarchy",
+  "kernel": "7.0.0-14-generic"
+ },
+ "versions": {
+  "omarchy-version": "4.5.0",
+  "hyprland.version": "0.57.2",
+  "quickshell": "quickshell 0.3.2"
+ },
+ "commands": {"omarchy-menu": true, "omarchy-version": true},
+ "command_paths": {"omarchy-menu": "/usr/share/omarchy/bin/omarchy-menu", "omarchy-version": "/usr/share/omarchy/bin/omarchy-version"},
+ "env_session": {"XDG_CURRENT_DESKTOP": "Hyprland", "PATH": "/usr/share/omarchy/bin:/usr/local/bin:/usr/bin"},
+ "units_active": {"xdg-desktop-portal.service": true},
+ "menu": {
+  "apps": {"label": "Apps", "kind": "action", "visible": true},
+  "learn": {"label": "Learn", "kind": "menu", "visible": true},
+  "system": {"label": "System", "kind": "menu", "visible": true}
+ },
+ "errors": {}
+}

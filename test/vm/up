@@ -2,6 +2,7 @@
 # Boot a throwaway test VM from a copy-on-write overlay.
 #
 # Usage: test/vm/up <resolute|noble> <fresh|gnome-snaps|kde|multiuser>
+#        test/vm/up arch omarchy
 #
 # Builds the base image first if it is missing (test/vm/image). Waits until
 # SSH answers and cloud-init has finished, at most 600 s. Prints the VM name
@@ -10,10 +11,15 @@
 #
 # Then brings the VM up to date with apt-get full-upgrade, unless
 # MOTANKA_VM_UPGRADE=0 (build and unit-test VMs need no current host).
+#
+# "arch omarchy" is the parity reference VM (test/vm/image): it is never
+# upgraded, because its packages must stay those of Upstream's stable
+# channel at the time the base image was built. Its Upstream session starts
+# by itself (SDDM autologin of user alice); it needs MOTANKA_VM_GPU=gl.
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-MV_USAGE="test/vm/up <resolute|noble> <fresh|gnome-snaps|kde|multiuser>"
+MV_USAGE="test/vm/up <resolute|noble> <fresh|gnome-snaps|kde|multiuser> | test/vm/up arch omarchy"
 mv_init
 
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
@@ -25,8 +31,7 @@ if (($# != 2)); then
 fi
 release=$1
 variant=$2
-mv_check_release "$release"
-mv_check_variant "$variant"
+mv_check_image_target "$release" "$variant"
 mv_check_kvm
 mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen python3 setsid timeout
 mv_ensure_key
@@ -41,7 +46,9 @@ mv_boot "$release" "$variant" "$backing"
 # package (exit 5), so a test VM starts as an up-to-date host: the base
 # images are cloud images of their release day plus provisioning, and an
 # install from a stale image pulls archive updates (seen: libpcre2-8-0).
-if [[ ${MOTANKA_VM_UPGRADE:-1} == 1 ]]; then
+if [[ $release == "$MV_ARCH_RELEASE" ]]; then
+  mv_log "not upgrading the reference VM $MV_BOOTED (its packages are those of its base image)"
+elif [[ ${MOTANKA_VM_UPGRADE:-1} == 1 ]]; then
   mv_log "bringing $MV_BOOTED up to date (apt-get full-upgrade; MOTANKA_VM_UPGRADE=0 skips it)"
   mv_ssh_args "$MV_BOOTED"
   # sudo-rs (26.04) ignores sudo -E, so the variable goes through env.

@@ -2,6 +2,7 @@
 # Make sure a base image exists and print its path as the last line on stdout.
 #
 # Usage: test/vm/image <resolute|noble> <fresh|gnome-snaps|kde|multiuser>
+#        test/vm/image arch omarchy
 #
 # fresh: the Ubuntu server cloud image, downloaded once and verified against
 #   SHA256SUMS, whose signature SHA256SUMS.gpg is checked with gpgv and the
@@ -10,11 +11,38 @@
 #   test/vm/variants/<variant>.sh inside it with sudo, clean cloud-init state,
 #   shut down and convert the overlay into base/<release>-<variant>.qcow2.
 #
+# arch omarchy: the reference system of the parity probe (task 24.3). The
+#   official Arch Linux cloud image (arch-boxes,
+#   Arch-Linux-x86_64-cloudimg-<version>.qcow2 from
+#   geo.mirror.pkgbuild.com/images/) is downloaded once and verified twice:
+#   its SHA-256 against the published <image>.SHA256, and its detached
+#   signature <image>.sig with gpgv against the arch-boxes signing key, which
+#   is fetched over HTTPS from archlinux.org's Web Key Directory
+#   (arch-boxes@archlinux.org), so the mirror alone cannot forge it. Then an
+#   overlay boots it, test/parity/arch-omarchy.sh installs Upstream at the
+#   stable pin of upstream.pin inside it with sudo, cloud-init is cleaned and
+#   disabled (the image keeps the harness SSH key and host keys of that
+#   boot), and the overlay becomes base/arch-omarchy-<commit:12>.qcow2.
+#   Environment:
+#     MOTANKA_VM_ARCH_IMAGE_VERSION  a dated image such as 20250101.123456
+#                                    (from images/v<version>/); default: the
+#                                    newest in images/latest/
+#     MOTANKA_VM_ARCH_KEYRING        a binary OpenPGP keyring (gpg --export)
+#                                    with the arch-boxes key, used instead of
+#                                    the Web Key Directory
+#     MOTANKA_VM_ARCH_KEY_FPR        if set, the fingerprint (40 hex digits)
+#                                    the signing key or its primary key must
+#                                    have
+#     MOTANKA_PARITY_ARCH_ANY_VERSION  1: build even if Upstream's stable
+#                                    package repository no longer serves the
+#                                    pinned version (the image then is not at
+#                                    the pin; the probe documents show it)
+#
 # Base images are read-only (mode 0444). Delete one to rebuild it.
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-MV_USAGE="test/vm/image <resolute|noble> <fresh|gnome-snaps|kde|multiuser>"
+MV_USAGE="test/vm/image <resolute|noble> <fresh|gnome-snaps|kde|multiuser> | test/vm/image arch omarchy"
 mv_init
 
 CLOUD_IMAGE=""
@@ -141,6 +169,180 @@ variant_image() {
   printf '%s\n' "$dest"
 }
 
+# --- Arch Linux reference image (parity probe) --------------------------------
+
+# Prints the newest Arch-Linux-x86_64-cloudimg-<version>.qcow2 version named
+# in a downloaded index page.
+ARCH_INDEX_PY='import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+found = set(re.findall(r"Arch-Linux-x86_64-cloudimg-([0-9]{8}\.[0-9]+)\.qcow2(?![.\w])", text))
+if not found:
+    sys.exit("no Arch-Linux-x86_64-cloudimg-<version>.qcow2 in the index page")
+print(max(found, key=lambda v: (v.split(".")[0], int(v.split(".")[1]))))'
+
+# Prints the Web Key Directory hash (z-base-32 of SHA-1) of a local part.
+WKD_HASH_PY='import hashlib, sys
+alphabet = "ybndrfg8ejkmcpqxot1uwisza345h769"
+bits = int.from_bytes(hashlib.sha1(sys.argv[1].lower().encode()).digest(), "big")
+print("".join(alphabet[(bits >> (155 - 5 * i)) & 31] for i in range(32)))'
+
+# arch_signing_key <out>: writes the arch-boxes signing key to <out> and sets
+# ARCH_KEY_SOURCE to where it came from.
+ARCH_KEY_SOURCE=""
+arch_signing_key() {
+  local out=$1 hash url
+  if [[ -n ${MOTANKA_VM_ARCH_KEYRING:-} ]]; then
+    if [[ ! -f $MOTANKA_VM_ARCH_KEYRING || ! -r $MOTANKA_VM_ARCH_KEYRING ]]; then
+      mv_die "MOTANKA_VM_ARCH_KEYRING is not a readable file: $MOTANKA_VM_ARCH_KEYRING"
+    fi
+    cp -f -- "$MOTANKA_VM_ARCH_KEYRING" "$out"
+    ARCH_KEY_SOURCE=$MOTANKA_VM_ARCH_KEYRING
+    return 0
+  fi
+  hash=$(python3 -c "$WKD_HASH_PY" arch-boxes)
+  for url in \
+    "https://openpgpkey.archlinux.org/.well-known/openpgpkey/archlinux.org/hu/$hash?l=arch-boxes" \
+    "https://archlinux.org/.well-known/openpgpkey/hu/$hash?l=arch-boxes"; do
+    if python3 -c "$FETCH_PY" "$url" "$out" 2>/dev/null && [[ -s $out ]]; then
+      ARCH_KEY_SOURCE=$url
+      return 0
+    fi
+  done
+  mv_die "could not fetch the arch-boxes signing key from archlinux.org's Web Key Directory; set MOTANKA_VM_ARCH_KEYRING to a keyring that has it"
+}
+
+# arch_cloud_image: downloads and verifies the Arch Linux cloud image if
+# needed and sets CLOUD_IMAGE to its path.
+arch_cloud_image() {
+  local ver=${MOTANKA_VM_ARCH_IMAGE_VERSION:-} want=${MOTANKA_VM_ARCH_KEY_FPR:-}
+  local dir_url fname dest tmp expected actual lock sigfpr primary
+  if [[ -n $ver && ! $ver =~ ^[0-9]{8}\.[0-9]+$ ]]; then
+    mv_die "MOTANKA_VM_ARCH_IMAGE_VERSION must look like 20250101.123456, got '$ver'"
+  fi
+  want=${want^^}
+  if [[ -n $want && ! $want =~ ^[0-9A-F]{40}$ ]]; then
+    mv_die "MOTANKA_VM_ARCH_KEY_FPR must be 40 hex digits, got '$MOTANKA_VM_ARCH_KEY_FPR'"
+  fi
+  tmp=$(mktemp -d "$MV_BASE/.download.XXXXXX")
+  MV_CLEANUP_PATHS+=("$tmp")
+  if [[ -z $ver ]]; then
+    dir_url="$MV_ARCH_IMAGES_URL/latest"
+    mv_log "looking up the newest Arch Linux cloud image in $dir_url/"
+    fetch "$dir_url/" "$tmp/index.html"
+    if ! ver=$(python3 -c "$ARCH_INDEX_PY" "$tmp/index.html"); then
+      mv_die "could not find the cloud image in $dir_url/"
+    fi
+  else
+    dir_url="$MV_ARCH_IMAGES_URL/v$ver"
+  fi
+  fname="Arch-Linux-x86_64-cloudimg-$ver.qcow2"
+  dest="$MV_BASE/$fname"
+
+  exec {lock}>"$MV_BASE/.$fname.lock"
+  flock "$lock"
+  if [[ ! -f $dest ]]; then
+    mv_log "downloading $fname.SHA256 and $fname.sig"
+    fetch "$dir_url/$fname.SHA256" "$tmp/$fname.SHA256"
+    fetch "$dir_url/$fname.sig" "$tmp/$fname.sig"
+    expected=$(awk -v f="$fname" '$2 == "*" f || $2 == f { print $1; exit }' "$tmp/$fname.SHA256")
+    if [[ ! $expected =~ ^[0-9a-f]{64}$ ]]; then
+      mv_die "$fname is not listed in $fname.SHA256"
+    fi
+    arch_signing_key "$tmp/arch-boxes.gpg"
+    mv_log "signing key from $ARCH_KEY_SOURCE"
+
+    mv_log "downloading $fname"
+    fetch "$dir_url/$fname" "$tmp/$fname"
+    actual=$(sha256sum "$tmp/$fname" | awk '{ print $1 }')
+    if [[ $actual != "$expected" ]]; then
+      mv_die "checksum mismatch for $fname: expected $expected, got $actual"
+    fi
+    mv_log "checksum of $fname matches $fname.SHA256"
+
+    mkdir -m 0700 "$tmp/gnupg"
+    if ! gpgv --homedir "$tmp/gnupg" --keyring "$tmp/arch-boxes.gpg" --status-fd 1 \
+      "$tmp/$fname.sig" "$tmp/$fname" >"$tmp/gpgv.status" 2>"$tmp/gpgv.log"; then
+      cat "$tmp/gpgv.log" >&2 || true
+      mv_die "the signature $fname.sig does not verify against the arch-boxes key from $ARCH_KEY_SOURCE"
+    fi
+    read -r sigfpr primary < <(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3, $12; exit }' "$tmp/gpgv.status") || true
+    if [[ -z ${sigfpr:-} ]]; then
+      mv_die "gpgv reported no valid signature on $fname"
+    fi
+    if [[ -n $want && $want != "$sigfpr" && $want != "${primary:-}" ]]; then
+      mv_die "$fname is signed by $sigfpr (primary ${primary:--}), not by MOTANKA_VM_ARCH_KEY_FPR $want"
+    fi
+    mv_log "signature on $fname is good (key $sigfpr, primary ${primary:--})"
+
+    chmod 0444 "$tmp/$fname"
+    {
+      printf 'sha256\t%s\n' "$expected"
+      printf 'signing-key\t%s\n' "$sigfpr"
+      printf 'primary-key\t%s\n' "${primary:--}"
+      printf 'key-source\t%s\n' "$ARCH_KEY_SOURCE"
+    } >"$dest.verified"
+    mv -f "$tmp/$fname" "$dest"
+  fi
+  exec {lock}>&-
+  rm -rf -- "$tmp"
+  CLOUD_IMAGE=$dest
+}
+
+# arch_omarchy_image: builds base/arch-omarchy-<commit:12>.qcow2 if it is
+# missing and prints its path.
+arch_omarchy_image() {
+  local script commit="" tag="" sha="" allow=0 dest lock name tmpimg
+  script="$MV_REPO/test/parity/arch-omarchy.sh"
+  if [[ ! -f $script ]]; then
+    mv_die "no provisioning script $script"
+  fi
+  read -r commit tag sha < <(awk -F'\t' '$1 == "stable" { print $2, $3, $4; exit }' "$MV_REPO/upstream.pin") || true
+  if [[ ! $commit =~ ^[0-9a-f]{40}$ || ! $tag =~ ^[A-Za-z0-9._-]+$ || ! $sha =~ ^[0-9a-f]{64}$ ]]; then
+    mv_die "upstream.pin has no valid stable line (commit, tag, tarball SHA-256)"
+  fi
+  if [[ ${MOTANKA_PARITY_ARCH_ANY_VERSION:-0} == 1 ]]; then
+    allow=1
+  fi
+  dest="$MV_BASE/arch-omarchy-${commit:0:12}.qcow2"
+
+  exec {lock}>"$MV_BASE/.arch-omarchy-${commit:0:12}.lock"
+  flock "$lock"
+  if [[ ! -f $dest ]]; then
+    mv_check_kvm
+    mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen setsid timeout
+    mv_ensure_key
+    arch_cloud_image
+
+    mv_log "building the Upstream reference image ($tag, $commit) on $(basename "$CLOUD_IMAGE")"
+    mv_boot "$MV_ARCH_RELEASE" "$MV_ARCH_VARIANT" "$CLOUD_IMAGE"
+    name=$MV_BOOTED
+    mv_ssh_args "$name"
+
+    mv_log "running $(basename "$script") in $name (downloads several GB)"
+    if ! "${MV_SSH[@]}" sudo bash -s -- "$commit" "$tag" "$sha" "$allow" <"$script" >&2; then
+      mv_die "provisioning script $(basename "$script") failed in $name"
+    fi
+
+    mv_log "cleaning and disabling cloud-init, shutting down $name"
+    "${MV_SSH[@]}" 'sudo cloud-init clean --logs && sudo touch /etc/cloud/cloud-init.disabled' </dev/null >&2
+    if ! mv_poweroff "$name" 300; then
+      mv_die "$name did not power off within 300 s"
+    fi
+
+    tmpimg="$MV_BASE/.$(basename "$dest").tmp"
+    MV_CLEANUP_PATHS+=("$tmpimg")
+    rm -f -- "$tmpimg"
+    mv_log "converting the overlay into $(basename "$dest")"
+    qemu-img convert -O qcow2 "$MV_VMS/$name/overlay.qcow2" "$tmpimg"
+    chmod 0444 "$tmpimg"
+    mv -f "$tmpimg" "$dest"
+    mv_destroy "$name"
+    mv_log "built $dest"
+  fi
+  exec {lock}>&-
+  printf '%s\n' "$dest"
+}
+
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
   printf 'usage: %s\n' "$MV_USAGE"
   exit 0
@@ -150,11 +352,12 @@ if (($# != 2)); then
 fi
 release=$1
 variant=$2
-mv_check_release "$release"
-mv_check_variant "$variant"
+mv_check_image_target "$release" "$variant"
 mv_need gpgv sha256sum awk flock python3
 
-if [[ $variant == fresh ]]; then
+if [[ $release == "$MV_ARCH_RELEASE" ]]; then
+  arch_omarchy_image
+elif [[ $variant == fresh ]]; then
   cloud_image "$release"
   printf '%s\n' "$CLOUD_IMAGE"
 else

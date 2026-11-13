@@ -14,6 +14,9 @@
 #               run only when their variable is 1, and are SKIP otherwise:
 #                 release-upgrade.sh  MOTANKA_VM_RELEASE_UPGRADE=1 (24.04 ->
 #                                     26.04 with a twin VM; an hour or more)
+#                 parity.sh           MOTANKA_VM_PARITY=1 (an Arch Linux
+#                                     reference VM with Upstream; its first
+#                                     run builds that image, an hour or more)
 #   teardown    stop the unit-test VM; skipped with --keep
 #
 # Logs go to ~/.cache/motanka-vm/results/<run-id>/. Exits 1 if any stage
@@ -67,7 +70,7 @@ STAGES=()
 declare -A RESULT=()
 unit_vm=""
 # VM tests that run only on request: test name -> the variable that must be 1.
-declare -A OPT_IN=([release-upgrade]=MOTANKA_VM_RELEASE_UPGRADE)
+declare -A OPT_IN=([release-upgrade]=MOTANKA_VM_RELEASE_UPGRADE [parity]=MOTANKA_VM_PARITY)
 
 # run_stage <stage> <command...>: runs the command, logs its output to
 # <stage>.log and stderr, and records the exit code.

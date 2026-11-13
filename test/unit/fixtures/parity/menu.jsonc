@@ -1,0 +1,19 @@
+{
+  // A small menu in Upstream's format: comments, trailing commas, dotted ids.
+  "apps": {"label":"Apps","provider":"apps","action":"omarchy-shell omarchy.dock apps"},
+  "learn": {"label":"Learn"},
+  "remove": {"label":"Remove"},
+  "about": {"label":"About","action":"omarchy-launch-about"},
+  "hidden-action": {"label":"Hidden","when":"false","action":"true"},
+  "system": {"label":"System"},
+  "tools": {"label":"Tools","provider":"tools","when":"true"},
+
+  // Learn has one visible child.
+  "learn.keybindings": {"label":"Keybindings","action":"omarchy-menu-keybindings"},
+  // Remove has only children whose condition fails.
+  "remove.one": {"label":"One","when":"false","action":"true"},
+  "remove.two": {"label":"Two","when":"exit 3","action":"true"},
+  // System's only child is visible once its own child is.
+  "system.power": {"label":"Power"},
+  "system.power.off": {"label":"Off","when":"true","action":"systemctl poweroff",},
+}

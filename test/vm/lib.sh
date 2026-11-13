@@ -34,6 +34,12 @@
 #                        the overlay only grows as the guest writes)
 #   MOTANKA_BUILD_VM_CPUS  vCPUs of a build VM (default: host CPUs, at most 10)
 #   MOTANKA_BUILD_VM_RAM   memory of a build VM (default 10G)
+#
+# Besides the Ubuntu releases, test/vm/image and test/vm/up know one
+# reference target for the parity probe (task 24.3): release "arch" with the
+# single variant "omarchy", an Arch Linux cloud image with Upstream installed
+# at the stable pin. VM names are then arch-omarchy-<6 hex digits>.
+# test/run-all never boots it unless MOTANKA_VM_PARITY=1.
 
 MV_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MV_REPO=$(cd "$MV_LIB_DIR/../.." && pwd)
@@ -50,7 +56,11 @@ MV_RESULTS="$MV_STATE/results"
 
 MV_RELEASES=(resolute noble)
 MV_VARIANTS=(fresh gnome-snaps kde multiuser)
-MV_NAME_RE='^(resolute|noble)-(fresh|gnome-snaps|kde|multiuser)-[0-9a-f]{6}$'
+MV_NAME_RE='^((resolute|noble)-(fresh|gnome-snaps|kde|multiuser)|arch-omarchy)-[0-9a-f]{6}$'
+# The parity reference target (see the header).
+MV_ARCH_RELEASE=arch
+MV_ARCH_VARIANT=omarchy
+MV_ARCH_IMAGES_URL=https://geo.mirror.pkgbuild.com/images
 MV_GUEST_USER=tester
 MV_GUEST_REPO=/home/tester/motanka
 MV_DISK_SIZE=${MOTANKA_VM_DISK:-40G}
@@ -189,6 +199,20 @@ mv_check_variant() {
     fi
   done
   mv_usage "unknown variant '$1' (expected one of: ${MV_VARIANTS[*]})"
+}
+
+# mv_check_image_target <release> <variant>: an Ubuntu release with one of
+# its variants, or the parity reference target "arch omarchy". Used by
+# test/vm/image and test/vm/up only; everything else stays Ubuntu-only.
+mv_check_image_target() {
+  if [[ $1 == "$MV_ARCH_RELEASE" ]]; then
+    if [[ $2 != "$MV_ARCH_VARIANT" ]]; then
+      mv_usage "unknown variant '$2' for release $MV_ARCH_RELEASE (expected: $MV_ARCH_VARIANT)"
+    fi
+    return 0
+  fi
+  mv_check_release "$1"
+  mv_check_variant "$2"
 }
 
 mv_valid_name() {
@@ -337,6 +361,11 @@ package_update: false
 package_upgrade: false
 package_reboot_if_required: false
 EOF
+  # The Arch reference VM has no apt and no needrestart: an empty vendor-data.
+  if [[ $(cat "$dir/release" 2>/dev/null) == "$MV_ARCH_RELEASE" ]]; then
+    printf '#cloud-config\n{}\n' >"$dir/seed/vendor-data"
+    return 0
+  fi
   # Harness-wide defaults: no background apt runs, so two Fingerprints of
   # the same VM differ only by what the test did. The file name avoids
   # "motanka" so tests looking for Motanka leftovers do not match it.

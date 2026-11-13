@@ -1,0 +1,25 @@
+# Known, accepted differences between the Arch Linux reference VM
+# (Upstream as installed by its own scripts) and a Motanka VM at the same
+# Upstream_Pin, read by test/parity/diff.py.
+#
+# One difference per line, fields separated by one TAB:
+#   <category> TAB <key> TAB <reason>
+# Category and key are shell-style patterns (*, ?, [..]). Keep each reason
+# to the design decision that causes the difference. A difference that is
+# not listed here makes the parity test fail; add it here only once its
+# cause is understood and accepted.
+
+command_paths	*	Every Upstream command runs through its Motanka Wrapper in /opt/motanka/bin; /usr/share/omarchy/bin links there (design.md, Wrappers; session findings of task 15)
+tool_paths	*	The Stack (Hyprland, uwsm, Quickshell, companions) lives in /opt/motanka/bin, and Ubuntu's own programs may sit elsewhere than Arch's (DESIGN.md, Filesystem layout)
+env_session	XDG_CURRENT_DESKTOP	The session declares DesktopNames=Motanka;Hyprland, so desktop entries and portals key on Motanka (DESIGN.md, Session)
+env_session	XDG_SESSION_DESKTOP	The launcher sets motanka, the session entry's name (spike S5)
+env_session	DCONF_PROFILE	Desktop settings use the separate dconf store "motanka" (DESIGN.md, Rules 3)
+env_session	PATH	The session PATH starts with /opt/motanka/bin, the only Motanka folder on it (design.md, File layout)
+env_session	XDG_DATA_DIRS	XDG_DATA_DIRS gains /opt/motanka/share inside the session (DESIGN.md, Session)
+env_user_manager	XDG_CURRENT_DESKTOP	Imported from the session, see env_session (DESIGN.md, Session)
+env_user_manager	XDG_SESSION_DESKTOP	Imported from the session, see env_session (spike S5)
+env_user_manager	DCONF_PROFILE	Imported from the session, see env_session (DESIGN.md, Rules 3)
+env_user_manager	PATH	Imported from the session, see env_session (design.md, File layout)
+env_user_manager	XDG_DATA_DIRS	Imported from the session, see env_session (DESIGN.md, Session)
+units_active	motanka-*	Motanka's own user units, wanted only by motanka-session.target (DESIGN.md, Session)
+processes	session	Motanka's session launcher /opt/motanka/libexec/motanka/session waits for the compositor to end the session and clean up (design.md, Session start and stop)
