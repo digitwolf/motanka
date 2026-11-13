@@ -30,9 +30,10 @@
 #     MOTANKA_VM_ARCH_KEYRING        a binary OpenPGP keyring (gpg --export)
 #                                    with the arch-boxes key, used instead of
 #                                    the Web Key Directory
-#     MOTANKA_VM_ARCH_KEY_FPR        if set, the fingerprint (40 hex digits)
-#                                    the signing key or its primary key must
-#                                    have
+#     MOTANKA_VM_ARCH_KEY_FPR        the fingerprint (40 hex digits) the
+#                                    signing key or its primary key must
+#                                    have; default: the pinned arch-boxes
+#                                    primary key (MV_ARCH_KEY_FPR)
 #     MOTANKA_PARITY_ARCH_ANY_VERSION  1: build even if Upstream's stable
 #                                    package repository no longer serves the
 #                                    pinned version (the image then is not at
@@ -186,6 +187,12 @@ alphabet = "ybndrfg8ejkmcpqxot1uwisza345h769"
 bits = int.from_bytes(hashlib.sha1(sys.argv[1].lower().encode()).digest(), "big")
 print("".join(alphabet[(bits >> (155 - 5 * i)) & 31] for i in range(32)))'
 
+# The arch-boxes key "arch-boxes <arch-boxes@archlinux.org>": primary key
+# (certify only) and, below it, the signing subkey
+# 656E4C5AC1CC3B86E539D97E343635A6859A9174 (expires 2027-05-28) that signed
+# the images checked on 2026-11-13. MOTANKA_VM_ARCH_KEY_FPR replaces it.
+MV_ARCH_KEY_FPR=1B9A16984A4E8CB448712D2AE0B78BF4326C6F8F
+
 # arch_signing_key <out>: writes the arch-boxes signing key to <out> and sets
 # ARCH_KEY_SOURCE to where it came from.
 ARCH_KEY_SOURCE=""
@@ -200,9 +207,13 @@ arch_signing_key() {
     return 0
   fi
   hash=$(python3 -c "$WKD_HASH_PY" arch-boxes)
+  # archlinux.org's Web Key Directory did not serve the key on 2026-11-13
+  # (404), so the Ubuntu keyserver is the last source. Whatever the source,
+  # the image's signature must come from MV_ARCH_KEY_FPR (pinned below).
   for url in \
     "https://openpgpkey.archlinux.org/.well-known/openpgpkey/archlinux.org/hu/$hash?l=arch-boxes" \
-    "https://archlinux.org/.well-known/openpgpkey/hu/$hash?l=arch-boxes"; do
+    "https://archlinux.org/.well-known/openpgpkey/hu/$hash?l=arch-boxes" \
+    "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$MV_ARCH_KEY_FPR"; do
     if python3 -c "$FETCH_PY" "$url" "$out" 2>/dev/null && [[ -s $out ]]; then
       ARCH_KEY_SOURCE=$url
       return 0
@@ -214,7 +225,7 @@ arch_signing_key() {
 # arch_cloud_image: downloads and verifies the Arch Linux cloud image if
 # needed and sets CLOUD_IMAGE to its path.
 arch_cloud_image() {
-  local ver=${MOTANKA_VM_ARCH_IMAGE_VERSION:-} want=${MOTANKA_VM_ARCH_KEY_FPR:-}
+  local ver=${MOTANKA_VM_ARCH_IMAGE_VERSION:-} want=${MOTANKA_VM_ARCH_KEY_FPR:-$MV_ARCH_KEY_FPR}
   local dir_url fname dest tmp expected actual lock sigfpr primary
   if [[ -n $ver && ! $ver =~ ^[0-9]{8}\.[0-9]+$ ]]; then
     mv_die "MOTANKA_VM_ARCH_IMAGE_VERSION must look like 20250101.123456, got '$ver'"
@@ -270,7 +281,7 @@ arch_cloud_image() {
       mv_die "gpgv reported no valid signature on $fname"
     fi
     if [[ -n $want && $want != "$sigfpr" && $want != "${primary:-}" ]]; then
-      mv_die "$fname is signed by $sigfpr (primary ${primary:--}), not by MOTANKA_VM_ARCH_KEY_FPR $want"
+      mv_die "$fname is signed by $sigfpr (primary ${primary:--}), not by the pinned arch-boxes key $want"
     fi
     mv_log "signature on $fname is good (key $sigfpr, primary ${primary:--})"
 
