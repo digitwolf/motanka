@@ -255,7 +255,7 @@ All commands log to the journal with `SYSLOG_IDENTIFIER=motanka`. Log lines carr
 ### Wrappers, shims and the Helper
 
 - At build time one Wrapper is generated per file in Upstream `bin/`. A Wrapper runs `run-upstream <name> "$@"`.
-- `run-upstream` sets `OMARCHY_PATH=/opt/motanka/share/omarchy` and `PATH=<overrides>:<shims>:<upstream bin>:$PATH`, then runs `overrides/<name>` if it exists, otherwise Upstream `bin/<name>`. Shims are therefore visible only below a Wrapper (5.9, 7.14).
+- `run-upstream` sets `OMARCHY_PATH=/usr/share/omarchy` (the package-owned symlink to `/opt/motanka/share/omarchy`; with any other value Upstream treats itself as a development checkout and `omarchy-version` prints "dev") and `PATH=<overrides>:<shims>:<upstream bin>:$PATH`, then runs `overrides/<name>` if it exists, otherwise Upstream `bin/<name>`. Shims are therefore visible only below a Wrapper (5.9, 7.14).
 - `pacman` and `yay` shims translate:
 
 | Call | Action |
