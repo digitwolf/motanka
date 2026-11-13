@@ -4,11 +4,13 @@ motanka-portals.conf usr/share/xdg-desktop-portal/
 systemd/motanka-session.target usr/lib/systemd/user/
 systemd/motanka-session-cleanup.service usr/lib/systemd/user/
 systemd/motanka-shell-integration.service usr/lib/systemd/user/
+systemd/motanka-default-theme.service usr/lib/systemd/user/
 dconf/profile/motanka etc/dconf/profile/
 dconf/db/motanka.d/00-motanka etc/dconf/db/motanka.d/
 uwsm/env-motanka opt/motanka/share/uwsm/
 hypr/motanka-session.lua opt/motanka/share/motanka/hypr/
 session-env.list opt/motanka/share/motanka/
+fontconfig/fonts.conf opt/motanka/share/motanka/fontconfig/
 upstream.pin opt/motanka/share/motanka/
 compat/privileged.tsv opt/motanka/share/motanka/
 compat/home-paths.tsv opt/motanka/share/motanka/

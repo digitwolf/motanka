@@ -218,10 +218,21 @@ env_now() {
   assert_success
   run grep -x 'XDG_DATA_DIRS=/opt/motanka/share:/usr/share' "$S/uwsm.env"
   assert_success
+  run grep -x 'FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig' "$S/uwsm.env"
+  assert_success
   run grep '^LD_LIBRARY_PATH=' "$S/uwsm.env"
   assert_failure
   run grep -F 'LD_LIBRARY_PATH was set for the session and is removed' "$S/journal"
   assert_success
+}
+
+@test "a FONTCONFIG_PATH of the user follows Motanka's font configuration once" {
+  FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig:/home/tester/fc session
+  assert_success
+  run grep -x 'FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig:/home/tester/fc' "$S/uwsm.env"
+  assert_success
+  run grep -c '^FONTCONFIG_FILE=' "$S/uwsm.env"
+  assert_output 0
 }
 
 @test "without XDG_DATA_DIRS the default folders follow /opt/motanka/share" {
@@ -475,6 +486,19 @@ env_now() {
   assert_output "$(printf 'HOME\t/home/tester\nPATH\t/usr/bin\nXDG_DATA_DIRS\t/usr/share')"
 }
 
+@test "cleanup without a snapshot strips Motanka's font configuration from FONTCONFIG_PATH" {
+  printf 'FONTCONFIG_PATH\t/opt/motanka/share/motanka/fontconfig:/home/tester/fc\nHOME\t/home/tester\n' >"$S/env"
+  session cleanup
+  assert_success
+  run env_now
+  assert_output "$(printf 'FONTCONFIG_PATH\t/home/tester/fc\nHOME\t/home/tester')"
+  printf 'FONTCONFIG_PATH\t/opt/motanka/share/motanka/fontconfig\nHOME\t/home/tester\n' >"$S/env"
+  session cleanup
+  assert_success
+  run env_now
+  assert_output "$(printf 'HOME\t/home/tester')"
+}
+
 @test "cleanup with a snapshot restores the saved values, quoted ones included" {
   mkdir -p "$XDG_RUNTIME_DIR/motanka"
   printf '# snapshot\nPATH=/usr/bin\nEDITOR=$'"'"'vim -n'"'"'\n# complete\n' >"$XDG_RUNTIME_DIR/motanka/session-env.pre"
@@ -553,7 +577,7 @@ env_now() {
 @test "the Session_Env_List names every variable the launcher sets" {
   local v list="$REPO/packaging/motanka-core/session-env.list"
   for v in XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DCONF_PROFILE OMARCHY_PATH PATH XDG_DATA_DIRS \
-    WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE; do
+    FONTCONFIG_PATH WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE; do
     run grep -qx "$v" "$list"
     assert_success
   done

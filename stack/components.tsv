@@ -15,7 +15,10 @@
 #   build     cmake | meson | autotools | lua | python-meson | headers |
 #             cmake-tool (CMake built with the release's own CMake into a
 #             build-only prefix; noble's CMake 3.28 is older than the 3.30
-#             Hyprland and the 3.31 glaze require)
+#             Hyprland and the 3.31 glaze require). Other components files
+#             also use qt, source and files (plain files installed as
+#             they are, from a tarball that may have no top-level folder;
+#             stack/fonts-components.tsv)
 #   suites    noble | resolute | both: the suites that build the component
 #   package   binary package for the component's programs and data, or '-'
 #             for build-time only. Shared libraries (lib/*.so.*) always go

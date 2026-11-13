@@ -1,0 +1,31 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: motanka-fonts
+Upstream-Contact: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Source: https://github.com/digitwolf/motanka
+Comment: The source package bundles the upstream component listed in
+ stack/fonts-components.tsv as the dpkg-source component
+ jetbrains-mono-nerd/: Nerd Fonts' JetBrainsMono release archive, from
+ https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.1, unchanged.
+ The authoritative licence text is that archive's OFL.txt, which the
+ binary package installs as /usr/share/doc/motanka-fonts/OFL.txt.
+
+Files: *
+Copyright: 2026 Ruslan Babych
+License: LicenseRef-motanka-no-license-yet
+ The Motanka repository does not have a license file yet. Until the
+ copyright holder publishes one, no rights are granted beyond those that
+ apply by law.
+
+Files: jetbrains-mono-nerd/*
+Copyright: 2020 The JetBrains Mono Project Authors
+           2014 Ryan L McIntyre and the Nerd Fonts contributors
+License: OFL-1.1
+Comment: JetBrains Mono patched with the Nerd Fonts glyphs. The copyright
+ lines above are a summary; the archive's OFL.txt and README.md name the
+ holders.
+
+License: OFL-1.1
+ SIL Open Font License, Version 1.1. The full text is not repeated here:
+ it is the file OFL.txt of the upstream archive, installed as
+ /usr/share/doc/motanka-fonts/OFL.txt. Debian systems do not carry it in
+ /usr/share/common-licenses.

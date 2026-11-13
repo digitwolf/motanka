@@ -134,6 +134,26 @@
 # omarchy-provision-user also sets the XDG user folders, GTK bookmarks and
 # default applications (~/.config/mimeapps.list), all Shared_Files; its
 # override (src/overrides/omarchy-provision-user) drops those writes.
+#
+# Writes of Upstream's install/user/theme.sh, which
+# motanka-default-theme.service runs once per user in the session
+# (omarchy-theme-set "Tokyo Night" and the activations of theme.sh):
+#   ~/.config/omarchy/themes, ~/.local/state/omarchy/** (the current theme,
+#     its background link, theme-set.log), ~/.cache/omarchy/**
+#                                                namespaced
+#   ~/.config/dconf/motanka (omarchy-theme-set-gnome through gsettings with
+#     DCONF_PROFILE=motanka)                     namespaced
+#   ~/.config/btop/themes/current.theme          app (.config/btop/**)
+#   ~/.local/share/fcitx5/themes/omarchy/**, and
+#     ~/.config/fcitx5/conf/classicui.conf when it did not exist (Motanka's
+#     omarchy-theme-set-fcitx5 override leaves an existing one alone)
+#                                                app
+#   ~/.pi/agent/themes/omarchy-system.json, ~/.claude/themes/omarchy.json,
+#     ~/.hermes/skins/omarchy.yaml (when those folders exist)
+#                                                app (see above)
+#   ~/.pi/agent/settings.json: the user's own Pi settings, read in every
+#     session; omarchy-theme-set-pi --activate would set its theme, and
+#     Motanka's override drops --activate        shared
 
 # --- Motanka's own file inside Upstream's namespace: listed before the
 # namespace, so it is ledgered and backed up as a session file.
@@ -286,3 +306,4 @@ Videos	desktop
 .config/systemd/**	shared
 .config/fontconfig/**	shared
 .config/dconf/user	shared
+.pi/agent/settings.json	shared

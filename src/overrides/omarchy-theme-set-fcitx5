@@ -1,0 +1,60 @@
+#!/bin/bash
+# omarchy-theme-set-fcitx5: Motanka override of Upstream
+# bin/omarchy-theme-set-fcitx5.
+#
+# usage (as Upstream): omarchy-theme-set-fcitx5 [--activate]
+#
+# Upstream's script copies the current theme's fcitx5-theme.conf into the
+# Fcitx5 theme folder .local/share/fcitx5/themes/omarchy of the home folder
+# (when it exists, or always with --activate). With --activate, which
+# Upstream's install/user/theme.sh passes (motanka-default-theme.service
+# runs that script in the session), it also points Fcitx5's classic UI at
+# that theme in .config/fcitx5/conf/classicui.conf. Fcitx5 reads that file
+# in every session of the user, and compat/home-paths.tsv gives
+# .config/fcitx5 the class app: Motanka may create such a file, but leaves
+# one that exists alone. So when classicui.conf (or a link of that name)
+# exists, --activate is dropped, with a journal entry, and the user's file
+# stays as it is. When it does not exist, Upstream's script creates it, and
+# the session capture adopts it (motanka remove deletes it while it is
+# unchanged). Every other call goes to Upstream's unmodified script with
+# the same arguments.
+#
+# Exit codes: Upstream's; 1 when Upstream's script is missing.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+# /usr/share/omarchy/bin holds the Wrappers (the overlay
+# /opt/motanka/share/omarchy-view), and the Wrapper of this command runs
+# this override, so Upstream's script is taken from the vendored tree.
+omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+omarchy=${omarchy%/}
+if [[ $omarchy == /usr/share/omarchy ]]; then
+  omarchy=/opt/motanka/share/omarchy
+fi
+upstream=$omarchy/bin/omarchy-theme-set-fcitx5
+if [[ ! -x $upstream ]]; then
+  mk_error "Upstream's omarchy-theme-set-fcitx5 is missing at $upstream"
+  exit 1
+fi
+
+# The file Upstream's select_theme rewrites, at the same path.
+classicui=${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5/conf/classicui.conf
+
+args=()
+dropped=0
+for a in "$@"; do
+  if [[ $a == --activate ]] && [[ -e $classicui || -L $classicui ]]; then
+    dropped=1
+    continue
+  fi
+  args+=("$a")
+done
+if ((dropped)); then
+  mk_log notice "omarchy-theme-set-fcitx5: --activate dropped: $classicui exists, and Fcitx5 reads it in every session; only the theme folder is synced"
+fi
+exec "$upstream" "${args[@]}"

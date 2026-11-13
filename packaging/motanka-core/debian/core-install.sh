@@ -24,8 +24,10 @@
 #          target of Upstream's config/ tree has no Home_Path_Class in
 #          compat/home-paths.tsv (src/libexec/user-setup --plan), and when
 #          Upstream's install/user/all.sh and compat/user-scripts.tsv do not
-#          name the same per-user scripts, and when compat/migrations.tsv
-#          differs from what tools/classify-migrations makes of omarchy/.
+#          name the same per-user scripts, when compat/migrations.tsv
+#          differs from what tools/classify-migrations makes of omarchy/,
+#          and when fontconfig/fonts.conf (the Motanka session's font
+#          configuration) includes an Upstream file that omarchy/ lacks.
 # test     checks the syntax of every shell file in src/ and debian/.
 # install  installs into debian/motanka-core:
 #            /usr/bin/motanka                                  src/motanka
@@ -144,6 +146,22 @@ check_migrations() {
   log "$(cat "$B/migrations.err")"
 }
 
+# check_fontconfig: every vendored Upstream file that fontconfig/fonts.conf
+# includes exists in omarchy/, so a pin bump that moves Upstream's
+# fontconfig rules fails here instead of silently losing them (fonts.conf
+# includes them with ignore_missing="yes").
+check_fontconfig() {
+  local f rel n=0
+  [[ -f fontconfig/fonts.conf ]] || die "fontconfig/fonts.conf is missing"
+  while IFS= read -r f; do
+    rel=${f#"/$VENDORED/"}
+    [[ -f omarchy/$rel ]] || die "fontconfig/fonts.conf includes $f, which the vendored Upstream tree does not have"
+    n=$((n + 1))
+  done < <(sed -n "s|^[[:space:]]*<include[^>]*>\(/$VENDORED/[^<]*\)</include>.*|\1|p" fontconfig/fonts.conf)
+  ((n > 0)) || die "fontconfig/fonts.conf includes no Upstream fontconfig file from /$VENDORED"
+  log "fontconfig/fonts.conf: $n Upstream fontconfig file(s) found in the vendored tree"
+}
+
 cmd_build() {
   local f name
   check_inputs
@@ -162,6 +180,7 @@ cmd_build() {
   check_home_plan
   check_user_scripts
   check_migrations
+  check_fontconfig
 }
 
 # install_view: the overlay /opt/motanka/share/omarchy-view.

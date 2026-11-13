@@ -1,0 +1,54 @@
+#!/bin/bash
+# omarchy-theme-set-pi: Motanka override of Upstream
+# bin/omarchy-theme-set-pi.
+#
+# usage (as Upstream): omarchy-theme-set-pi [--activate]
+#
+# Upstream's script copies the current theme's pi.json to
+# .pi/agent/themes/omarchy-system.json in the home folder when .pi/agent
+# exists. With --activate, which Upstream's install/user/theme.sh passes
+# (motanka-default-theme.service runs that script in the session), it also
+# creates .pi/agent and sets "theme" in .pi/agent/settings.json. That file
+# holds the user's own settings of the Pi agent, which runs in every
+# session (class shared in compat/home-paths.tsv). So this runs Upstream's
+# unmodified script with the same arguments except --activate, which is
+# dropped with a journal entry: the theme file is kept in step, as on every
+# theme switch, and settings.json is never written. To use the theme, pick
+# "omarchy-system" in Pi's own settings.
+#
+# Exit codes: Upstream's; 1 when Upstream's script is missing.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+# /usr/share/omarchy/bin holds the Wrappers (the overlay
+# /opt/motanka/share/omarchy-view), and the Wrapper of this command runs
+# this override, so Upstream's script is taken from the vendored tree.
+omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+omarchy=${omarchy%/}
+if [[ $omarchy == /usr/share/omarchy ]]; then
+  omarchy=/opt/motanka/share/omarchy
+fi
+upstream=$omarchy/bin/omarchy-theme-set-pi
+if [[ ! -x $upstream ]]; then
+  mk_error "Upstream's omarchy-theme-set-pi is missing at $upstream"
+  exit 1
+fi
+
+args=()
+dropped=0
+for a in "$@"; do
+  if [[ $a == --activate ]]; then
+    dropped=1
+    continue
+  fi
+  args+=("$a")
+done
+if ((dropped)); then
+  mk_log notice "omarchy-theme-set-pi: --activate dropped: it would set the theme in the home folder's .pi/agent/settings.json, which Pi reads in every session; only the theme file is synced"
+fi
+exec "$upstream" "${args[@]}"

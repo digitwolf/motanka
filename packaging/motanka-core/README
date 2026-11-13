@@ -46,6 +46,13 @@ session ends. Desktop settings of the session are in the dconf database
 /opt/motanka/share/omarchy-view: its bin is /opt/motanka/bin (the command
 wrappers) and its other entries link into the unmodified vendored tree.
 
+Fonts: the launcher also sets
+FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig. The fonts.conf
+there adds /opt/motanka/share/fonts (JetBrainsMono Nerd Font, from
+motanka-fonts) and upstream's fontconfig rules to the system configuration,
+so the bar's text and icons draw in the font upstream expects. Other
+sessions use /etc/fonts/fonts.conf as before and do not see these fonts.
+
 Per-user setup
 --------------
 
@@ -73,6 +80,19 @@ in home-paths.tsv, as adopted (motanka remove deletes them while they are
 unchanged), as written by Ubuntu's own session components (left alone),
 or as unplanned (left alone and listed by "motanka doctor"). A capture
 that a crash left open is ended at the next login or by "motanka remove".
+
+Default theme
+-------------
+
+At the first login motanka-default-theme.service waits for upstream's
+desktop shell and runs upstream's install/user/theme.sh in the running
+session, once per user: the Tokyo Night theme with its wallpaper. The
+result is recorded in ~/.local/state/motanka/default-theme
+(/opt/motanka/libexec/motanka/default-theme status shows it). Pick another
+theme in the Omarchy menu (Super+Ctrl+T). The theme's files in the home
+folder are recorded by the session capture below. Two of its steps are
+narrowed by overrides: Pi's own settings file is never changed, and an
+existing Fcitx5 classicui.conf is left as it is.
 
 Shell integration
 -----------------

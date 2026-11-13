@@ -405,7 +405,7 @@ tree-sitter-cli:
 ttf-ia-writer:
   all: {skip: "Upstream repository package; port pending"}
 ttf-jetbrains-mono-nerd-basic:
-  all: {skip: "Upstream repository package; port pending"}
+  all: {motanka: motanka-fonts, reason: "Nerd Fonts 3.5.1 JetBrainsMono in /opt/motanka/share/fonts, seen only by the Motanka session's fontconfig"}
 ttfx:
   all: {skip: "Upstream repository package; port pending"}
 tuxedo-drivers-nocompatcheck-dkms:

@@ -1,0 +1,246 @@
+#!/bin/bash
+# default-theme: applies Upstream's default theme once per user, in the
+# running Motanka session (design.md, "Session findings (fonts and default
+# theme)"). Installed as /opt/motanka/libexec/motanka/default-theme.
+#
+# usage: default-theme run      apply it, unless a run was recorded before
+#                               (ExecStart of motanka-default-theme.service)
+#        default-theme status   print the recorded result
+#
+# Upstream applies its default theme in install/user/theme.sh, one of the
+# per-user scripts of install/user/all.sh: it creates
+# ~/.config/omarchy/themes, runs omarchy-theme-set "Tokyo Night" when no
+# theme is set yet, activates the Pi and Fcitx5 themes and links btop's
+# theme. omarchy-theme-set hands the wallpaper and colours to the running
+# desktop shell and reloads the compositor, so per-user setup, which runs
+# before the compositor, does not run the script (compat/user-scripts.tsv).
+# "run" runs it in the session instead:
+#   1. Refuses as root; Protected_Host and Dev_Build guards (exit 7).
+#   2. Takes the per-user lock $XDG_RUNTIME_DIR/motanka.lock (waits up to
+#      30 s, exit 9) only to read the result file; when a result is
+#      recorded, returns 0 at once. The lock is not held while the script
+#      runs, so the session capture and the Remover are never kept waiting.
+#   3. Waits up to 120 s for Upstream's desktop shell to answer
+#      ("omarchy-shell shell ping" through its Wrapper). Without an answer
+#      it returns 0 and records nothing, so the next login tries again.
+#   4. Runs Upstream's install/user/theme.sh unchanged, as all.sh runs it
+#      (bash -eE -c 'source <script>'), from the home folder, with stdin
+#      from /dev/null, for at most 300 s, with OMARCHY_PATH=
+#      /usr/share/omarchy, OMARCHY_INSTALL=/usr/share/omarchy/install,
+#      /opt/motanka/bin (the Wrappers) first on PATH, OMARCHY_THEME_WAIT=1
+#      (omarchy-theme-set finishes its app retints before it returns
+#      instead of leaving them in the background) and OMARCHY_SETUP_CONTEXT
+#      unset, which Upstream reads as "runtime": a live session to apply
+#      the theme to. Upstream's commands run through their Wrappers, so the
+#      overrides of omarchy-theme-set-pi and omarchy-theme-set-fcitx5 apply.
+#   5. Records the result, under the lock, in
+#      ~/.local/state/motanka/default-theme: one line
+#      "<ok|failed> TAB <utc-time> TAB <exit code>", written to a temporary
+#      file and renamed. A failed run is not repeated either; "status"
+#      shows it and the journal has Upstream's output.
+# The home-folder writes of theme.sh happen during the session capture
+# (design.md, "Session-time home writes"), which records them by their
+# class in home-paths.tsv when the session ends.
+#
+# Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of
+# /opt/motanka and /usr/share/omarchy. With MOTANKA_ROOT set,
+# MOTANKA_THEME_SHELL_WAIT replaces the 120 s. flock, timeout and
+# systemd-detect-virt are found through PATH.
+#
+# Exit codes: 0 applied, already recorded, or no desktop shell answered;
+# 1 theme.sh failed or another error; 2 usage; 7 guard refused; 9 lock held
+# for 30 s.
+set -euo pipefail
+
+readonly DT_PREFIX=/opt/motanka
+readonly DT_OMARCHY_PATH=/usr/share/omarchy
+readonly DT_SCRIPT_REL=install/user/theme.sh
+readonly DT_LOCK_WAIT=30
+readonly DT_SCRIPT_TIMEOUT=300
+DT_SHELL_WAIT=120
+if [[ -n ${MOTANKA_ROOT:-} && ${MOTANKA_THEME_SHELL_WAIT:-} =~ ^[0-9]+$ ]]; then
+  DT_SHELL_WAIT=$MOTANKA_THEME_SHELL_WAIT
+fi
+readonly DT_SHELL_WAIT
+
+_dt_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_dt_base=${_dt_self%/*}
+if [[ ! -r $_dt_base/lib/common.sh ]]; then
+  _dt_base=${_dt_base%/*}
+fi
+MK_CMD=default-theme
+# shellcheck source=../lib/common.sh
+source "$_dt_base/lib/common.sh"
+# shellcheck source=../lib/guard.sh
+source "$_dt_base/lib/guard.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_dt_base/lib/userledger.sh"
+
+DT_WRAPPERS=$(mk_path "$DT_PREFIX/bin")
+DT_VENDORED=$(mk_path "$DT_PREFIX/share/omarchy")
+DT_VIEW=$(mk_path "$DT_OMARCHY_PATH")
+DT_LOCK_FD=""
+
+_dt_usage() {
+  cat <<'EOF'
+usage: default-theme run      apply the default theme once (the Motanka
+                              session runs this at every login)
+       default-theme status   print the recorded result
+
+The first Motanka session of a user applies Upstream's default theme by
+running its install/user/theme.sh once the desktop shell is up. Later
+logins skip it. Details: journalctl -t motanka
+EOF
+}
+
+# --- state -----------------------------------------------------------------
+
+_dt_state_file() {
+  local state
+  state=$(mk_userledger_state_dir) || return 1
+  printf '%s/default-theme\n' "$state"
+}
+
+# _dt_result: prints the recorded result word, or nothing.
+_dt_result() {
+  local f line=""
+  f=$(_dt_state_file) || return 1
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    printf '%s\n' "${line%%$'\t'*}"
+  fi
+}
+
+# _dt_record <ok|failed> <exit-code>
+_dt_record() {
+  local f tmp
+  mk_userledger_init || return 1
+  f=$(_dt_state_file) || return 1
+  tmp=$f.tmp
+  printf '%s\t%s\t%s\n' "$1" "$(mk_utc_now)" "$2" >"$tmp" || return 1
+  mk_fsync "$tmp" || return 1
+  mv -f -- "$tmp" "$f" || return 1
+  mk_fsync "${f%/*}" || return 1
+}
+
+_dt_lock() {
+  local rt=${XDG_RUNTIME_DIR:-} fd
+  if [[ -z $rt || ! -d $rt ]]; then
+    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set or not a folder; the default theme is applied inside the Motanka session"
+  fi
+  if ! exec {fd}>>"$rt/motanka.lock"; then
+    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $rt/motanka.lock"
+  fi
+  if ! flock -w "$DT_LOCK_WAIT" "$fd"; then
+    exec {fd}>&-
+    mk_die "$MK_EXIT_LOCKED" "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock)"
+  fi
+  DT_LOCK_FD=$fd
+}
+
+_dt_unlock() {
+  if [[ -n $DT_LOCK_FD ]]; then
+    exec {DT_LOCK_FD}>&-
+    DT_LOCK_FD=""
+  fi
+}
+
+_dt_guards() {
+  if ((EUID == 0)); then
+    mk_die "$MK_EXIT_ERROR" "the default theme is applied by the user it is for, not by root"
+  fi
+  mk_guard_protected_host
+  mk_guard_dev_build
+}
+
+# --- run -------------------------------------------------------------------
+
+# _dt_shell_ready: 0 once Upstream's desktop shell answers, polled every
+# second for DT_SHELL_WAIT seconds.
+_dt_shell_ready() {
+  local i
+  for ((i = 0; ; i++)); do
+    if "$DT_WRAPPERS/omarchy-shell" shell ping >/dev/null 2>&1; then
+      return 0
+    fi
+    if ((i >= DT_SHELL_WAIT)); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# _dt_script: step 4. Returns the script's exit code.
+_dt_script() {
+  (
+    cd -- "$HOME" || exit 1
+    # shellcheck disable=SC2016 # $1 is expanded by the inner bash, as Upstream runs it
+    exec env -u OMARCHY_SETUP_CONTEXT OMARCHY_PATH="$DT_VIEW" OMARCHY_INSTALL="$DT_VIEW/install" \
+      OMARCHY_THEME_WAIT=1 PATH="$DT_WRAPPERS:$PATH" timeout "$DT_SCRIPT_TIMEOUT" \
+      bash -eE -c 'source "$1"' bash "$DT_VENDORED/$DT_SCRIPT_REL" </dev/null
+  )
+}
+
+_dt_run() {
+  local result rc=0
+  _dt_guards
+  _dt_lock
+  result=$(_dt_result) || return 1
+  _dt_unlock
+  if [[ -n $result ]]; then
+    mk_log info "the default theme already ran for this user (result: $result); not running Upstream's $DT_SCRIPT_REL again"
+    return 0
+  fi
+  if [[ ! -f $DT_VENDORED/$DT_SCRIPT_REL ]]; then
+    mk_error "Upstream's $DT_SCRIPT_REL is missing in $DT_VENDORED; reinstall motanka-core"
+    return 1
+  fi
+  if [[ ! -x $DT_WRAPPERS/omarchy-shell ]]; then
+    mk_error "the Wrapper $DT_WRAPPERS/omarchy-shell is missing; reinstall motanka-core"
+    return 1
+  fi
+  if ! _dt_shell_ready; then
+    mk_log notice "Upstream's desktop shell did not answer within $DT_SHELL_WAIT s; the default theme is applied at the next login"
+    return 0
+  fi
+  mk_log info "running Upstream's $DT_SCRIPT_REL in the session"
+  _dt_script || rc=$?
+  _dt_lock
+  if ((rc == 0)); then
+    _dt_record ok 0 || return 1
+    _dt_unlock
+    mk_log info "applied the default theme (Upstream's $DT_SCRIPT_REL)"
+    return 0
+  fi
+  _dt_record failed "$rc" || return 1
+  _dt_unlock
+  mk_warn "Upstream's $DT_SCRIPT_REL failed (exit $rc); it is not run again. Choose a theme in the Omarchy menu (Super+Ctrl+T); details: journalctl --user -u motanka-default-theme"
+  return 1
+}
+
+_dt_status() {
+  local f line
+  f=$(_dt_state_file) || return 1
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    printf '%s\n' "$line"
+  else
+    printf 'not applied\n'
+  fi
+}
+
+main() {
+  local cmd=${1:-}
+  if (($# > 1)); then
+    mk_usage_error "unexpected argument '$2'"
+  fi
+  case $cmd in
+    run) _dt_run || exit "$MK_EXIT_ERROR" ;;
+    status) _dt_status || exit "$MK_EXIT_ERROR" ;;
+    -h | --help) _dt_usage ;;
+    "") mk_usage_error "a command is required: run or status" ;;
+    *) mk_usage_error "unknown command '$cmd'" ;;
+  esac
+}
+
+main "$@"

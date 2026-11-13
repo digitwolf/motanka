@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+# Installs the fonts of stack/fonts-components.tsv (Nerd Fonts'
+# JetBrainsMono archive) unchanged under /opt/motanka/share/fonts, for both
+# suites. The steps are in debian/fonts-build.sh; see the comment at its
+# top. Nothing is compiled.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	bash debian/fonts-build.sh install
+
+# The licence stays a plain text file next to the copyright file.
+override_dh_compress:
+	dh_compress -XOFL.txt
+
+# No fontconfig cache is built and no trigger runs: only the Motanka
+# session's fontconfig file lists /opt/motanka/share/fonts.
+override_dh_builddeb:
+	bash debian/fonts-build.sh verify
+	dh_builddeb

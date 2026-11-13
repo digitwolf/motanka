@@ -9,7 +9,10 @@ Reads a components file (default stack/components.tsv, the Stack). For
 every component it downloads the tarball into
 DIR/downloads/<name>-<version>.tar.<ext> (skipped when a file with the
 pinned SHA-256 is already there), verifies its SHA-256 and checks that it
-holds exactly one top-level folder with no absolute or '..' paths. When all
+holds exactly one top-level folder with no absolute or '..' paths (a
+component of build "files" may instead hold its files at the top level,
+as font release archives do; dpkg-source unpacks such a component as it
+is, and the package's build looks its files up by name). When all
 components pass, the source package's files in DIR/orig/ are rebuilt with
 one hard link (or copy) per component, named as dpkg-source 3.0 (quilt)
 expects:
@@ -70,8 +73,11 @@ DEFAULT_OUT = os.path.join(os.path.expanduser("~"), ".cache", "motanka-vm", "sta
 
 FIELDS = ("name", "version", "url", "sha256", "build", "suites", "package")
 # qt: a Qt submodule (motanka-qt6). source: not built on its own; another
-# component's build uses its folder (libdwarf-lite for cpptrace).
-BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source"}
+# component's build uses its folder (libdwarf-lite for cpptrace). files:
+# plain files installed as they are (fonts, motanka-fonts); the tarball may
+# hold them without a top-level folder.
+BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source", "files"}
+FLAT_OK_BUILDS = {"files"}
 SUITES = {"noble", "resolute", "both"}
 DEFAULT_PACKAGES = {"-", "motanka-stack-libs", "motanka-stack-hyprland", "motanka-stack-tools"}
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -211,9 +217,14 @@ def download(url, dest):
     raise OSError(f"download of {url} failed after {ATTEMPTS} attempts: {last}")
 
 
-def check_tar(path):
-    """Returns None if the tarball is well-formed, else a reason."""
+def check_tar(path, flat_ok=False):
+    """Returns None if the tarball is well-formed, else a reason. With
+    flat_ok, regular files at the top level are allowed too, but then the
+    tarball may hold no folder and no link at all, so its unpacked tree
+    is exactly those files."""
     tops = set()
+    flat = []
+    others = []
     try:
         with tarfile.open(path, "r:*") as tar:
             for m in tar:
@@ -226,10 +237,20 @@ def check_tar(path):
                 if not parts:
                     continue
                 if len(parts) == 1 and not m.isdir():
-                    return f"file '{name}' at the top level"
+                    if not flat_ok:
+                        return f"file '{name}' at the top level"
+                    if not m.isfile():
+                        return f"'{name}' at the top level is not a regular file"
+                    flat.append(name)
+                    continue
+                others.append(name)
                 tops.add(parts[0])
     except (tarfile.TarError, OSError, EOFError) as e:
         return f"unreadable tarball: {e}"
+    if flat:
+        if others:
+            return f"files at the top level next to folders or nested paths ('{others[0]}')"
+        return None
     if len(tops) != 1:
         return f"expected one top-level folder, found {len(tops)}: {', '.join(sorted(tops)[:5])}"
     return None
@@ -334,7 +355,7 @@ def main(argv=None):
             mismatch = True
             problems.append(f"{name}: sha256 {digest} does not match the pinned {pinned}; download deleted")
             continue
-        reason = check_tar(path)
+        reason = check_tar(path, c["build"] in FLAT_OK_BUILDS)
         if reason:
             problems.append(f"{name}: {reason}")
             continue

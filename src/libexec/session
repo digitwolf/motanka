@@ -32,9 +32,18 @@
 #        DCONF_PROFILE=motanka                 OMARCHY_PATH=/usr/share/omarchy
 #        PATH=/opt/motanka/bin:$PATH
 #        XDG_DATA_DIRS=/opt/motanka/share:$XDG_DATA_DIRS
-#      Earlier /opt/motanka entries are removed from PATH and XDG_DATA_DIRS
-#      first. LD_LIBRARY_PATH is never set; one passed in by the display
-#      manager is removed.
+#        FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig[:$FONTCONFIG_PATH]
+#      Earlier /opt/motanka entries are removed from PATH, XDG_DATA_DIRS and
+#      FONTCONFIG_PATH first. FONTCONFIG_PATH makes fontconfig load
+#      motanka-core's fonts.conf there, which adds the fonts of
+#      motanka-fonts (/opt/motanka/share/fonts) and Upstream's fontconfig
+#      rules to the system configuration; other sessions keep
+#      /etc/fonts/fonts.conf. FONTCONFIG_PATH rather than FONTCONFIG_FILE,
+#      because the cleanup below sets unset variables to an empty value in
+#      the reference D-Bus daemon's activation environment, and fontconfig
+#      ignores an empty FONTCONFIG_PATH but finds no configuration at all
+#      with an empty FONTCONFIG_FILE. LD_LIBRARY_PATH is never set; one
+#      passed in by the display manager is removed.
 #   6. The user manager's values of the Session_Env_List
 #      (/opt/motanka/share/motanka/session-env.list) are saved to
 #      $XDG_RUNTIME_DIR/motanka/session-env.pre. If the manager still holds
@@ -76,8 +85,9 @@
 #
 # cleanup: for every Session_Env_List variable, sets the value the user
 # manager had before the session (session-env.pre) or unsets it when it had
-# none. Without a complete session-env.pre, PATH and XDG_DATA_DIRS lose
-# their /opt/motanka entries and the other variables are unset. With the
+# none. Without a complete session-env.pre, PATH, XDG_DATA_DIRS and
+# FONTCONFIG_PATH lose their /opt/motanka entries and the other variables
+# are unset. With the
 # reference D-Bus daemon (not dbus-broker) the same values also go to its
 # activation environment, empty for unset ones, because it cannot unset.
 # Then the session capture is ended (mk_capture_end, under the per-user
@@ -98,6 +108,7 @@ readonly S_OMARCHY_PATH=/usr/share/omarchy
 readonly S_CURRENT_DESKTOP=Motanka:Hyprland
 readonly S_SESSION_DESKTOP=motanka
 readonly S_DCONF_PROFILE=motanka
+readonly S_FONTCONFIG_DIR=/opt/motanka/share/motanka/fontconfig
 readonly S_TARGET=motanka-session.target
 # motanka-session.target is started once graphical-session.target is
 # active, polled every 0.5 s for at most 240 polls (120 s).
@@ -352,11 +363,11 @@ _s_restore_plan() {
       S_DBUS_ARGS+=("$name=$v")
       continue
     fi
-    if ((have_pre == 0)) && [[ $name == PATH || $name == XDG_DATA_DIRS ]]; then
+    if ((have_pre == 0)) && [[ $name == PATH || $name == XDG_DATA_DIRS || $name == FONTCONFIG_PATH ]]; then
       if [[ ! -v S_CUR[$name] ]]; then
         continue
       fi
-      v=$(_s_strip_list "${S_CUR[$name]}" "$S_PREFIX/bin" "$S_PREFIX/share")
+      v=$(_s_strip_list "${S_CUR[$name]}" "$S_PREFIX/bin" "$S_PREFIX/share" "$S_FONTCONFIG_DIR")
       if [[ -n $v ]]; then
         if [[ $v != "${S_CUR[$name]}" ]]; then
           S_SET_ARGS+=("$name=$v")
@@ -528,7 +539,7 @@ _s_check_stack() {
 
 # _s_export_env: step 5.
 _s_export_env() {
-  local rest data
+  local rest data fc
   if [[ -v LD_LIBRARY_PATH ]]; then
     mk_warn "LD_LIBRARY_PATH was set for the session and is removed: Stack programs find their libraries through RUNPATH"
     unset LD_LIBRARY_PATH
@@ -541,6 +552,8 @@ _s_export_env() {
   export PATH="$S_PREFIX/bin${rest:+:$rest}"
   data=$(_s_strip_list "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" "$S_PREFIX/share")
   export XDG_DATA_DIRS="$S_PREFIX/share${data:+:$data}"
+  fc=$(_s_strip_list "${FONTCONFIG_PATH:-}" "$S_FONTCONFIG_DIR")
+  export FONTCONFIG_PATH="$S_FONTCONFIG_DIR${fc:+:$fc}"
 }
 
 # _s_user_setup: step 8.

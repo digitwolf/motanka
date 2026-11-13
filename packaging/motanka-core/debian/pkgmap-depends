@@ -6,8 +6,10 @@
 #
 # Only what Upstream's session needs to start belongs here: the commands
 # its Hyprland autostart and the shell launcher call before any menu is
-# used. Everything else in Upstream's package lists is installed through
-# the Helper at first use, or later by a separate metapackage.
+# used, and the font its bar draws its text and icons with. Everything
+# else in Upstream's package lists is installed through the Helper at
+# first use, or later by a separate metapackage.
 fontconfig
 jq
 socat
+ttf-jetbrains-mono-nerd-basic

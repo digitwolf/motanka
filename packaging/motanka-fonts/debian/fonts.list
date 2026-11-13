@@ -1,0 +1,23 @@
+# Fonts motanka-fonts ships, read by debian/fonts-build.sh. One line per
+# font file of the orig-jetbrains-mono-nerd component, fields separated by
+# tabs:
+#   <file name in the archive>  <family it must have>  <fontconfig weight>  <fontconfig slant>
+# Weight 80 is Regular and 200 Bold; slant 0 is upright and 100 italic. The
+# family is one of the names fc-scan reports for the file; the weight and
+# slant are fc-scan's values. Each file is installed unchanged as
+# /opt/motanka/share/fonts/jetbrains-mono-nerd/<file name>.
+#
+# "JetBrainsMono Nerd Font" is the family Upstream's
+# default/fontconfig/conf.avail/50-omarchy.conf maps "monospace" to (the
+# family of the bar and menus) and the one config/alacritty, config/ghostty
+# and config/foot name, with the styles Regular, Bold and Italic.
+# "JetBrainsMono Nerd Font Mono" is its single-width variant, for programs
+# that ask for strictly monospaced glyphs.
+JetBrainsMonoNerdFont-Regular.ttf	JetBrainsMono Nerd Font	80	0
+JetBrainsMonoNerdFont-Bold.ttf	JetBrainsMono Nerd Font	200	0
+JetBrainsMonoNerdFont-Italic.ttf	JetBrainsMono Nerd Font	80	100
+JetBrainsMonoNerdFont-BoldItalic.ttf	JetBrainsMono Nerd Font	200	100
+JetBrainsMonoNerdFontMono-Regular.ttf	JetBrainsMono Nerd Font Mono	80	0
+JetBrainsMonoNerdFontMono-Bold.ttf	JetBrainsMono Nerd Font Mono	200	0
+JetBrainsMonoNerdFontMono-Italic.ttf	JetBrainsMono Nerd Font Mono	80	100
+JetBrainsMonoNerdFontMono-BoldItalic.ttf	JetBrainsMono Nerd Font Mono	200	100

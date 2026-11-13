@@ -19,7 +19,12 @@
 #   install  apt-get install the local .debs; /usr/share/omarchy links to
 #            the overlay omarchy-view (bin: the Wrappers in /opt/motanka/bin,
 #            default: the vendored tree); per-user setup, shell integration,
-#            their data files and the shell integration unit are installed;
+#            the default theme, their data files and units are installed;
+#            motanka-fonts has its 8 fonts under /opt/motanka/share/fonts and
+#            nothing in the system's font folders, no file in /etc/fonts
+#            names /opt/motanka, and motanka-core depends on motanka-fonts;
+#            "fc-list" of bob and of alice outside the Motanka session has no
+#            JetBrainsMono Nerd Font (5.10);
 #            omarchy-version through its Wrapper prints the vendored version;
 #            neither alice's nor bob's home folder has a Motanka file and
 #            bob's is unchanged (6.8).
@@ -34,9 +39,21 @@
 #            XDG_CURRENT_DESKTOP=Motanka:Hyprland and
 #            XDG_SESSION_DESKTOP=motanka; a command the compositor starts has
 #            both too and resolves omarchy-version to the Wrapper in
-#            /opt/motanka/bin; bob's home folder is unchanged and holds no
-#            Motanka file (6.8).
-#   logout   stop alice's session and remove the autologin setup.
+#            /opt/motanka/bin; the default theme is applied in the session
+#            (~/.local/state/omarchy/current/theme.name is tokyo-night, which
+#            omarchy-theme-set makes of "Tokyo Night", and
+#            motanka-default-theme recorded "ok"); the desktop shell has
+#            FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig and, with
+#            that environment, "fc-match monospace" (the family the bar asks
+#            for) gives JetBrainsMono Nerd Font from /opt/motanka/share/fonts;
+#            "hyprctl layers" has the wallpaper layer omarchy-background and
+#            the theme's background link points to an image; then a
+#            screenshot; "fc-list" of bob and of alice outside the session
+#            still has no JetBrainsMono Nerd Font; bob's home folder is
+#            unchanged and holds no Motanka file (6.8).
+#   logout   stop alice's session and remove the autologin setup; once the
+#            session capture has ended, alice's User_Ledger has no unplanned
+#            path and the default theme's btop link is adopted.
 set -euo pipefail
 export LC_ALL=C.UTF-8
 export DEBIAN_FRONTEND=noninteractive
@@ -51,6 +68,10 @@ DROPIN=$DROPIN_DIR/autologin.conf
 APT=(sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300)
 WRAPPER_MARKER='# Motanka Wrapper for Upstream bin/'
 SETUP_TIMEOUT=300
+THEME_TIMEOUT=240
+FONT_FAMILY='JetBrainsMono Nerd Font'
+FONTS_DIR=$PREFIX/share/fonts
+FONTCONFIG_DIR=$PREFIX/share/motanka/fontconfig
 
 fails=0
 pass() { echo "PASS: $*"; }
@@ -145,6 +166,79 @@ check_bob() {
   fi
 }
 
+# fc_list_as <user>: fc-list as a login of that user outside the Motanka
+# session sees it (a clean environment). Its font cache goes to a temporary
+# folder, so the check writes nothing into the home folder.
+fc_list_as() {
+  local user=$1 home cache rc=0
+  home=$(user_home "$user")
+  cache=$(sudo -u "$user" mktemp -d /tmp/motanka-fc.XXXXXX)
+  sudo -u "$user" env -i HOME="$home" PATH=/usr/bin:/bin LANG=C.UTF-8 XDG_CACHE_HOME="$cache" \
+    fc-list : family file || rc=$?
+  sudo rm -rf -- "$cache"
+  return "$rc"
+}
+
+# check_fonts_hidden <label>: Motanka's fonts are invisible outside the
+# Motanka session, for bob and for alice (5.10).
+check_fonts_hidden() {
+  local label=$1 user out rc
+  for user in bob alice; do
+    rc=0
+    out=$(fc_list_as "$user" 2>&1) || rc=$?
+    printf '%s\n' "$out" >"$L/fc-list-$user-$label.txt"
+    if ((rc != 0)); then
+      fail "$label: fc-list as $user failed (exit $rc)"
+      tail -n 5 "$L/fc-list-$user-$label.txt" | show
+    elif grep -qiF -e "$FONT_FAMILY" -e "$FONTS_DIR" "$L/fc-list-$user-$label.txt"; then
+      fail "$label: fc-list of $user outside the Motanka session lists Motanka's fonts:"
+      grep -iF -e "$FONT_FAMILY" -e "$FONTS_DIR" "$L/fc-list-$user-$label.txt" | head -n 5 | show
+    else
+      pass "$label: fc-list of $user outside the Motanka session has no $FONT_FAMILY ($(grep -c . "$L/fc-list-$user-$label.txt") fonts)"
+    fi
+  done
+}
+
+check_fonts_installed() {
+  local n bad deps
+  n=$(find "$FONTS_DIR" -type f -name '*.ttf' 2>/dev/null | wc -l)
+  if ((n == 8)); then
+    pass "motanka-fonts installed its 8 fonts under $FONTS_DIR"
+  else
+    fail "$FONTS_DIR holds $n .ttf files, expected 8"
+  fi
+  if [[ -s /usr/share/doc/motanka-fonts/OFL.txt ]]; then
+    pass "motanka-fonts ships the fonts' licence as /usr/share/doc/motanka-fonts/OFL.txt"
+  else
+    fail "/usr/share/doc/motanka-fonts/OFL.txt is missing"
+  fi
+  bad=$(dpkg -L motanka-fonts 2>/dev/null | grep -E '^/(etc/fonts|usr/share/fonts|usr/local/share/fonts)(/|$)' || true)
+  if [[ -z $bad ]]; then
+    pass "motanka-fonts installs nothing into the system's font folders or /etc/fonts"
+  else
+    fail "motanka-fonts installs into the system's font configuration:"
+    printf '%s\n' "$bad" | show
+  fi
+  if sudo grep -rqsF -- "$PREFIX" /etc/fonts; then
+    fail "a file under /etc/fonts names $PREFIX:"
+    sudo grep -rlF -- "$PREFIX" /etc/fonts | show
+  else
+    pass "no file under /etc/fonts names $PREFIX"
+  fi
+  if [[ -s $FONTCONFIG_DIR/fonts.conf ]] && grep -qF "<dir>$FONTS_DIR</dir>" "$FONTCONFIG_DIR/fonts.conf"; then
+    pass "the session's font configuration $FONTCONFIG_DIR/fonts.conf adds $FONTS_DIR"
+  else
+    fail "$FONTCONFIG_DIR/fonts.conf is missing or does not add $FONTS_DIR"
+  fi
+  # shellcheck disable=SC2016 # dpkg-query field
+  deps=$(dpkg-query -W -f='${Depends}' motanka-core 2>/dev/null || true)
+  if [[ ", $deps," =~ ,\ motanka-fonts[\ ,] ]]; then
+    pass "motanka-core depends on motanka-fonts"
+  else
+    fail "motanka-core does not depend on motanka-fonts (Depends: $deps)"
+  fi
+}
+
 # --- phases -----------------------------------------------------------------
 
 phase_prepare() {
@@ -173,7 +267,7 @@ phase_prepare() {
 }
 
 phase_install() {
-  local rc=0 p f out v want
+  local rc=0 p f u out v want
   mkdir -p "$L"
   "${APT[@]}" install "$T"/debs/*.deb >"$L/install.log" 2>&1 || rc=$?
   if ((rc == 0)); then
@@ -183,7 +277,7 @@ phase_install() {
     tail -n 40 "$L/install.log" | show
     return
   fi
-  for p in motanka-core motanka-stack motanka-stack-shell; do
+  for p in motanka-core motanka-stack motanka-stack-shell motanka-fonts; do
     # shellcheck disable=SC2016 # dpkg-query fields
     if [[ $(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null) == "ii " ]]; then
       # shellcheck disable=SC2016 # dpkg-query field
@@ -205,7 +299,7 @@ phase_install() {
   else
     fail "the overlay is wrong: bin -> $(readlink -f /usr/share/omarchy/bin), default -> $(readlink -f /usr/share/omarchy/default)"
   fi
-  for f in libexec/motanka/user-setup libexec/motanka/shell-integration; do
+  for f in libexec/motanka/user-setup libexec/motanka/shell-integration libexec/motanka/default-theme; do
     if [[ -x $PREFIX/$f ]]; then
       pass "$PREFIX/$f is installed"
     else
@@ -219,12 +313,16 @@ phase_install() {
       fail "$PREFIX/share/motanka/$f is missing"
     fi
   done
-  f=/usr/lib/systemd/user/motanka-session.target.wants/motanka-shell-integration.service
-  if [[ -L $f ]] && dpkg -S "$f" >/dev/null 2>&1; then
-    pass "motanka-shell-integration.service is wanted by motanka-session.target through a package-owned link"
-  else
-    fail "$f is not a package-owned link"
-  fi
+  for u in motanka-shell-integration.service motanka-default-theme.service; do
+    f=/usr/lib/systemd/user/motanka-session.target.wants/$u
+    if [[ -L $f ]] && dpkg -S "$f" >/dev/null 2>&1; then
+      pass "$u is wanted by motanka-session.target through a package-owned link"
+    else
+      fail "$f is not a package-owned link"
+    fi
+  done
+  check_fonts_installed
+  check_fonts_hidden after-install
 
   want=$(awk -F'\t' '$1 == "stable" { print $3 }' "$PREFIX/share/motanka/upstream.pin")
   want=${want#v}
@@ -471,6 +569,111 @@ EOF
   fi
 }
 
+theme_name() {
+  sudo cat "$AHOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true
+}
+
+# theme_applied: 0 when the current theme is Tokyo Night. omarchy-theme-set
+# stores the name lowercased with dashes ("tokyo-night").
+theme_applied() {
+  local n
+  n=$(theme_name)
+  n=${n,,}
+  n=${n// /-}
+  [[ $n == tokyo-night ]]
+}
+
+theme_recorded() {
+  sudo test -s "$AHOME/.local/state/motanka/default-theme"
+}
+
+check_default_theme() {
+  local state unit
+  if wait_for "$THEME_TIMEOUT" theme_applied; then
+    pass "the default theme was applied in the session: theme.name is '$(theme_name)' (Tokyo Night)"
+  else
+    fail "no default theme within $THEME_TIMEOUT s: theme.name is '$(theme_name)'"
+  fi
+  wait_for 120 theme_recorded || true
+  state=$(sudo cat "$AHOME/.local/state/motanka/default-theme" 2>/dev/null || true)
+  if [[ $state == ok$'\t'* ]]; then
+    pass "motanka-default-theme recorded its run: $(tr '\t' ' ' <<<"$state")"
+  else
+    fail "motanka-default-theme recorded '${state:-nothing}', expected ok"
+  fi
+  unit=$(as_alice systemctl --user show -p ActiveState -p Result motanka-default-theme.service 2>&1 | tr '\n' ' ' || true)
+  echo "motanka-default-theme.service: $unit"
+}
+
+# check_session_fonts: the desktop shell's environment points fontconfig at
+# Motanka's configuration, and with it "monospace", the family of the bar's
+# text and icons (shell/Commons/Style.qml), is JetBrainsMono Nerd Font.
+check_session_fonts() {
+  local pid who=quickshell fcp out family file
+  pid=$(pgrep -u alice -x quickshell || true)
+  pid=${pid%%$'\n'*}
+  if [[ -z $pid ]]; then
+    who=Hyprland
+    pid=$(pgrep -u alice -x Hyprland || true)
+    pid=${pid%%$'\n'*}
+  fi
+  if [[ -z $pid ]]; then
+    fail "neither quickshell nor Hyprland runs for alice; the session's font configuration cannot be checked"
+    return 0
+  fi
+  sudo cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | LC_ALL=C sort >"$L/session-env-$who.txt" || true
+  fcp=$(sed -n 's/^FONTCONFIG_PATH=//p' "$L/session-env-$who.txt")
+  if [[ $fcp == "$FONTCONFIG_DIR" || $fcp == "$FONTCONFIG_DIR":* ]]; then
+    pass "$who (pid $pid) has FONTCONFIG_PATH=$fcp"
+  else
+    fail "$who (pid $pid) has FONTCONFIG_PATH='${fcp:-unset}', expected $FONTCONFIG_DIR"
+  fi
+  out=$(as_alice env FONTCONFIG_PATH="${fcp:-$FONTCONFIG_DIR}" fc-match -f '%{family}\t%{file}\n' monospace 2>&1 || true)
+  printf '%s\n' "$out" >"$L/fc-match-session.txt"
+  family=${out%%$'\t'*}
+  file=${out#*$'\t'}
+  if [[ ,$family, == *",$FONT_FAMILY,"* && $file == "$FONTS_DIR"/* ]]; then
+    pass "in the session, monospace (the bar's font family) is $FONT_FAMILY from $file"
+  else
+    fail "in the session, fc-match monospace gives '$out', expected $FONT_FAMILY from $FONTS_DIR"
+  fi
+}
+
+# check_wallpaper: the desktop shell's wallpaper layer is mapped and the
+# theme's background link points to an image.
+check_wallpaper() {
+  local sig out ns bg
+  sig=$(alice_sig)
+  out=$(as_alice env HYPRLAND_INSTANCE_SIGNATURE="$sig" "$PREFIX/bin/hyprctl" -j layers 2>&1 || true)
+  printf '%s\n' "$out" >"$L/layers.json"
+  ns=$(python3 -c 'import json, sys
+def walk(x):
+    if isinstance(x, dict):
+        if isinstance(x.get("namespace"), str):
+            yield x["namespace"]
+        for v in x.values():
+            yield from walk(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from walk(v)
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+print(" ".join(sorted(set(walk(data)))))' <<<"$out")
+  if [[ " $ns " == *" omarchy-background "* ]]; then
+    pass "hyprctl layers has the wallpaper layer omarchy-background (layers: $ns)"
+  else
+    fail "hyprctl layers has no omarchy-background layer (layers: ${ns:-none})"
+  fi
+  bg=$(sudo readlink -f "$AHOME/.local/state/omarchy/current/background" 2>/dev/null || true)
+  if [[ -n $bg ]] && sudo test -f "$bg"; then
+    pass "the theme's background link points to the image $bg"
+  else
+    fail "the background link ~/.local/state/omarchy/current/background resolves to '${bg:-nothing}'"
+  fi
+}
+
 phase_login() {
   mkdir -p "$L"
   start_alice_session || return 0
@@ -486,8 +689,12 @@ phase_login() {
   check_environment
   check_verify_config
   check_compositor_probe
+  check_default_theme
+  check_session_fonts
+  check_wallpaper
   screenshot_alice
   echo "shell integration decision: $(sudo cat "$AHOME/.local/state/motanka/shell-integration" 2>/dev/null || echo 'none yet')"
+  check_fonts_hidden after-login
   check_bob after-login
   collect_alice_logs
 }
@@ -509,7 +716,34 @@ phase_logout() {
   else
     fail "alice's Hyprland still runs after logout"
   fi
+  check_capture
   collect_alice_logs
+}
+
+capture_ended() {
+  ! sudo test -e "$AHOME/.local/state/motanka/capture/start"
+}
+
+# check_capture: the session capture recorded the default theme's writes by
+# their class, and none as unplanned (design.md, "Session-time home writes").
+check_capture() {
+  local unplanned
+  if ! wait_for 90 capture_ended; then
+    echo "SKIP: alice's session capture is still pending 90 s after logout; it ends at her next login or at 'motanka remove'"
+    return 0
+  fi
+  unplanned=$(sudo awk -F'\t' '$3 == "unplanned" { print $5 }' "$ALEDGER")
+  if [[ -z $unplanned ]]; then
+    pass "after the session, alice's User_Ledger has no unplanned home-folder path"
+  else
+    fail "unplanned paths in alice's User_Ledger after the session:"
+    printf '%s\n' "$unplanned" | show
+  fi
+  if sudo awk -F'\t' '$3 == "adopt" && $5 == ".config/btop/themes/current.theme" { found = 1 } END { exit !found }' "$ALEDGER"; then
+    pass "the session capture adopted the default theme's ~/.config/btop/themes/current.theme"
+  else
+    fail "the session capture has no adopt line for ~/.config/btop/themes/current.theme"
+  fi
 }
 
 main() {

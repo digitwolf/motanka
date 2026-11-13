@@ -290,4 +290,73 @@ cfield() {
   assert_output "$REPO/packaging/motanka-qt6/build-imports"
   run grep -l '^/stack/shell-components.tsv$' "$REPO"/packaging/*/build-imports
   assert_output "$REPO/packaging/motanka-stack-shell/build-imports"
+  run grep -l '^/stack/fonts-components.tsv$' "$REPO"/packaging/*/build-imports
+  assert_output "$REPO/packaging/motanka-fonts/build-imports"
+}
+
+# --- fonts (motanka-fonts) ----------------------------------------------------
+
+FONTS_TSV_REL=stack/fonts-components.tsv
+
+@test "fonts-components.tsv is valid, belongs to motanka-fonts and pins Nerd Fonts 3.5.1 JetBrainsMono" {
+  run python3 "$FETCH" --components "$REPO/$FONTS_TSV_REL" --check
+  assert_success
+  assert_output --partial 'components, valid (source motanka-fonts)'
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 2) == 3.5.1 ]]
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 3) == https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/JetBrainsMono.tar.xz ]]
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 4) == 04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf ]]
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 5) == files ]]
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 6) == both ]]
+  [[ $(cfield "$FONTS_TSV_REL" jetbrains-mono-nerd 7) == motanka-fonts ]]
+}
+
+# check_tar <tarball> <flat_ok 0|1>: fetch-sources' tarball check.
+check_tar() {
+  python3 - "$FETCH" "$1" "$2" <<'EOF'
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("fetch_sources", sys.argv[1])
+spec = importlib.util.spec_from_loader("fetch_sources", loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+print(mod.check_tar(sys.argv[2], sys.argv[3] == "1") or "ok")
+EOF
+}
+
+@test "a tarball with its files at the top level passes only for build files" {
+  mkdir -p "$TMP/flat" "$TMP/mixed/dir"
+  printf 'x\n' >"$TMP/flat/A-Regular.ttf"
+  printf 'x\n' >"$TMP/flat/OFL.txt"
+  tar -C "$TMP/flat" -cJf "$TMP/flat.tar.xz" A-Regular.ttf OFL.txt
+  run check_tar "$TMP/flat.tar.xz" 1
+  assert_output ok
+  run check_tar "$TMP/flat.tar.xz" 0
+  assert_output --partial 'at the top level'
+  tar -C "$TMP/flat" -cJf "$TMP/dot.tar.xz" .
+  run check_tar "$TMP/dot.tar.xz" 1
+  assert_output ok
+  printf 'x\n' >"$TMP/mixed/top.ttf"
+  printf 'x\n' >"$TMP/mixed/dir/nested.ttf"
+  tar -C "$TMP/mixed" -cJf "$TMP/mixed.tar.xz" top.ttf dir
+  run check_tar "$TMP/mixed.tar.xz" 1
+  assert_output --partial 'next to folders'
+}
+
+@test "motanka-fonts is built for both releases from its own list of font files" {
+  local list="$REPO/packaging/motanka-fonts/debian/fonts.list" f
+  [[ ! -e $REPO/packaging/motanka-fonts/suites ]]
+  run grep -E '^Architecture: all$' "$REPO/packaging/motanka-fonts/debian/control"
+  assert_success
+  for f in JetBrainsMonoNerdFont-{Regular,Bold,Italic,BoldItalic}.ttf JetBrainsMonoNerdFontMono-{Regular,Bold,Italic,BoldItalic}.ttf; do
+    run awk -F'\t' -v f="$f" '$1 == f { print $2 }' "$list"
+    assert_output --regexp '^JetBrainsMono Nerd Font( Mono)?$'
+  done
+  run grep -c -v -e '^#' -e '^$' "$list"
+  assert_output 8
+}
+
+@test "the Package_Map gives ttf-jetbrains-mono-nerd-basic to motanka-fonts and motanka-core depends on it" {
+  run grep -A1 -x 'ttf-jetbrains-mono-nerd-basic:' "$REPO/packages.yaml"
+  assert_output --partial '{motanka: motanka-fonts, reason: '
+  run grep -x 'ttf-jetbrains-mono-nerd-basic' "$REPO/packaging/motanka-core/debian/pkgmap-depends"
+  assert_success
 }

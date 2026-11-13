@@ -1,0 +1,39 @@
+Source of motanka-fonts: the fonts upstream Omarchy v4.5.0 names in its
+configuration that Ubuntu's archives do not have, under
+/opt/motanka/share/fonts, for both suites (Architecture: all).
+
+At present that is "JetBrainsMono Nerd Font" and "JetBrainsMono Nerd Font
+Mono" from Nerd Fonts 3.5.1, Regular, Bold, Italic and Bold Italic: the
+monospace family of Upstream's bar, menus and terminals
+(default/fontconfig/conf.avail/50-omarchy.conf maps "monospace" to it, the
+shell's Style.qml asks for "monospace", and config/alacritty,
+config/ghostty and config/foot name it). Upstream's Arch package is
+ttf-jetbrains-mono-nerd-basic; its PKGBUILD is not public, so the set is
+chosen from the family and style names Upstream's files use. The archive's
+other families (Propo and the NL variants without ligatures) and lighter or
+heavier weights are left out: no Upstream file names them.
+debian/fonts.list is the list. packages.yaml maps
+ttf-jetbrains-mono-nerd-basic to this package, and motanka-core depends on
+it through its debian/pkgmap-depends.
+
+The upstream archive is listed in stack/fonts-components.tsv (imported by
+build-imports); test/vm/build fetches it with stack/fetch-sources
+--components stack/fonts-components.tsv. The archive may hold its files
+without a top-level folder (build "files"): dpkg-source unpacks such a
+component as it is, and debian/fonts-build.sh finds each listed font by
+name at any depth. (packaging/build.sh unpacks components with
+--strip-components=1 for its own copy, so for a flat archive dpkg-source -b
+may warn "ignoring deletion of file"; the .dsc carries the archive
+unchanged and the build in the chroot sees all of it.) The fonts ship
+unchanged; the build checks each one's family, weight and slant with
+fc-scan. The archive's OFL.txt is installed as
+/usr/share/doc/motanka-fonts/OFL.txt; debian/copyright points to it.
+
+Other sessions do not see these fonts (requirement 5.10): no fontconfig
+file of the system lists /opt/motanka/share/fonts. Only the Motanka session
+does. Its launcher sets FONTCONFIG_PATH=/opt/motanka/share/motanka/fontconfig,
+where motanka-core's fonts.conf adds /opt/motanka/share/fonts, includes
+Upstream's 50-omarchy.conf and then the system's /etc/fonts/fonts.conf
+(design.md, "Session findings (fonts and default theme)"). So no fontconfig
+cache is built at install time; each user's first Motanka session caches
+the folder in ~/.cache/fontconfig.

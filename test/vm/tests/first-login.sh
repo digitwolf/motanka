@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # VM test for per-user setup at the first login (task 17.4; requirements
-# 1.1, 6.1, 6.4, 6.5, 6.8, 6.9, 6.10, 8.3): install the locally built
-# motanka-stack, motanka-stack-shell and motanka-core .debs in a multiuser
-# VM with a virgl GPU, log user alice into the Motanka session through tty1
-# autologin, check her per-user setup, the Hyprland configuration and the
-# session's desktop names, and check that user bob's home folder did not
-# change.
+# 1.1, 5.10, 6.1, 6.4, 6.5, 6.8, 6.9, 6.10, 8.3): install the locally built
+# motanka-stack, motanka-stack-shell, motanka-fonts and motanka-core .debs
+# in a multiuser VM with a virgl GPU, log user alice into the Motanka
+# session through tty1 autologin, check her per-user setup, the Hyprland
+# configuration, the session's desktop names, the default theme, the
+# session's fonts and wallpaper, that the fonts stay invisible outside the
+# session, and that user bob's home folder did not change.
 #
 # Usage: test/vm/tests/first-login.sh     (test/run-all runs it)
 #
@@ -16,7 +17,8 @@
 # This test builds nothing. It reads the .debs of the current version
 # (packaging/version.sh) from ~/.cache/motanka-vm/debs/<release>/:
 # motanka-stack-libs, motanka-stack-hyprland, motanka-stack-tools,
-# motanka-stack, motanka-qt6, motanka-stack-shell and motanka-core. It
+# motanka-stack, motanka-qt6, motanka-stack-shell, motanka-fonts and
+# motanka-core. It
 # fails with the list of missing files and the build commands when any is
 # missing. The VM is the multiuser variant
 # (users alice and bob) started with MOTANKA_VM_GPU=gl.
@@ -42,7 +44,7 @@ results=${MOTANKA_VM_RESULTS:-$MV_RESULTS/$run_id-first-login}
 mkdir -p "$results"
 export MOTANKA_VM_RESULTS="$results"
 GUEST_T=/tmp/motanka-first-login
-PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack motanka-qt6 motanka-stack-shell motanka-core)
+PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack motanka-qt6 motanka-stack-shell motanka-fonts motanka-core)
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 failures=0
@@ -85,7 +87,7 @@ if ((${#missing[@]} > 0)); then
   mv_log "build them first, for example:"
   mv_log "  test/vm/build --suite $release packaging/motanka-stack"
   mv_log "  test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
-  mv_log "  test/vm/build --suite $release packaging/motanka-core"
+  mv_log "  test/vm/build --suite $release packaging/motanka-fonts packaging/motanka-core"
   finish
 fi
 

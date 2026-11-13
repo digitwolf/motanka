@@ -38,6 +38,8 @@ bin/omarchy-refresh-pacman	unsupported	rewrites /etc/pacman.conf and the mirror 
 bin/omarchy-snapshot	implemented	create exits 127, Upstream's code for "no snapshot tool", because 'sudo motanka update' takes Motanka's snapshot; restore is not available (use 'sudo motanka rollback') and exits 64
 bin/omarchy-sudo-passwordless	unsupported	writes sudoers files, which Motanka never ships; --active reports inactive (exit 1) and --disable reports already disabled
 bin/omarchy-system-factory-reset	unsupported	reinstalls the system with Upstream's Arch installer
+bin/omarchy-theme-set-fcitx5	implemented	runs Upstream's script; drops --activate (from install/user/theme.sh) when ~/.config/fcitx5/conf/classicui.conf exists, so the Fcitx5 setting the user's other sessions read stays as it is
+bin/omarchy-theme-set-pi	implemented	runs Upstream's script without --activate (from install/user/theme.sh): only the theme file is synced, and ~/.pi/agent/settings.json, which Pi reads in every session, is never written
 bin/omarchy-update	implemented	runs 'sudo motanka update' (--yes for -y): Motanka's snapshot, the upgrade of the Motanka packages, the channel's Upstream pin and this user's pending migrations
 bin/omarchy-update-available	implemented	lists installed Motanka packages whose apt candidate is newer; "Motanka is up to date" and exit 1 otherwise
 bin/omarchy-update-keyring	implemented	checks that motanka-archive-keyring and its key file are installed; apt keeps the key current

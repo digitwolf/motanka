@@ -16,6 +16,7 @@ DCONF_PROFILE
 OMARCHY_PATH
 PATH
 XDG_DATA_DIRS
+FONTCONFIG_PATH
 
 # Set by uwsm's environment preloader (prepare-env.sh) and by
 # /opt/motanka/share/uwsm/env-motanka.

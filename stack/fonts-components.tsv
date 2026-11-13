@@ -1,0 +1,21 @@
+#@source motanka-fonts
+#@packages motanka-fonts
+# Upstream components of motanka-fonts: the fonts that upstream Omarchy
+# v4.5.0 names in its configuration and that Ubuntu's archives do not have.
+#
+# Same format as stack/components.tsv (see the comment there). Installed
+# unchanged by packaging/motanka-fonts/debian/fonts-build.sh, for both
+# suites.
+#
+#   jetbrains-mono-nerd  Nerd Fonts 3.5.1, the JetBrainsMono release
+#                        archive (Upstream's package
+#                        ttf-jetbrains-mono-nerd-basic). Build "files": the
+#                        archive holds its .ttf files, OFL.txt and
+#                        README.md without a top-level folder. SHA-256 from
+#                        the release's SHA-256.txt, checked against GitHub's
+#                        asset digest.
+#
+# Download, verify and pin: stack/fetch-sources --components stack/fonts-components.tsv
+#
+# name	version	url	sha256	build	suites	package
+jetbrains-mono-nerd	3.5.1	https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/JetBrainsMono.tar.xz	04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf	files	both	motanka-fonts

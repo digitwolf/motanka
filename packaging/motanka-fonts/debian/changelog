@@ -1,0 +1,7 @@
+motanka-fonts (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial package: JetBrainsMono Nerd Font and JetBrainsMono Nerd Font
+    Mono (Nerd Fonts 3.5.1; Regular, Bold, Italic, Bold Italic) under
+    /opt/motanka/share/fonts, seen only by the Motanka session.
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

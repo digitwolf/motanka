@@ -1,0 +1,27 @@
+# Installed as /usr/lib/systemd/user/motanka-default-theme.service by
+# motanka-core and wanted by motanka-session.target through the link
+# motanka-session.target.wants/motanka-default-theme.service, so it runs
+# only in the Motanka session.
+#
+# At each login it runs "default-theme run", which returns at once when the
+# default theme was applied for this user before
+# (~/.local/state/motanka/default-theme). Otherwise it waits for Upstream's
+# desktop shell to answer and then runs Upstream's install/user/theme.sh in
+# the running session, once per user: Tokyo Night with its wallpaper, the
+# bar's colours and the themed app configs. Per-user setup cannot run that
+# script, because it runs before the compositor (compat/user-scripts.tsv).
+#
+# Type=exec, so motanka-session.target does not wait for the theme.
+# RemainAfterExit keeps what the theme switch leaves running in the
+# background (a background intro, the last app retints) until the session
+# ends, instead of stopping it when the program returns.
+[Unit]
+Description=Motanka session: apply the default theme once
+Documentation=file:///usr/share/doc/motanka-core/README
+PartOf=motanka-session.target
+
+[Service]
+Type=exec
+RemainAfterExit=yes
+ExecStart=/opt/motanka/libexec/motanka/default-theme run
+TimeoutStopSec=10

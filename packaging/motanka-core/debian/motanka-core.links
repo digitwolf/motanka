@@ -1,4 +1,5 @@
 opt/motanka/share/omarchy-view usr/share/omarchy
 usr/lib/systemd/user/motanka-session-cleanup.service usr/lib/systemd/user/motanka-session.target.wants/motanka-session-cleanup.service
 usr/lib/systemd/user/motanka-shell-integration.service usr/lib/systemd/user/motanka-session.target.wants/motanka-shell-integration.service
+usr/lib/systemd/user/motanka-default-theme.service usr/lib/systemd/user/motanka-session.target.wants/motanka-default-theme.service
 opt/motanka/share/motanka/completions/motanka.bash usr/share/bash-completion/completions/motanka

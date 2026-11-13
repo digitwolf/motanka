@@ -15,8 +15,9 @@
 # home-write finding outside the Namespaced_Paths (such a write would be an
 # unplanned home-folder change, 6.4). "skip" also covers writes the
 # inventory cannot see, such as paths built in variables or by programs
-# outside Upstream.
-install/user/theme.sh	skip	links ~/.config/btop/themes/current.theme, may delete ~/.config/chromium/SingletonLock, and omarchy-theme-set needs the running desktop
+# outside Upstream. A "skip" script may still run elsewhere; its reason
+# says where.
+install/user/theme.sh	skip	runs in the session instead, once per user after per-user setup, through motanka-default-theme.service (/opt/motanka/libexec/motanka/default-theme): omarchy-theme-set needs the running desktop shell; its Pi and Fcitx5 activations go through Motanka's overrides, and the session capture records its writes
 install/user/chromium.sh	skip	writes native messaging host manifests into twelve browser profile folders under ~/.config, which other sessions use
 install/user/xcompose.sh	skip	writes ~/.XCompose, which GTK and X programs read in every session
 install/user/language.sh	skip	reads /etc/omarchy/language, which Ubuntu does not have; omarchy-language seed calls sudo and writes ~/.config/uwsm/env.d

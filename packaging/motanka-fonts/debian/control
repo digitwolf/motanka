@@ -1,0 +1,27 @@
+Source: motanka-fonts
+Section: fonts
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               fontconfig,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-fonts
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends},
+Description: Omarchy-compatible Hyprland session for Ubuntu - fonts
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. It installs
+ next to the current desktop as a separate login session, follows
+ upstream Omarchy, and removes cleanly.
+ .
+ This package holds the fonts upstream Omarchy's bar, menus and terminals
+ use that Ubuntu does not ship: JetBrainsMono Nerd Font and JetBrainsMono
+ Nerd Font Mono from Nerd Fonts 3.5.1, in Regular, Bold, Italic and Bold
+ Italic. They are installed in /opt/motanka/share/fonts, which only the
+ Motanka session's font configuration lists, so other sessions do not see
+ them.
