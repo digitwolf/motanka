@@ -94,3 +94,67 @@ Snapshot, `apt upgrade`, move vendored Omarchy to the channel pin, run migration
 - `chumak`: the apt repo that carries the stack.
 - `vyshyvka`: theme packs.
 - `shliakh`: update channels.
+
+## Linux practices
+
+These decisions tighten the design above. Where they differ from an earlier section, this section wins.
+
+### Filesystem layout
+
+- `/opt/motanka` holds the stack, vendored Omarchy (`/opt/motanka/share/omarchy`, read-only, root-owned), wrappers, shims and the Helper. Only these files live outside it, because the system looks for them in fixed places: `/usr/bin/motanka`, the session entry in `/usr/share/wayland-sessions/`, user units in `/usr/lib/systemd/user/`, the polkit action, the portal configuration, AppArmor profiles, the dconf profile and keyring, shell completions and the man page. All are package-owned and prefixed `motanka`.
+- State in `/var/lib/motanka`. No log files: everything goes to the systemd journal with the identifier `motanka`.
+- Stack binaries find their libraries through RUNPATH. No `ld.so.conf.d` entry and no `LD_LIBRARY_PATH`, because both leak into programs that are not part of the stack.
+- No setuid, setgid or file-capability binaries. Hyprland gets its seat from logind.
+- No kernel modules, no DKMS, no sysctl changes.
+
+### Privilege
+
+- No sudoers files. Privileged package operations go through one Helper, authorised by polkit (`pkexec`), which accepts only package names found in the root-owned Package_Map or a ledger.
+- Upstream scripts call `sudo pacman …`, and sudo resets `PATH`, so a `pacman` shim alone is never found. The wrapper scope therefore includes a `sudo` dispatcher: if the command is a shimmed tool it runs the shim, which calls the Helper; anything else is passed to the real `/usr/bin/sudo`. The dispatcher runs unprivileged and grants nothing.
+
+### Shim scope
+
+- Shims are not on the session `PATH`. Each upstream command gets a generated wrapper in `/opt/motanka/bin` that sets `PATH` to include the shim folder and then runs the unmodified upstream script. Interactive shells and other programs never see a `pacman` command, so distro-detection tools are not misled.
+
+### Session
+
+- The session entry declares `DesktopNames=Motanka;Hyprland`, so `XDG_CURRENT_DESKTOP=Motanka:Hyprland`. Autostart entries, web-app launchers and portal configuration key on `Motanka`. They stay hidden in GNOME, KDE and in Ubuntu's own Hyprland session.
+- `motanka-session.target` binds to `graphical-session.target`, so portals and other standard session services start normally. Motanka's own units are wanted only by `motanka-session.target`, through package-owned symlinks. Nothing is enabled per user, so `~/.config/systemd` is not written.
+- Variables imported into the systemd user manager are removed when the session ends, because that manager outlives the session and is shared with the user's other sessions.
+- The launcher refuses to start if the user already has another graphical session active.
+- `XDG_DATA_DIRS` gains `/opt/motanka/share` inside the session only.
+
+### Packaging
+
+- Each release's packages are built in a clean chroot of that release (`sbuild`), with `dpkg-buildflags` hardening and `SOURCE_DATE_EPOCH` for reproducible output. `lintian` runs on every package.
+- Versions carry the release, for example `1.2.0-1~ubuntu24.04.1` and `1.2.0-1~ubuntu26.04.1`, so a release upgrade moves forward.
+- Files that maintainer scripts generate (the compiled dconf database, caches) are removed in `postrm purge`. Maintainer scripts never touch home folders.
+- Stack programs that need unprivileged user namespaces ship an AppArmor profile that grants it. The system-wide restriction stays on.
+- Candidates for the 24.04 stack build, to be settled by the first spike: a newer GCC with `libstdc++` shipped in `/opt/motanka/lib`, or the same compiler with `-static-libstdc++`; newer Wayland and input libraries built into `/opt/motanka`; Mesa and the kernel always come from the host.
+
+### Repository
+
+- deb822 `.sources` file with `Signed-By` pointing at the key shipped in the keyring package.
+- apt pin: negative priority for everything in the repo except `motanka` and `motanka-*`. A mistake or compromise in the repo cannot replace a host package.
+- Signed `InRelease` with `Valid-Until` at most 14 days, and `Acquire-By-Hash` so clients never see a half-updated index.
+- Third-party binaries named in the Package_Map are pinned by SHA-256 and installed under `/opt/motanka` or a namespaced home path. No `curl | sh`.
+
+### Home folder
+
+- Planned writes are known in advance from the vendored `config/` tree. They are backed up and ledgered before the write, and files are replaced by write-then-rename.
+- After per-user setup a scan of `~/.config`, `~/.local` and top-level dotfiles finds anything else that changed. Such paths are ledgered as unplanned, shown by `motanka doctor`, and fail CI.
+- Locks: `flock` on `/run/lock/motanka.lock` for system operations and `$XDG_RUNTIME_DIR/motanka.lock` for per-user ones.
+
+### Snapshots
+
+- Motanka's own snapshot is the list of installed Motanka package versions plus an archive of the ledgered user paths. Rollback reinstalls those versions from the repo and restores the archive.
+- Motanka does not create LVM snapshots. If snapper is already configured for the root filesystem, the updater adds a pre and post pair.
+
+### Safety guards
+
+- A Dev_Build (not from a published suite) refuses to install, update or remove outside a virtual machine unless `--i-know-this-is-not-a-vm` is passed. Published builds have no such check, so real users are not asked for the flag.
+- A Protected_Host (`/etc/motanka-protected` or `~/.config/motanka-protected`) refuses every build and every flag.
+
+### CLI
+
+- `motanka <install|remove|update|rollback|doctor>`, with `--dry-run`, `--yes` for non-interactive use, `--json` on `doctor`, documented exit codes, `NO_COLOR` support, a man page and bash and zsh completions.

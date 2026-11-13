@@ -37,10 +37,13 @@ Out of scope:
 - **Other_Session**: any login session on the Host that is not the Motanka_Session, such as GNOME or KDE.
 - **System_Ledger**: the record under `/var/lib/motanka/` of every system change the Installer and Updater made.
 - **User_Ledger**: the per-user record under `~/.local/state/motanka/` of every home-folder change Motanka made, with backups of replaced files.
-- **Namespaced_Path**: a home-folder path that only Motanka or vendored Upstream code uses: `~/.config/omarchy`, `~/.local/share/omarchy`, `~/.local/state/omarchy`, `~/.local/state/motanka`, `~/.cache/omarchy`, `~/.cache/motanka`.
+- **Namespaced_Path**: a home-folder path that only Motanka or vendored Upstream code uses: `~/.config/dconf/motanka`, `~/.config/omarchy`, `~/.local/share/omarchy`, `~/.local/state/omarchy`, `~/.local/state/motanka`, `~/.cache/omarchy`, `~/.cache/motanka`.
 - **Shared_File**: a home-folder file that programs outside the Motanka_Session also read, such as `~/.bashrc`, `~/.zshrc`, `~/.profile`, `~/.gitconfig`, `~/.config/gtk-3.0/settings.ini`, `~/.config/gtk-4.0/settings.ini` and `~/.config/mimeapps.list`.
 - **Fingerprint**: a snapshot of Host state made of the installed package list with versions, the manually-installed package list, checksums of `/etc`, system and user unit files, `dconf dump /` per user, checksums of each home folder, the snap list, groups and `sysctl -a`.
-- **Allowlist**: the fixed list of paths excluded from Fingerprint comparison: apt caches and lists, `/var/log`, the journal and archived Motanka ledgers.
+- **Allowlist**: the fixed list of paths excluded from Fingerprint comparison: apt caches and lists, `/var/log`, the journal, archived Motanka ledgers, each user's `~/.cache`, `~/.local/state/motanka-removed-<date>/` folders and sysctl keys whose values change without configuration.
+- **Helper**: the single root-owned program under `/opt/motanka/libexec/` that performs Motanka's privileged package operations after polkit authorisation.
+- **Dev_Build**: a Motanka build that does not come from a published Motanka_Repo suite, marked by the file `/opt/motanka/share/motanka/DEV_BUILD`.
+- **Protected_Host**: a machine that has the file `/etc/motanka-protected` or, for a user, `~/.config/motanka-protected`.
 - **Channel**: `stable` (follows Upstream release tags) or `edge` (follows the Upstream default branch).
 - **Migration**: a script in Upstream's `migrations/` folder.
 - **CI_Pipeline**: the automated test system that runs on every Motanka change and every Upstream_Pin bump.
@@ -92,6 +95,9 @@ Out of scope:
 8. THE Installer SHALL write zero files into any home folder.
 9. IF the Installer is interrupted THEN THE System_Ledger SHALL contain every change made up to the interruption.
 10. WHEN the Installer runs on a Host where Motanka is already installed THEN THE Installer SHALL complete without changing the System_Ledger entries of the earlier run.
+11. THE Motanka_Packages SHALL contain zero setuid files, zero setgid files and zero files with file capabilities.
+12. THE Motanka_Packages SHALL install no file under `/etc/ld.so.conf.d` and no file under `/etc/sudoers.d`.
+13. THE Motanka_Packages SHALL remove in their purge scripts every file their install scripts generated.
 
 ### Requirement 4: Repository trust
 
@@ -104,6 +110,10 @@ Out of scope:
 3. THE keyring package SHALL scope the Motanka signing key to the Motanka_Repo source with `Signed-By`.
 4. THE keyring package SHALL install an apt pin that limits the Motanka_Repo to Motanka_Packages.
 5. IF checksum or signature verification fails THEN THE Installer SHALL exit with a non-zero code before installing any package.
+6. THE keyring package SHALL install an apt pin with a negative priority for every package from the Motanka_Repo that is not a Motanka_Package.
+7. THE Motanka_Repo SHALL publish release metadata with a `Valid-Until` date at most 14 days after signing.
+8. WHEN the Compat_Layer installs an upstream binary THEN THE Compat_Layer SHALL verify it against the SHA-256 checksum recorded in the Package_Map.
+9. IF an upstream binary fails checksum verification THEN THE Compat_Layer SHALL delete the download and exit with a non-zero code.
 
 ### Requirement 5: Session isolation
 
@@ -121,6 +131,10 @@ Out of scope:
 8. THE Motanka_Packages SHALL ship autostart entries only with an `OnlyShowIn` key that names the Motanka_Session.
 9. THE Shims SHALL be reachable through `PATH` only inside the Motanka_Session.
 10. WHILE Motanka is installed THE Fingerprint parts visible to an Other_Session SHALL equal their values before installation, apart from the Allowlist, the Motanka_Packages and the System_Ledger.
+11. WHEN the Motanka_Session ends THEN THE Motanka_Session launcher SHALL remove from the systemd user manager every environment variable it imported.
+12. IF the user already has another graphical session active THEN THE Motanka_Session launcher SHALL exit with a non-zero code before starting the compositor.
+13. WHEN the Compat_Layer creates a desktop entry in a home folder THEN THE Compat_Layer SHALL add an `OnlyShowIn` key that names the Motanka_Session.
+14. THE Motanka_Session SHALL set `LD_LIBRARY_PATH` in zero processes.
 
 ### Requirement 6: Per-user setup
 
@@ -136,6 +150,10 @@ Out of scope:
 6. WHERE the user opts into shell integration THE per-user setup SHALL add one block delimited by `# >>> motanka >>>` and `# <<< motanka <<<` to the chosen shell rc file.
 7. IF per-user setup is interrupted THEN THE next login to the Motanka_Session SHALL resume it from the User_Ledger.
 8. WHILE a user has never logged into the Motanka_Session THE home folder of that user SHALL contain zero files created by Motanka.
+9. WHEN per-user setup completes THEN THE per-user setup SHALL scan `~/.config`, `~/.local` and top-level dotfiles for paths changed during setup that are absent from the User_Ledger.
+10. IF the scan finds a changed path that is absent from the User_Ledger THEN THE per-user setup SHALL record it in the User_Ledger as unplanned.
+11. THE per-user setup SHALL replace files by writing a temporary file and renaming it.
+12. WHEN a user logs into the Motanka_Session for the first time THEN THE per-user setup SHALL ask once whether to enable shell integration.
 
 ### Requirement 7: Compatibility layer
 
@@ -153,6 +171,11 @@ Out of scope:
 8. THE Compat_Layer SHALL ship a replacement for every Upstream script that reads or writes pacman, Limine or mkinitcpio configuration files.
 9. IF the CI_Pipeline finds a package in Upstream's package lists that the Package_Map lacks THEN THE CI_Pipeline SHALL fail the Upstream_Pin bump.
 10. IF an Upstream_Pin bump changes a script that the Compat_Layer replaces THEN THE CI_Pipeline SHALL fail the bump until the replacement is reviewed.
+11. THE Compat_Layer SHALL perform every privileged package operation through the Helper.
+12. THE Helper SHALL accept only package names that are outcomes in the Package_Map or entries in a ledger.
+13. IF polkit denies authorisation THEN THE Helper SHALL exit with a non-zero code without changing any package.
+14. THE Shims SHALL be reachable through `PATH` only in processes started by Upstream command wrappers.
+15. WHEN a requested package has a Flatpak outcome and Flatpak is not installed THEN THE Compat_Layer SHALL install Flatpak through the Helper and record it in the System_Ledger.
 
 ### Requirement 8: Platform stack
 
@@ -166,6 +189,9 @@ Out of scope:
 4. WHILE the Ubuntu `hyprland` package is installed on the Host THE Stack SHALL install and run without changing that package.
 5. THE Stack SHALL start a Motanka_Session on Intel, AMD and virtual GPUs supported by the Supported_Release kernel.
 6. IF the Stack does not support the detected GPU driver THEN THE Motanka_Session launcher SHALL exit and show the reason on the login screen log.
+7. WHERE a Stack program needs unprivileged user namespaces THE Stack SHALL ship an AppArmor profile that grants it.
+8. THE Motanka_Packages SHALL leave every kernel sysctl value unchanged.
+9. WHERE the Host uses the NVIDIA driver at version 555 or later THE Stack SHALL start a Motanka_Session.
 
 ### Requirement 9: Rolling updates
 
@@ -182,8 +208,9 @@ Out of scope:
 7. WHEN the Updater runs a Migration THEN THE Updater SHALL record it in Upstream's migration state format.
 8. IF a Migration fails THEN THE Updater SHALL stop, report the Migration name and leave the snapshot available.
 9. WHEN the user runs `motanka rollback` THEN THE Updater SHALL restore the Motanka_Packages and User_Ledger paths to the latest snapshot.
-10. THE Updater SHALL take a snapshot with the first available method of btrfs snapper, LVM snapshot and configuration archive.
+10. THE Updater SHALL record the installed version of every Motanka_Package and an archive of the User_Ledger paths as the snapshot before every update.
 11. IF a second Updater process starts while one is running THEN THE second process SHALL exit with a non-zero code without making any change.
+12. WHERE snapper is configured for the root filesystem THE Updater SHALL create a snapper pre and post snapshot pair around the update.
 
 ### Requirement 10: Removal
 
@@ -213,10 +240,11 @@ Out of scope:
 #### Acceptance Criteria
 
 1. WHILE Motanka is installed THE `do-release-upgrade` from Ubuntu 24.04 LTS to Ubuntu 26.04 LTS SHALL complete without a package conflict caused by a Motanka_Package.
-2. WHEN the Doctor runs after a release upgrade THEN THE Doctor SHALL switch the Motanka_Repo source to the suite of the running Supported_Release.
+2. WHEN the Doctor runs with `--fix` after a release upgrade THEN THE Doctor SHALL switch the Motanka_Repo source to the suite of the running Supported_Release.
 3. WHEN the Updater runs after the Doctor has switched the suite THEN THE Motanka_Session SHALL start on the upgraded Host.
 4. WHEN the Remover runs after a release upgrade THEN THE Remover SHALL meet criteria 10.2 to 10.14.
 5. IF the Motanka_Repo source names a suite that differs from the running release THEN THE Updater SHALL exit with a non-zero code and print the Doctor command.
+6. THE Motanka_Package versions for `resolute` SHALL sort higher than the same Motanka version for `noble` under `dpkg --compare-versions`.
 
 ### Requirement 12: Diagnostics
 
@@ -228,8 +256,10 @@ Out of scope:
 2. WHEN the Doctor runs THEN THE Doctor SHALL report every ledgered path that is missing or changed.
 3. WHEN the Doctor runs THEN THE Doctor SHALL report every unsupported Shim call logged in the last 30 days.
 4. THE Doctor SHALL make no change to the Host unless the user passes `--fix`.
-5. THE Installer, Remover and Updater SHALL append each action with a timestamp to a log under `/var/log/motanka/`.
+5. THE Installer, Remover and Updater SHALL write each action to the systemd journal with the identifier `motanka`.
 6. THE Motanka logs and Doctor output SHALL contain no file contents from home folders.
+7. WHEN the Doctor runs with `--json` THEN THE Doctor SHALL print its report as one JSON document.
+8. WHEN the Doctor runs THEN THE Doctor SHALL report every User_Ledger entry recorded as unplanned.
 
 ### Requirement 13: Verification
 
@@ -245,3 +275,22 @@ Out of scope:
 6. THE CI_Pipeline SHALL run one probe script on a reference Omarchy system and on Motanka at the same Upstream_Pin and publish the difference.
 7. IF a round-trip or isolation test fails THEN THE CI_Pipeline SHALL block publication to the Motanka_Repo.
 8. THE Motanka_Repo SHALL publish a version to `noble` and `resolute` only when the CI_Pipeline passed for both.
+9. THE CI_Pipeline SHALL block publication of a Motanka version until a manual NVIDIA hardware test result for that version is recorded in the repository.
+
+### Requirement 14: Test isolation
+
+**User Story:** As a developer working on a laptop that holds my own data, I want all Motanka building and testing to happen in virtual machines, so that a defect in Motanka cannot damage the machine I develop on.
+
+#### Acceptance Criteria
+
+1. THE test harness SHALL run every install, update, removal and package build inside a QEMU/KVM virtual machine.
+2. THE test harness SHALL use an Ubuntu 26.04 LTS virtual machine for all development testing.
+3. THE test harness SHALL use an Ubuntu 24.04 LTS virtual machine for release-specific tests and the release upgrade test.
+4. THE test harness SHALL start each test from a copy-on-write overlay of a base image and delete the overlay when the test ends.
+5. THE test harness SHALL run on the development host without `sudo` and without installing host packages.
+6. THE test harness SHALL write on the development host only inside the repository folder and `~/.cache/motanka-vm/`.
+7. THE test virtual machines SHALL have no access to the development host's home folder.
+8. IF a Dev_Build runs where `systemd-detect-virt` reports `none` THEN THE Installer, Remover and Updater SHALL exit with a non-zero code before making any change unless the user passes `--i-know-this-is-not-a-vm`.
+9. THE test harness SHALL never pass `--i-know-this-is-not-a-vm`.
+10. IF `/dev/kvm` is not usable by the current user THEN THE test harness SHALL exit with a non-zero code and name the missing permission.
+11. IF the Host is a Protected_Host THEN THE Installer, Remover and Updater SHALL exit with a non-zero code before making any change, for every build and every flag.
