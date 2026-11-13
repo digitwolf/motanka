@@ -86,10 +86,21 @@ motanka() {
   [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
 }
 
+@test "update and rollback parse their options, then refuse to run without root with exit 11" {
+  if [[ $(id -u) -eq 0 ]]; then
+    skip "the tests run as root"
+  fi
+  motanka update --system --dry-run -y
+  assert_failure 11
+  assert_output --partial 'must run as root'
+  motanka rollback --dry-run --yes
+  assert_failure 11
+  assert_output --partial 'must run as root'
+  [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
+}
+
 @test "valid options parse and the unfinished subcommands exit 2 'not implemented yet'" {
   local -a cmds=(
-    'update --system --dry-run -y'
-    'rollback --dry-run --yes'
     'doctor --json --fix'
     'doctor'
   )
@@ -176,12 +187,13 @@ motanka() {
   FAKE_VIRT=none motanka update --yes
   assert_failure 7
   assert_output --partial 'development build'
+  # Past the guard, the update stops at its root check (exit 11).
   FAKE_VIRT=none motanka update --i-know-this-is-not-a-vm
-  assert_failure 2
-  assert_output --partial 'not implemented yet'
+  assert_failure 11
+  assert_output --partial 'must run as root'
   FAKE_VIRT=kvm motanka update
-  assert_failure 2
-  assert_output --partial 'not implemented yet'
+  assert_failure 11
+  assert_output --partial 'must run as root'
 }
 
 @test "a published build rejects --i-know-this-is-not-a-vm" {

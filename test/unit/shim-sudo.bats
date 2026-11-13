@@ -116,20 +116,20 @@ notifications() {
 }
 
 @test "an unsupported line refuses with exit 64, a journal entry and a notification" {
-  export MOTANKA_UPSTREAM_CMD=omarchy-update
+  export MOTANKA_UPSTREAM_CMD=omarchy-update-boot
   run "$SUDO" true
   assert_failure 64
-  assert_output --partial "sudo true is not available in Motanka: runs Upstream's Arch update"
+  assert_output --partial "sudo true is not available in Motanka: verifies Limine and initramfs boot files"
   run notifications
-  assert_output --partial 'omarchy-update is not available in Motanka'
+  assert_output --partial 'omarchy-update-boot is not available in Motanka'
   run cat "$LOGS/journal"
-  assert_output --partial 'unsupported call: sudo true (from omarchy-update)'
+  assert_output --partial 'unsupported call: sudo true (from omarchy-update-boot)'
   run real_sudo_calls
   assert_output ''
 }
 
 @test "sudo -n refuses quietly: no notification" {
-  export MOTANKA_UPSTREAM_CMD=omarchy-update
+  export MOTANKA_UPSTREAM_CMD=omarchy-update-boot
   run "$SUDO" -n true
   assert_failure 64
   run notifications

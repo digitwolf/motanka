@@ -18,7 +18,7 @@ bin/omarchy-hibernation-remove	unsupported	deletes a btrfs swap file and edits /
 bin/omarchy-hibernation-setup	unsupported	creates a btrfs swap file and changes /etc/fstab, the initramfs and the Limine command line
 bin/omarchy-kernel	unsupported	chooses the kernel Limine boots; the bootloader stays the host's
 bin/omarchy-lifecycle-dispatch	implemented	no platform package registers lifecycle operations on Ubuntu amd64, so every known operation is a no-op (exit 0), as Upstream does on x86
-bin/omarchy-migrate	unsupported	migrations run during 'sudo motanka update' through Motanka's runner (task 21.3 replaces this file); --pending reports nothing pending
+bin/omarchy-migrate	implemented	runs this user's pending migrations as compat/migrations.tsv classifies them: ok runs the Upstream script, override runs src/overrides/migrations/<id>.sh, n/a records it as done; writes Upstream's markers in ~/.local/state/omarchy/migrations, stops at the first failure (exit 8), and nothing is pending before per-user setup completed
 bin/omarchy-pkg-add	implemented	installs each name's Package_Map outcome through the Helper; skip outcomes print their reason
 bin/omarchy-pkg-aur-accessible	implemented	always false: Ubuntu has no AUR
 bin/omarchy-pkg-aur-add	implemented	same as omarchy-pkg-add: AUR names go through the Package_Map
@@ -37,6 +37,7 @@ bin/omarchy-refresh-pacman	unsupported	rewrites /etc/pacman.conf and the mirror 
 bin/omarchy-snapshot	implemented	create exits 127, Upstream's code for "no snapshot tool", because 'sudo motanka update' takes Motanka's snapshot; restore is not available (use 'sudo motanka rollback') and exits 64
 bin/omarchy-sudo-passwordless	unsupported	writes sudoers files, which Motanka never ships; --active reports inactive (exit 1) and --disable reports already disabled
 bin/omarchy-system-factory-reset	unsupported	reinstalls the system with Upstream's Arch installer
+bin/omarchy-update	implemented	runs 'sudo motanka update' (--yes for -y): Motanka's snapshot, the upgrade of the Motanka packages, the channel's Upstream pin and this user's pending migrations
 bin/omarchy-update-available	implemented	lists installed Motanka packages whose apt candidate is newer; "Motanka is up to date" and exit 1 otherwise
 bin/omarchy-update-keyring	implemented	checks that motanka-archive-keyring and its key file are installed; apt keeps the key current
 bin/omarchy-update-pkg-prune	implemented	no change: apt manages its own package cache on Ubuntu

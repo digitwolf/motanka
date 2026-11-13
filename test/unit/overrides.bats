@@ -332,7 +332,7 @@ power() {
   assert_output edge
 }
 
-@test "omarchy-sudo-passwordless reports inactive and disabled; omarchy-migrate has nothing pending" {
+@test "omarchy-sudo-passwordless reports inactive and disabled; omarchy-migrate has nothing pending before per-user setup" {
   run "$O/omarchy-sudo-passwordless" --active
   assert_failure 1
   assert_output ''
@@ -343,7 +343,23 @@ power() {
   assert_failure 1
   assert_output ''
   run "$O/omarchy-migrate"
-  assert_failure 64
+  assert_success
+  assert_output --partial 'per-user setup has not completed'
+}
+
+@test "omarchy-update runs 'sudo motanka update', with --yes for -y" {
+  write_script "$T/sudo" 'printf "%s\n" "$*" >>"$LOGS/sudo"'
+  export MOTANKA_SUDO=$T/sudo MOTANKA_CLI=/usr/bin/motanka
+  run "$O/omarchy-update"
+  assert_success
+  run "$O/omarchy-update" -y
+  assert_success
+  run cat "$LOGS/sudo"
+  assert_output $'/usr/bin/motanka update\n/usr/bin/motanka update --yes'
+  run "$O/omarchy-update" --bogus
+  assert_failure 1
+  run "$O/omarchy-update" -y extra
+  assert_failure 1
 }
 
 @test "compat/overrides.tsv lists every override, and the 20 Arch-specific bin/ files are overridden" {

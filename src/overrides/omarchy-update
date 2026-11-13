@@ -1,0 +1,52 @@
+#!/bin/bash
+# omarchy-update: Motanka override of Upstream bin/omarchy-update.
+#
+# usage (as Upstream): omarchy-update [-y]
+#
+# Upstream updates Arch's packages with pacman and yay, takes a snapper
+# snapshot, runs migrations and checks the boot files. On Ubuntu, Motanka's
+# Updater does the part that applies: this runs
+#   /usr/bin/sudo /usr/bin/motanka update [--yes]
+# which takes Motanka's snapshot, upgrades the Motanka packages, moves to the
+# channel's Upstream pin and runs this user's pending migrations (design.md,
+# Update flow). -y becomes --yes. Packages Motanka does not own stay as they
+# are; they update with Ubuntu's own tools.
+#
+# sudo and motanka are called by their full paths: inside the Wrapper scope
+# "sudo" is the dispatcher (src/shims/sudo), which refuses privileged calls
+# that compat/privileged.tsv does not allow, and the Updater is Motanka's
+# own command, not an Upstream one.
+#
+# Exit codes: those of 'motanka update'; 1 for an unknown option, as
+# Upstream.
+#
+# Test hooks, only with MOTANKA_ROOT set (src/lib/common.sh): MOTANKA_SUDO
+# and MOTANKA_CLI replace /usr/bin/sudo and /usr/bin/motanka.
+set -euo pipefail
+
+sudo_cmd=/usr/bin/sudo
+cli=/usr/bin/motanka
+if [[ -n ${MOTANKA_ROOT:-} ]]; then
+  sudo_cmd=${MOTANKA_SUDO:-$sudo_cmd}
+  cli=${MOTANKA_CLI:-$cli}
+fi
+
+args=()
+case ${1:-} in
+  "") ;;
+  -y) args+=(--yes) ;;
+  -h | --help)
+    echo "Usage: omarchy-update [-y]"
+    exit 0
+    ;;
+  *)
+    echo "Usage: omarchy-update [-y]" >&2
+    exit 1
+    ;;
+esac
+if (($# > 1)); then
+  echo "Usage: omarchy-update [-y]" >&2
+  exit 1
+fi
+
+exec "$sudo_cmd" "$cli" update "${args[@]}"

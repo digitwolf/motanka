@@ -76,7 +76,7 @@ omarchy-sudo-passwordless	*	override	writes sudoers files, which Motanka never s
 omarchy-system-factory-reset	*	override	reinstalls the system from Upstream's Arch installer; the override reports it as not available
 omarchy-theme-set-browser-policy	*	unsupported	writes browser policy files under /etc
 omarchy-toggle-hybrid-gpu	*	unsupported	changes the GPU mode, /etc/supergfxd.conf and system services
-omarchy-update	*	unsupported	runs Upstream's Arch update; Motanka is updated with 'sudo motanka update'
+omarchy-update	*	override	runs Upstream's Arch update; the override runs 'sudo motanka update'
 omarchy-update-boot	*	unsupported	verifies Limine and initramfs boot files, which Motanka does not use
 omarchy-update-firmware	*	unsupported	writes to the EFI system partition and flashes firmware
 omarchy-update-keyring	*	override	changes pacman's keyring; the override checks Motanka's apt keyring

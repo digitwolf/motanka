@@ -1,36 +1,321 @@
 #!/bin/bash
-# omarchy-migrate: Motanka override of Upstream bin/omarchy-migrate:
-# unsupported for now (compat/overrides.tsv).
+# omarchy-migrate: Motanka override of Upstream bin/omarchy-migrate, the
+# migration runner (design.md, "Updater, snapshots and rollback";
+# requirements 9.6-9.8).
 #
 # usage (as Upstream): omarchy-migrate [--pending]
 #
-# Upstream's runner waits on pacman's lock (/var/lib/pacman/db.lck) and runs
-# every pending migration unclassified. Motanka runs Upstream's migrations
-# from "sudo motanka update", through its own runner and migrations.tsv
-# (design.md, "Updater, snapshots and rollback"), which replaces this file.
-# Until then:
-#   --pending, --check  nothing is pending for this runner: exit 1, silently,
-#                       as Upstream does when nothing is pending
-#   -h, --help          usage, exit 0
-#   no option           not available: message, journal entry, exit 64
+# "sudo motanka update" runs it as the invoking user through
+# run-upstream, after the Motanka packages are upgraded. It runs as the
+# user, never as root.
+#
+#   --pending, --check  print the pending migrations (<id>.sh, one per
+#                       line) and exit 0, or exit 1 when none is pending,
+#                       as Upstream does
+#   (no option)         run the pending migrations, oldest first
+#   -h, --help          usage
+#
+# A migration is pending when the vendored tree
+# (/opt/motanka/share/omarchy/migrations/<id>.sh) has it and the user has
+# no marker ~/.local/state/omarchy/migrations/<id>.sh, Upstream's state
+# format (9.7): an empty file, written once the migration is done. Before
+# per-user setup has completed (its last User_Ledger marker is setup-end)
+# nothing is pending: setup writes a marker for every vendored migration at
+# the first login, as Upstream's installer does.
+#
+# Each pending migration is looked up in
+# /opt/motanka/share/motanka/migrations.tsv (tools/classify-migrations):
+#   ok        runs the Upstream script as Upstream does,
+#             bash -euo pipefail <script>, in the home folder, with
+#             OMARCHY_PATH=/usr/share/omarchy and this Wrapper scope's PATH
+#             (overrides, shims, the sudo dispatcher)
+#   override  runs overrides/migrations/<id>.sh (next to this file) instead
+#   n/a       writes the marker without running anything
+# A migration that exits non-zero stops the run (9.8): its marker is not
+# written, later migrations do not run, its name is printed and logged,
+# and the runner exits 8. A pending migration that migrations.tsv does not
+# classify is not run either: exit 8. After each migration that ran, the
+# files it changed under ~/.config, ~/.local and the top-level dotfiles that
+# are neither in the User_Ledger nor in a Namespaced_Path are recorded in
+# the User_Ledger as unplanned (6.10), so 'motanka doctor' reports them.
+#
+# Runs hold the per-user lock $XDG_RUNTIME_DIR/motanka.lock, which per-user
+# setup and the Remover's user phase also take (exit 9 when it is held).
+# Without XDG_RUNTIME_DIR no lock is taken.
+#
+# Exit codes: 0 done or nothing to do (--pending: 0 pending, 1 none);
+# 1 error; 2 usage; 7 guard refused; 8 a migration failed or is not
+# classified; 9 lock held.
+#
+# Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of
+# /opt/motanka and /usr/share/omarchy; MOTANKA_OMARCHY_PATH replaces the
+# vendored tree and OMARCHY_PATH, as in run-upstream.
 set -euo pipefail
 
-case ${1:-} in
-  --pending | --check)
-    exit 1
-    ;;
-  -h | --help)
-    echo "Usage: omarchy-migrate [--pending]"
-    exit 0
-    ;;
-esac
+readonly MG_STATE_REL=.local/state/omarchy/migrations
+readonly MG_TSV=/opt/motanka/share/motanka/migrations.tsv
+readonly MG_VENDORED=/opt/motanka/share/omarchy
+readonly MG_VIEW=/usr/share/omarchy
 
-_self=$(readlink -f -- "${BASH_SOURCE[0]}")
-_base=${_self%/*/*}
-MK_CMD=override
+_mg_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_mg_here=${_mg_self%/*}
+_mg_base=${_mg_here%/*}
+MK_CMD=migrate
 # shellcheck source=../lib/common.sh
-source "$_base/lib/common.sh"
-# shellcheck source=../lib/outcomes.sh
-source "$_base/lib/outcomes.sh"
-mk_oc_unsupported omarchy-migrate \
-  "Upstream's migrations run during 'sudo motanka update', which classifies each one for Ubuntu first" "$@"
+source "$_mg_base/lib/common.sh"
+# shellcheck source=../lib/guard.sh
+source "$_mg_base/lib/guard.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_mg_base/lib/userledger.sh"
+
+if [[ -n ${MOTANKA_OMARCHY_PATH:-} ]]; then
+  MG_TREE=${MOTANKA_OMARCHY_PATH%/}
+  MG_OMARCHY=$MG_TREE
+else
+  MG_TREE=$(mk_path "$MG_VENDORED")
+  MG_OMARCHY=$(mk_path "$MG_VIEW")
+  if [[ ! -d $MG_OMARCHY ]]; then
+    MG_OMARCHY=$MG_TREE
+  fi
+fi
+MG_OVERRIDES=$_mg_here/migrations
+# Namespaced_Paths (requirements.md, Glossary), relative to the home folder.
+readonly -a MG_NAMESPACED=(.config/dconf/motanka .config/omarchy .local/share/omarchy
+  .local/state/omarchy .local/state/motanka .cache/omarchy .cache/motanka)
+declare -A MG_CLASS=() MG_NOTE=()
+MG_RAN=0 MG_SKIPPED=0
+MG_HOME=""
+
+_mg_usage() {
+  echo "Usage: omarchy-migrate [--pending]"
+}
+
+# _mg_set_home: MG_HOME, the home folder the User_Ledger library uses
+# (MK_HOME, else HOME), or exit 1.
+_mg_set_home() {
+  local home=${MK_HOME:-${HOME:-}}
+  home=${home%/}
+  if [[ $home != /* || ! -d $home ]]; then
+    mk_die "$MK_EXIT_ERROR" "the home folder '${home:-unset}' is not an existing absolute path"
+  fi
+  MG_HOME=$home
+}
+
+# _mg_setup_done: per-user setup completed for this user.
+_mg_setup_done() {
+  local last
+  last=$(mk_userledger_read 2>/dev/null |
+    awk -F'\t' '$3 == "setup-begin" || $3 == "setup-end" { v = $3 } END { print v }')
+  [[ $last == setup-end ]]
+}
+
+# _mg_pending: the pending migrations, <id>.sh, oldest first.
+_mg_pending() {
+  local f name
+  if [[ ! -d $MG_TREE/migrations ]]; then
+    return 0
+  fi
+  for f in "$MG_TREE"/migrations/*.sh; do
+    name=${f##*/}
+    if [[ -f $f && ! -f $MG_HOME/$MG_STATE_REL/$name ]]; then
+      printf '%s\n' "$name"
+    fi
+  done
+}
+
+# _mg_load: MG_CLASS and MG_NOTE from migrations.tsv.
+_mg_load() {
+  local tsv id class note
+  tsv=$(mk_path "$MG_TSV")
+  if [[ ! -r $tsv ]]; then
+    mk_die "$MK_EXIT_ERROR" "cannot read $MG_TSV; reinstall motanka-core"
+  fi
+  while IFS=$'\t' read -r id class note || [[ -n $id ]]; do
+    if [[ -z $id || $id == \#* ]]; then
+      continue
+    fi
+    case $class in
+      ok | override | n/a) ;;
+      *) continue ;;
+    esac
+    if [[ $id =~ ^[0-9]+$ ]]; then
+      MG_CLASS[$id]=$class
+      MG_NOTE[$id]=${note:-}
+    fi
+  done <"$tsv"
+}
+
+_mg_lock() {
+  local rt=${XDG_RUNTIME_DIR:-} fd
+  if [[ -z $rt || ! -d $rt ]]; then
+    mk_log notice "XDG_RUNTIME_DIR is not set; migrations run without the per-user lock"
+    return 0
+  fi
+  if ! exec {fd}>>"$rt/motanka.lock"; then
+    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $rt/motanka.lock"
+  fi
+  if ! flock -n "$fd"; then
+    mk_die "$MK_EXIT_LOCKED" "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock is held)"
+  fi
+}
+
+# _mg_mark <name>: writes the marker of a migration (Upstream's format).
+_mg_mark() {
+  local dir=$MG_HOME/$MG_STATE_REL
+  mkdir -p -- "$dir"
+  touch -- "$dir/$1"
+}
+
+# _mg_namespaced <path>: 0 if the home-relative path is in a Namespaced_Path.
+_mg_namespaced() {
+  local ns
+  for ns in "${MG_NAMESPACED[@]}"; do
+    if [[ $1 == "$ns" || $1 == "$ns"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _mg_scan <marker> <id>: records the unledgered paths a migration changed.
+_mg_scan() {
+  local marker=$1 id=$2 home=$MG_HOME p rel verb n=0
+  local -a roots=()
+  local -A known=()
+  while IFS=$'\t' read -r _ _ verb _ p _; do
+    if [[ $verb != setup-* && $p != - ]]; then
+      known["${p%/}"]=1
+    fi
+  done < <(mk_userledger_read)
+  for p in "$home/.config" "$home/.local"; do
+    if [[ -e $p || -L $p ]]; then
+      roots+=("$p")
+    fi
+  done
+  while IFS= read -r -d '' p; do
+    roots+=("$p")
+  done < <(find "$home" -mindepth 1 -maxdepth 1 -name '.*' ! -name .config ! -name .local ! -name .cache -print0)
+  if ((${#roots[@]} == 0)); then
+    return 0
+  fi
+  while IFS= read -r -d '' p; do
+    rel=${p#"$home"/}
+    if [[ -n ${known["$rel"]+x} ]] || _mg_namespaced "$rel" || ! mk_field_ok "$rel"; then
+      continue
+    fi
+    mk_userledger_record_unplanned "$rel" || return 1
+    known["$rel"]=1
+    n=$((n + 1))
+    mk_warn "unplanned change: migration $id changed ~/$rel, which has no User_Ledger entry; ledgered as unplanned ('motanka doctor' lists it)"
+  done < <(_mg_changed "$marker" "${roots[@]}")
+  if ((n > 0)); then
+    mk_log warning "migration $id: $n unplanned path(s)"
+  fi
+}
+
+# _mg_changed <marker> <folder>...: NUL-separated files, links and empty
+# folders below the folders that are newer than the marker, outside the
+# Namespaced_Path folders and the motanka-removed-* folders.
+_mg_changed() {
+  local marker=$1 home=$MG_HOME
+  shift
+  find "$@" \
+    \( -path "$home/.config/omarchy" -o -path "$home/.local/share/omarchy" \
+    -o -path "$home/.local/state/omarchy" -o -path "$home/.local/state/motanka" \
+    -o -path "$home/.local/state/motanka-removed-*" \) -prune \
+    -o -newer "$marker" \( -type f -o -type l -o \( -type d -empty \) \) -print0
+}
+
+# _mg_run_one <name>: runs or records one migration.
+_mg_run_one() {
+  local name=$1 id class script state marker rc=0
+  id=${name%.sh}
+  class=${MG_CLASS[$id]:-}
+  case $class in
+    n/a)
+      _mg_mark "$name"
+      mk_info "Migration $id does not apply on Ubuntu (${MG_NOTE[$id]:-n/a}); recorded as done"
+      mk_log info "migration $id recorded as done without running (n/a: ${MG_NOTE[$id]:-})"
+      MG_SKIPPED=$((MG_SKIPPED + 1))
+      return 0
+      ;;
+    ok) script=$MG_TREE/migrations/$name ;;
+    override) script=$MG_OVERRIDES/$name ;;
+    *)
+      mk_die "$MK_EXIT_MIGRATION" "migration $id is not classified in $MG_TSV, so it was not run; it stays pending and later migrations did not run"
+      ;;
+  esac
+  if [[ ! -f $script ]]; then
+    mk_die "$MK_EXIT_MIGRATION" "migration $id is classified $class, but $script is missing; reinstall motanka-core"
+  fi
+  state=$(mk_userledger_state_dir) || exit "$MK_EXIT_ERROR"
+  marker=$state/migrate.marker
+  : >"$marker"
+  printf '\nRunning migration (%s)\n' "$id"
+  mk_log info "running migration $id ($class)"
+  (cd -- "$MG_HOME" && OMARCHY_PATH=$MG_OMARCHY bash -euo pipefail "$script" 3<&-) || rc=$?
+  _mg_scan "$marker" "$id" || mk_warn "could not scan the home folder after migration $id"
+  rm -f -- "$marker"
+  if ((rc != 0)); then
+    mk_die "$MK_EXIT_MIGRATION" "migration $id failed (exit $rc); it stays pending and later migrations did not run"
+  fi
+  _mg_mark "$name"
+  mk_log info "migration $id done"
+  MG_RAN=$((MG_RAN + 1))
+}
+
+_mg_main() {
+  local mode=run name
+  local -a pending=()
+  while (($# > 0)); do
+    case $1 in
+      --pending | --check) mode=pending ;;
+      -h | --help)
+        _mg_usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+  if ((EUID == 0)); then
+    mk_die "$MK_EXIT_ERROR" "migrations run as the user whose home folder they change, not as root"
+  fi
+  _mg_set_home
+  if ! _mg_setup_done; then
+    if [[ $mode == pending ]]; then
+      exit 1
+    fi
+    mk_info "per-user setup has not completed; the first login to the Motanka session records every migration"
+    exit 0
+  fi
+  if [[ $mode == pending ]]; then
+    mapfile -t pending < <(_mg_pending)
+    if ((${#pending[@]} == 0)); then
+      exit 1
+    fi
+    printf '%s\n' "${pending[@]}"
+    exit 0
+  fi
+
+  mk_guard_protected_host
+  mk_guard_dev_build
+  _mg_lock
+  _mg_load
+  mapfile -t pending < <(_mg_pending)
+  if ((${#pending[@]} == 0)); then
+    mk_info "no migration is pending"
+    exit 0
+  fi
+  mk_userledger_init || exit "$MK_EXIT_ERROR"
+  mk_log info "${#pending[@]} pending migration(s)"
+  for name in "${pending[@]}"; do
+    _mg_run_one "$name"
+  done
+  mk_info "migrations done: $MG_RAN ran, $MG_SKIPPED recorded as not applying on Ubuntu"
+}
+
+_mg_main "$@"

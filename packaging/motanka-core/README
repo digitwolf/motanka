@@ -71,3 +71,19 @@ one block between "# >>> motanka >>>" and "# <<< motanka <<<" to
 ~/.bashrc. The question is not asked again; run
 /opt/motanka/libexec/motanka/shell-integration accept (or decline) to
 answer later.
+
+Updates and rollback
+--------------------
+
+"sudo motanka update" takes a snapshot in /var/lib/motanka/snapshots/
+(the installed Motanka packages with their .debs, and an archive of each
+user's ledgered files and Motanka folders; the newest 3 are kept), upgrades
+the Motanka packages without changing packages Motanka does not own
+(--system allows upgrades of them), and runs the invoking user's pending
+upstream migrations. /opt/motanka/share/motanka/migrations.tsv, generated
+by tools/classify-migrations, says for each migration whether it runs
+unchanged (ok), runs an Ubuntu version (override) or is recorded as done
+without running (n/a). A failing migration stops the update and keeps the
+snapshot. "sudo motanka rollback" reinstalls the snapshot's packages from
+its stored .debs and restores your files from it. The Omarchy menu's update
+item runs "sudo motanka update".

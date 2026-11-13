@@ -24,7 +24,8 @@
 #          target of Upstream's config/ tree has no Home_Path_Class in
 #          compat/home-paths.tsv (src/libexec/user-setup --plan), and when
 #          Upstream's install/user/all.sh and compat/user-scripts.tsv do not
-#          name the same per-user scripts.
+#          name the same per-user scripts, and when compat/migrations.tsv
+#          differs from what tools/classify-migrations makes of omarchy/.
 # test     checks the syntax of every shell file in src/ and debian/.
 # install  installs into debian/motanka-core:
 #            /usr/bin/motanka                                  src/motanka
@@ -87,9 +88,9 @@ inventory_file() {
 check_inputs() {
   local f
   [[ -d omarchy/bin ]] || die "omarchy/bin is missing: the source package lacks its orig-omarchy component (packaging/build.sh adds it)"
-  for f in src/motanka tools/pkgmap tools/genwrappers packages.yaml upstream.pin \
-    compat/privileged.tsv compat/home-paths.tsv compat/migrations.tsv compat/user-scripts.tsv \
-    keys/motanka-archive.asc; do
+  for f in src/motanka tools/pkgmap tools/genwrappers tools/classify-migrations packages.yaml upstream.pin \
+    compat/privileged.tsv compat/home-paths.tsv compat/migrations.tsv compat/overrides.tsv \
+    compat/user-scripts.tsv keys/motanka-archive.asc; do
     [[ -f $f ]] || die "$f is missing (debian/../build-imports lists it)"
   done
   f=$(inventory_file)
@@ -128,6 +129,21 @@ ${extra:+  no longer in all.sh: $(tr '\n' ' ' <<<"$extra")}"
   log "compat/user-scripts.tsv lists all $(wc -l <<<"$upstream") per-user scripts of install/user/all.sh"
 }
 
+# check_migrations: compat/migrations.tsv is what tools/classify-migrations
+# makes of the vendored tree, so every Upstream migration has a class
+# (9.6) and the committed file is reproducible.
+check_migrations() {
+  if ! python3 tools/classify-migrations --upstream omarchy --inventory "$(inventory_file)" \
+    --home-paths compat/home-paths.tsv --overrides src/overrides \
+    --overrides-list compat/overrides.tsv --check compat/migrations.tsv \
+    >"$B/migrations.diff" 2>"$B/migrations.err"; then
+    head -n 60 "$B/migrations.diff" >&2
+    cat "$B/migrations.err" >&2
+    die "compat/migrations.tsv does not match tools/classify-migrations for the vendored tree; regenerate it with tools/classify-migrations -o compat/migrations.tsv and review the changes"
+  fi
+  log "$(cat "$B/migrations.err")"
+}
+
 cmd_build() {
   local f name
   check_inputs
@@ -145,6 +161,7 @@ cmd_build() {
   bash tools/genwrappers omarchy "$B/wrappers"
   check_home_plan
   check_user_scripts
+  check_migrations
 }
 
 # install_view: the overlay /opt/motanka/share/omarchy-view.

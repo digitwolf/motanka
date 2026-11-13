@@ -178,17 +178,17 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [ ] 16. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
   - _Requirements: 13.1_
 
-- [ ] 17. Per-user setup
-- [ ] 17.1 Setup engine and path classes
+- [x] 17. Per-user setup
+- [x] 17.1 Setup engine and path classes
   - Create `home-paths.tsv`, `src/libexec/user-setup`, `test/unit/user-setup.bats`: class handling, Shared_Files untouched, symlink and dconf database creation
   - _Requirements: 6.1, 6.4, 6.5, 6.8_
-- [ ] 17.2 Resume and unplanned-write scan
+- [x] 17.2 Resume and unplanned-write scan
   - Extend `src/libexec/user-setup`, add tests for interruption at each step and for a planted unplanned write
   - _Requirements: 6.7, 6.9, 6.10_
-- [ ] 17.3 Shell integration prompt
+- [x] 17.3 Shell integration prompt
   - Create `src/libexec/shell-integration`: ask once at first login, marked block on acceptance, no rc change on refusal
   - _Requirements: 6.6, 6.12_
-- [ ] 17.4 First-login VM test
+- [x] 17.4 First-login VM test
   - Create `test/vm/tests/first-login.sh` on the 26.04 `multiuser` variant: one user logs in, the other user's home has no Motanka files; `Hyprland --verify-config` reports zero errors
   - _Requirements: 1.1, 6.8, 8.3_
 
