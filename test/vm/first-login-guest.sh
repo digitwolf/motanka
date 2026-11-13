@@ -293,8 +293,8 @@ phase_install() {
     fail "/usr/share/omarchy resolves to '$(readlink -f /usr/share/omarchy 2>/dev/null || true)', not $PREFIX/share/omarchy-view"
   fi
   if [[ $(readlink -f /usr/share/omarchy/bin) == "$PREFIX/bin" &&
-    $(readlink -f /usr/share/omarchy/default) == "$PREFIX/share/omarchy/default" &&
-    $(readlink -f /usr/share/omarchy/bin/omarchy-version) == "$PREFIX/bin/omarchy-version" ]]; then
+  $(readlink -f /usr/share/omarchy/default) == "$PREFIX/share/omarchy/default" &&
+  $(readlink -f /usr/share/omarchy/bin/omarchy-version) == "$PREFIX/bin/omarchy-version" ]]; then
     pass "the overlay's bin is the Wrappers and its default is the vendored tree"
   else
     fail "the overlay is wrong: bin -> $(readlink -f /usr/share/omarchy/bin), default -> $(readlink -f /usr/share/omarchy/default)"

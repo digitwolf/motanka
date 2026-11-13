@@ -89,7 +89,8 @@ fetch() { # fetch <name> <git-url> <tag> [--recursive]
 }
 
 meson_build() { # meson_build <name> [meson options...]
-  local name=$1; shift
+  local name=$1
+  shift
   (cd "$SRC/$name" &&
     meson setup build --prefix="$PREFIX" --libdir=lib --buildtype=release \
       --wrap-mode=nodownload -Db_ndebug=true "$@" &&
@@ -97,7 +98,8 @@ meson_build() { # meson_build <name> [meson options...]
 }
 
 cmake_build() { # cmake_build <name> [cmake options...]
-  local name=$1; shift
+  local name=$1
+  shift
   (cd "$SRC/$name" &&
     cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
@@ -119,14 +121,24 @@ step() { # step <component> <function>
   # Run the step in its own subshell with errexit active: errexit is ignored
   # inside an `if` condition, which would hide failures in the middle of a step.
   set +e
-  (set -e; "$fn") >"$LOGS/$name.log" 2>&1
+  (
+    set -e
+    "$fn"
+  ) >"$LOGS/$name.log" 2>&1
   rc=$?
   set -e
   result=$(tail -n1 "$LOGS/$name.log")
   if ((rc == 0)); then
     case $result in
-      SKIP*) echo skipped >"$STAMPS/$name"; log "$name: ${result}" ;;
-      *) echo built >"$STAMPS/$name"; BUNDLED+=("$name"); log "$name: built" ;;
+      SKIP*)
+        echo skipped >"$STAMPS/$name"
+        log "$name: ${result}"
+        ;;
+      *)
+        echo built >"$STAMPS/$name"
+        BUNDLED+=("$name")
+        log "$name: built"
+        ;;
     esac
   else
     log "$name: FAILED, see $LOGS/$name.log"
@@ -139,35 +151,53 @@ skip() { echo "SKIP: $*"; }
 
 # --- components -------------------------------------------------------------
 c_wayland() {
-  pc_ok wayland-server 1.22.91 && { skip "system wayland $(pkg-config --modversion wayland-server)"; return; }
+  pc_ok wayland-server 1.22.91 && {
+    skip "system wayland $(pkg-config --modversion wayland-server)"
+    return
+  }
   fetch wayland https://gitlab.freedesktop.org/wayland/wayland.git 1.24.0
   meson_build wayland -Ddocumentation=false -Dtests=false -Ddtd_validation=false
 }
 c_wayland_protocols() {
-  pc_ok wayland-protocols 1.49 && { skip "system wayland-protocols"; return; }
+  pc_ok wayland-protocols 1.49 && {
+    skip "system wayland-protocols"
+    return
+  }
   fetch wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.50
   meson_build wayland-protocols -Dtests=false
 }
 c_xkbcommon() {
-  pc_ok xkbcommon 1.11.0 && { skip "system xkbcommon $(pkg-config --modversion xkbcommon)"; return; }
+  pc_ok xkbcommon 1.11.0 && {
+    skip "system xkbcommon $(pkg-config --modversion xkbcommon)"
+    return
+  }
   fetch libxkbcommon https://github.com/xkbcommon/libxkbcommon.git xkbcommon-1.13.1
   meson_build libxkbcommon -Denable-docs=false -Denable-tools=false -Denable-wayland=false \
     -Denable-bash-completion=false -Denable-x11=true -Dxkb-config-root=/usr/share/X11/xkb \
     -Dx-locale-root=/usr/share/X11/locale
 }
 c_libinput() {
-  pc_ok libinput 1.29 && { skip "system libinput $(pkg-config --modversion libinput)"; return; }
+  pc_ok libinput 1.29 && {
+    skip "system libinput $(pkg-config --modversion libinput)"
+    return
+  }
   fetch libinput https://gitlab.freedesktop.org/libinput/libinput.git 1.31.1
   meson_build libinput -Dlibwacom=false -Ddebug-gui=false -Dtests=false -Ddocumentation=false \
     -Dudev-dir="$PREFIX/lib/udev"
 }
 c_libdisplay_info() {
-  pc_ok libdisplay-info 0.2.0 && { skip "system libdisplay-info $(pkg-config --modversion libdisplay-info)"; return; }
+  pc_ok libdisplay-info 0.2.0 && {
+    skip "system libdisplay-info $(pkg-config --modversion libdisplay-info)"
+    return
+  }
   fetch libdisplay-info https://gitlab.freedesktop.org/emersion/libdisplay-info.git 0.3.0
   meson_build libdisplay-info
 }
 c_lua() {
-  pkg-config --exists lua5.5 2>/dev/null && { skip "system lua5.5"; return; }
+  pkg-config --exists lua5.5 2>/dev/null && {
+    skip "system lua5.5"
+    return
+  }
   if [[ ! -d $SRC/lua-5.5.0 ]]; then
     curl -fsSL --retry 5 --retry-all-errors https://www.lua.org/ftp/lua-5.5.0.tar.gz | tar -C "$SRC" -xz
   fi
@@ -188,12 +218,18 @@ Cflags: -I\${includedir}
 EOF
 }
 c_libei() {
-  pc_ok libeis-1.0 1.0.0 && { skip "system libeis $(pkg-config --modversion libeis-1.0)"; return; }
+  pc_ok libeis-1.0 1.0.0 && {
+    skip "system libeis $(pkg-config --modversion libeis-1.0)"
+    return
+  }
   fetch libei https://gitlab.freedesktop.org/libinput/libei.git 1.5.0
   meson_build libei -Dtests=disabled -Ddocumentation=[] -Dsd-bus-provider=libsystemd
 }
 c_xcb_errors() {
-  pc_ok xcb-errors 1.0 && { skip "system xcb-errors"; return; }
+  pc_ok xcb-errors 1.0 && {
+    skip "system xcb-errors"
+    return
+  }
   if [[ ! -d $SRC/xcb-util-errors-1.0.1 ]]; then
     curl -fsSL --retry 5 --retry-all-errors https://xcb.freedesktop.org/dist/xcb-util-errors-1.0.1.tar.xz | tar -C "$SRC" -xJ
   fi
@@ -201,14 +237,18 @@ c_xcb_errors() {
     make -j "$JOBS" && make install)
 }
 c_sdbus() {
-  pc_ok sdbus-c++ 2.0.0 && { skip "system sdbus-c++ $(pkg-config --modversion sdbus-c++)"; return; }
+  pc_ok sdbus-c++ 2.0.0 && {
+    skip "system sdbus-c++ $(pkg-config --modversion sdbus-c++)"
+    return
+  }
   fetch sdbus-cpp https://github.com/Kistler-Group/sdbus-cpp.git v2.2.1
   cmake_build sdbus-cpp -DSDBUSCPP_BUILD_CODEGEN=OFF -DSDBUSCPP_BUILD_TESTS=OFF -DSDBUSCPP_BUILD_DOCS=OFF
 }
 c_cmake() {
   # Build-time only: glaze needs CMake >= 3.31; noble has 3.28.
   if cmake --version | awk 'NR==1{split($3,v,"."); exit !(v[1]>3 || (v[1]==3 && v[2]>=31))}'; then
-    skip "system cmake $(cmake --version | head -1)"; return
+    skip "system cmake $(cmake --version | head -1)"
+    return
   fi
   local ver=4.5.0 d=$WORK/tools
   mkdir -p "$d" && cd "$d"
@@ -226,13 +266,34 @@ c_hyprwayland_scanner() {
   fetch hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6
   cmake_build hyprwayland-scanner
 }
-c_hyprutils() { fetch hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3; cmake_build hyprutils -DBUILD_TESTING=OFF; }
-c_hyprlang() { fetch hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8; cmake_build hyprlang -DBUILD_TESTING=OFF; }
-c_hyprcursor() { fetch hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.14; cmake_build hyprcursor; }
-c_hyprgraphics() { fetch hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.6.0; cmake_build hyprgraphics -DBUILD_TESTING=OFF; }
-c_hyprland_protocols() { fetch hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0; cmake_build hyprland-protocols; }
-c_aquamarine() { fetch aquamarine https://github.com/hyprwm/aquamarine.git v0.16.0; cmake_build aquamarine -DBUILD_TESTING=OFF; }
-c_hyprwire() { fetch hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1; cmake_build hyprwire -DBUILD_TESTING=OFF; }
+c_hyprutils() {
+  fetch hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3
+  cmake_build hyprutils -DBUILD_TESTING=OFF
+}
+c_hyprlang() {
+  fetch hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8
+  cmake_build hyprlang -DBUILD_TESTING=OFF
+}
+c_hyprcursor() {
+  fetch hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.14
+  cmake_build hyprcursor
+}
+c_hyprgraphics() {
+  fetch hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.6.0
+  cmake_build hyprgraphics -DBUILD_TESTING=OFF
+}
+c_hyprland_protocols() {
+  fetch hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0
+  cmake_build hyprland-protocols
+}
+c_aquamarine() {
+  fetch aquamarine https://github.com/hyprwm/aquamarine.git v0.16.0
+  cmake_build aquamarine -DBUILD_TESTING=OFF
+}
+c_hyprwire() {
+  fetch hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1
+  cmake_build hyprwire -DBUILD_TESTING=OFF
+}
 c_hyprland() {
   fetch hyprland https://github.com/hyprwm/Hyprland.git v0.57.2 --recursive
   cmake_build hyprland -DNO_SYSTEMD=OFF -DNO_TESTS=ON -DBUILD_TESTING=OFF
@@ -244,7 +305,10 @@ COMPONENTS=(wayland wayland_protocols xkbcommon libinput libdisplay_info libei x
 
 report() {
   local r=$WORK/report.txt
-  [[ -x $PREFIX/bin/Hyprland ]] || { log "no Hyprland binary yet"; return 0; }
+  [[ -x $PREFIX/bin/Hyprland ]] || {
+    log "no Hyprland binary yet"
+    return 0
+  }
   {
     echo "release: $VERSION_CODENAME ($VERSION_ID)"
     echo "compiler: $($CXX --version | head -1)"
@@ -265,11 +329,18 @@ report() {
 }
 
 main() {
-  [[ -e $STAMPS/setup ]] || { log "installing build dependencies"; setup >"$LOGS/setup.log" 2>&1; echo ok >"$STAMPS/setup"; }
+  [[ -e $STAMPS/setup ]] || {
+    log "installing build dependencies"
+    setup >"$LOGS/setup.log" 2>&1
+    echo ok >"$STAMPS/setup"
+  }
   toolchain_env
   local c
   if (($#)); then
-    for c in "$@"; do rm -f "$STAMPS/$c"; step "$c" "c_$c"; done
+    for c in "$@"; do
+      rm -f "$STAMPS/$c"
+      step "$c" "c_$c"
+    done
   else
     for c in "${COMPONENTS[@]}"; do step "$c" "c_$c"; done
   fi

@@ -192,7 +192,7 @@ mk_snapshot_motanka_packages() {
 # _mk_snap_deb_is <file> <package> <version>
 _mk_snap_deb_is() {
   [[ $(dpkg-deb --field "$1" Package 2>/dev/null) == "$2" &&
-    $(dpkg-deb --field "$1" Version 2>/dev/null) == "$3" ]]
+  $(dpkg-deb --field "$1" Version 2>/dev/null) == "$3" ]]
 }
 
 # _mk_snap_store_deb <debs-folder> <package> <version> <architecture>:

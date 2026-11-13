@@ -28,6 +28,9 @@
 #               run only when their variable is 1, and are SKIP otherwise:
 #                 release-upgrade.sh  MOTANKA_VM_RELEASE_UPGRADE=1 (24.04 ->
 #                                     26.04 with a twin VM; an hour or more)
+#                 parity.sh           MOTANKA_VM_PARITY=1 (an Arch Linux
+#                                     reference VM with Upstream; its first
+#                                     run builds that image, an hour or more)
 #               Tests in NEEDS_GL start the Motanka session in a VM with a
 #               virgl GPU (MOTANKA_VM_GPU=gl), which needs read and write
 #               access to the host's render node (MOTANKA_VM_RENDER_NODE,
@@ -144,9 +147,9 @@ declare -A RESULT=()
 declare -A REASON=()
 unit_vm=""
 # VM tests that run only on request: test name -> the variable that must be 1.
-declare -A OPT_IN=([release-upgrade]=MOTANKA_VM_RELEASE_UPGRADE)
+declare -A OPT_IN=(["release-upgrade"]=MOTANKA_VM_RELEASE_UPGRADE ["parity"]=MOTANKA_VM_PARITY)
 # VM tests that cannot run without a GL render node (MOTANKA_VM_GPU=gl).
-declare -A NEEDS_GL=([first-login]=1 [session]=1 [stack]=1)
+declare -A NEEDS_GL=(["first-login"]=1 ["session"]=1 ["stack"]=1 ["parity"]=1)
 
 # run_stage <stage> <command...>: runs the command, logs its output to
 # <stage>.log and stderr, and records the exit code.

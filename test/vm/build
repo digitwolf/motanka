@@ -365,9 +365,10 @@ build_suite() {
   printf -v q_log '%q' "$glog"
   printf -v q_rc '%q' "$grc"
   : >"$hostlog"
-  pgid=$("$MV_LIB_DIR/run" "$vm" -- bash -s -- "$glog" "$grc" "$sde" \
-    "$MV_GUEST_REPO/packaging/build.sh" --suite "$suite" --out "$guest_out" \
-    "${orig_args[@]}" "${extra_args[@]}" "${guest_pkgs[@]}" <<'EOS'
+  pgid=$(
+    "$MV_LIB_DIR/run" "$vm" -- bash -s -- "$glog" "$grc" "$sde" \
+      "$MV_GUEST_REPO/packaging/build.sh" --suite "$suite" --out "$guest_out" \
+      "${orig_args[@]}" "${extra_args[@]}" "${guest_pkgs[@]}" <<'EOS'
 set -euo pipefail
 log=$1 rcf=$2 sde=$3
 shift 3

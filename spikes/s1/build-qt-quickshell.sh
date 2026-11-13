@@ -4,7 +4,10 @@
 # GCC 16 and the Hypr/wayland libraries in /opt/motanka).
 # Usage: build-qt-quickshell.sh [component...]   (stamps and logs as build-stack.sh)
 set -euo pipefail
-[[ $(systemd-detect-virt) != none ]] || { echo "refusing to run outside a VM" >&2; exit 7; }
+[[ $(systemd-detect-virt) != none ]] || {
+  echo "refusing to run outside a VM" >&2
+  exit 7
+}
 
 PREFIX=/opt/motanka
 WORK=$HOME/s1
@@ -42,7 +45,8 @@ deps() {
 }
 
 qt_module() { # qt_module <module> [cmake args...]
-  local m=$1; shift
+  local m=$1
+  shift
   local d=$SRC/$m-everywhere-src-$QT_VER
   if [[ ! -d $d ]]; then
     curl -fsSL --retry 5 --retry-all-errors \
@@ -67,7 +71,8 @@ c_qtdeclarative() { qt_module qtdeclarative; }
 c_qtwayland() { qt_module qtwayland; }
 c_cpptrace() {
   if pkg-config --exists cpptrace 2>/dev/null || [[ -e /usr/lib/x86_64-linux-gnu/cmake/cpptrace ]]; then
-    echo "SKIP: system cpptrace"; return
+    echo "SKIP: system cpptrace"
+    return
   fi
   [[ -d $SRC/cpptrace ]] || git clone -q --depth 1 --branch v1.0.4 https://github.com/jeremy-rifkin/cpptrace.git "$SRC/cpptrace"
   cmake -S "$SRC/cpptrace" -B "$SRC/cpptrace/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -87,18 +92,43 @@ c_quickshell() {
 
 step() {
   local name=$1 rc
-  if [[ -e $STAMPS/$name ]]; then log "$name: already done"; return 0; fi
+  if [[ -e $STAMPS/$name ]]; then
+    log "$name: already done"
+    return 0
+  fi
   log "$name: start"
   set +e
-  (set -e; "c_$name") >"$LOGS/$name.log" 2>&1
+  (
+    set -e
+    "c_$name"
+  ) >"$LOGS/$name.log" 2>&1
   rc=$?
   set -e
-  if ((rc == 0)); then echo ok >"$STAMPS/$name"; log "$name: done ($(tail -n1 "$LOGS/$name.log" | cut -c1-80))"
-  else log "$name: FAILED, see $LOGS/$name.log"; tail -n 30 "$LOGS/$name.log" >&2; exit 1; fi
+  if ((rc == 0)); then
+    echo ok >"$STAMPS/$name"
+    log "$name: done ($(tail -n1 "$LOGS/$name.log" | cut -c1-80))"
+  else
+    log "$name: FAILED, see $LOGS/$name.log"
+    tail -n 30 "$LOGS/$name.log" >&2
+    exit 1
+  fi
 }
 
-[[ -e $STAMPS/qs-deps ]] || { log "installing dependencies"; deps >"$LOGS/qs-deps.log" 2>&1 || { tail -20 "$LOGS/qs-deps.log"; exit 1; }; echo ok >"$STAMPS/qs-deps"; }
-if (($#)); then for c in "$@"; do rm -f "$STAMPS/$c"; step "$c"; done; exit 0; fi
+[[ -e $STAMPS/qs-deps ]] || {
+  log "installing dependencies"
+  deps >"$LOGS/qs-deps.log" 2>&1 || {
+    tail -20 "$LOGS/qs-deps.log"
+    exit 1
+  }
+  echo ok >"$STAMPS/qs-deps"
+}
+if (($#)); then
+  for c in "$@"; do
+    rm -f "$STAMPS/$c"
+    step "$c"
+  done
+  exit 0
+fi
 if [[ $VERSION_CODENAME == noble ]]; then
   for c in qtbase qtshadertools qtsvg qtdeclarative qtwayland; do step "$c"; done
 else

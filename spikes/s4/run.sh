@@ -62,7 +62,10 @@ EOS
 # do-release-upgrade refuses to start while a reboot is pending.
 run 'sudo systemctl reboot' || true
 sleep 20
-for _ in $(seq 1 60); do run true 2>/dev/null && break; sleep 5; done
+for _ in $(seq 1 60); do
+  run true 2>/dev/null && break
+  sleep 5
+done
 
 echo "=== running do-release-upgrade (non-interactive); this takes a while" >&2
 set +e
@@ -76,7 +79,10 @@ tail -15 "$HOME/.cache/motanka-vm/spikes/s4-upgrade.log" >&2
 # The upgrader asks for a reboot; reboot and wait for SSH.
 run 'sudo systemctl reboot' || true
 sleep 20
-for _ in $(seq 1 60); do run true 2>/dev/null && break; sleep 5; done
+for _ in $(seq 1 60); do
+  run true 2>/dev/null && break
+  sleep 5
+done
 
 run sudo bash -s <<'EOS'
 echo "=== AFTER"

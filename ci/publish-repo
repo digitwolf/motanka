@@ -154,10 +154,10 @@ for f in "$debs"/*.deb; do
   if [[ -z $rel ]]; then
     die "$base has version $ver, which is neither ${VERSION[noble]} (noble) nor ${VERSION[resolute]} (resolute)"
   fi
-  if [[ -n ${HAVE[$rel/$pkg]:-} ]]; then
-    die "two .debs of $pkg for $rel: ${HAVE[$rel/$pkg]##*/} and $base"
+  if [[ -n ${HAVE["$rel/$pkg"]:-} ]]; then
+    die "two .debs of $pkg for $rel: ${HAVE["$rel/$pkg"]##*/} and $base"
   fi
-  HAVE[$rel/$pkg]=$f
+  HAVE["$rel/$pkg"]=$f
   cp -f -- "$f" "$work/rel/$rel/"
 done
 shopt -u nullglob
@@ -208,7 +208,7 @@ for r in "${RELEASES[@]}"; do
   declare -A wanted=()
   for p in "${want[@]}"; do
     wanted[$p]=1
-    if [[ -z ${HAVE[$r/$p]:-} ]]; then
+    if [[ -z ${HAVE["$r/$p"]:-} ]]; then
       log "$r: no .deb of $p ${VERSION[$r]}"
       problems=$((problems + 1))
     fi
@@ -229,7 +229,7 @@ if grep -qi 'TEST KEY' "$repo/packaging/keys/motanka-archive.asc"; then
   die "packaging/keys/motanka-archive.asc is the TEST key; commit the public half of the release key"
 fi
 for r in "${RELEASES[@]}"; do
-  f=${HAVE[$r/motanka-core]}
+  f=${HAVE["$r/motanka-core"]}
   if dpkg-deb --contents "$f" | grep -q ' \./opt/motanka/share/motanka/DEV_BUILD$'; then
     die "${f##*/} is a development build (it has /opt/motanka/share/motanka/DEV_BUILD); build it with ci/release-build"
   fi
@@ -255,7 +255,7 @@ mapfile -t signing < <(awk -F: '
 ((${#signing[@]} > 0)) || die "the signing key file has no usable signing subkey"
 log "signing subkey(s): ${signing[*]}"
 for r in "${RELEASES[@]}"; do
-  f=${HAVE[$r/motanka-archive-keyring]}
+  f=${HAVE["$r/motanka-archive-keyring"]}
   mkdir -p "$work/keyring/$r"
   dpkg-deb -x "$f" "$work/keyring/$r"
   kr=$work/keyring/$r/usr/share/keyrings/motanka-archive-keyring.gpg

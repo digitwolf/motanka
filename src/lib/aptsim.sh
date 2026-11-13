@@ -273,7 +273,7 @@ _mk_aptsim_get_deb() {
     mk_die "$MK_EXIT_VERIFY" "checksum mismatch for $MK_APTSIM_URI/$_MK_PICK_PATH: SHA256SUMS has $_MK_PICK_SHA, the download has $got; the download was deleted and nothing was installed"
   fi
   if [[ $(dpkg-deb --field "$dest" Package 2>/dev/null) != "$name" ||
-    $(dpkg-deb --field "$dest" Version 2>/dev/null) != "$_MK_PICK_VERSION" ]]; then
+  $(dpkg-deb --field "$dest" Version 2>/dev/null) != "$_MK_PICK_VERSION" ]]; then
     rm -f -- "$dest"
     mk_die "$MK_EXIT_VERIFY" "$MK_APTSIM_URI/$_MK_PICK_PATH is not the package $name $_MK_PICK_VERSION; the download was deleted and nothing was installed"
   fi

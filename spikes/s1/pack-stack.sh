@@ -3,7 +3,10 @@
 # Runs INSIDE the build VM after build-stack.sh. Writes ~/s1/stack-<codename>.tar.zst
 # and ~/s1/runtime-deps-<codename>.txt (archive packages the runtime needs).
 set -euo pipefail
-[[ $(systemd-detect-virt) != none ]] || { echo "refusing to run outside a VM" >&2; exit 7; }
+[[ $(systemd-detect-virt) != none ]] || {
+  echo "refusing to run outside a VM" >&2
+  exit 7
+}
 # shellcheck disable=SC1091
 . /etc/os-release
 PREFIX=/opt/motanka
