@@ -284,8 +284,13 @@ install_packages() {
   retry 2 "${PACMAN_INSTALL[@]}" "${AUDIO_PACKAGES[@]}" || die "pacman could not install ${AUDIO_PACKAGES[*]}"
   log "installing the ISO's ${ISO_PACKAGES[*]}"
   retry 2 "${PACMAN_INSTALL[@]}" "${ISO_PACKAGES[@]}" || die "pacman could not install ${ISO_PACKAGES[*]}"
-  if [[ ! -x $OMARCHY_PATH_DIR/bin/omarchy-apply-system || ! -f /usr/share/wayland-sessions/omarchy.desktop ]]; then
-    die "the omarchy package did not install $OMARCHY_PATH_DIR/bin/omarchy-apply-system and the omarchy.desktop session"
+  # Upstream's docs/file-layout.md puts the session entry in
+  # /usr/local/share/wayland-sessions/.
+  if [[ ! -x $OMARCHY_PATH_DIR/bin/omarchy-apply-system ]]; then
+    die "the omarchy package did not install $OMARCHY_PATH_DIR/bin/omarchy-apply-system"
+  fi
+  if [[ ! -f /usr/local/share/wayland-sessions/omarchy.desktop && ! -f /usr/share/wayland-sessions/omarchy.desktop ]]; then
+    die "the omarchy package installed no omarchy.desktop session entry"
   fi
 }
 
