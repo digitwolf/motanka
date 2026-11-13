@@ -1,0 +1,78 @@
+Source: motanka-stack-shell
+Section: x11
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               gcc-16,
+               g++-16,
+               cmake,
+               meson,
+               ninja-build,
+               pkgconf,
+               binutils,
+               libcli11-dev,
+               libdrm-dev,
+               libegl-dev,
+               libgbm-dev,
+               libgl-dev,
+               libglib2.0-dev,
+               libglvnd-dev,
+               libjemalloc-dev,
+               libpam0g-dev,
+               libpipewire-0.3-dev,
+               libpolkit-agent-1-dev,
+               libpolkit-gobject-1-dev,
+               libunwind-dev,
+               libwayland-dev,
+               libxcb1-dev,
+               libzstd-dev,
+               spirv-tools,
+               zlib1g-dev,
+#if noble
+               motanka-qt6-dev,
+#endif
+#if resolute
+               qt6-base-dev,
+               qt6-base-private-dev,
+               qt6-declarative-dev,
+               qt6-declarative-private-dev,
+               qt6-shadertools-dev,
+               qt6-svg-dev,
+               qt6-wayland-dev,
+               qt6-wayland-private-dev,
+#endif
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-stack-shell
+Architecture: amd64
+Depends: ${shlibs:Depends},
+#if noble
+         motanka-qt6,
+#endif
+#if resolute
+         qml6-module-qtqml-workerscript,
+         qml6-module-qtquick,
+         qml6-module-qtquick-controls,
+         qml6-module-qtquick-layouts,
+         qml6-module-qtquick-window,
+         qt6-wayland,
+#endif
+         ${misc:Depends},
+#if resolute
+Conflicts: motanka-qt6,
+#endif
+Description: Hyprland stack for Motanka - desktop shell
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
+ the Hyprland compositor with its companion programs and libraries at the
+ versions upstream Omarchy expects, installed under /opt/motanka.
+ .
+ This package holds Quickshell, the QML desktop shell upstream Omarchy uses
+ for its bar and menus, and the cpptrace library its crash handler needs.
+ On Ubuntu 24.04 it runs on the Qt 6.10 in motanka-qt6; on Ubuntu 26.04 on
+ the archive's Qt. On 26.04 it conflicts with motanka-qt6, so a copy left
+ over from 24.04 after a release upgrade is removed instead of shadowing the
+ archive's Qt.

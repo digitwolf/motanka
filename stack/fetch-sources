@@ -1,40 +1,51 @@
 #!/usr/bin/env python3
-"""Download and verify the upstream tarballs of the Motanka Stack.
+"""Download and verify the upstream tarballs of a Motanka source package.
 
 Usage:
-  stack/fetch-sources [--out DIR] [--update-checksums] [--version V]
-  stack/fetch-sources --check
+  stack/fetch-sources [--components FILE] [--out DIR] [--update-checksums] [--version V]
+  stack/fetch-sources [--components FILE] --check
 
-Reads stack/components.tsv. For every component it downloads the tarball
-into DIR/downloads/<name>-<version>.tar.<ext> (skipped when a file with the
+Reads a components file (default stack/components.tsv, the Stack). For
+every component it downloads the tarball into
+DIR/downloads/<name>-<version>.tar.<ext> (skipped when a file with the
 pinned SHA-256 is already there), verifies its SHA-256 and checks that it
 holds exactly one top-level folder with no absolute or '..' paths. When all
-components pass, DIR/orig/ is rebuilt with one hard link (or copy) per
-component, named as dpkg-source 3.0 (quilt) expects for the motanka-stack
-source package:
+components pass, the source package's files in DIR/orig/ are rebuilt with
+one hard link (or copy) per component, named as dpkg-source 3.0 (quilt)
+expects:
 
-  motanka-stack_<V>.orig-<name>.tar.<ext>
+  <source>_<V>.orig-<name>.tar.<ext>
 
-<V> is the Motanka version (default: first line of packaging/VERSION). The
-main orig tarball (motanka-stack_<V>.orig.tar.xz) is made by
-packaging/build.sh from packaging/motanka-stack/, like for every other
-package, so it always matches the package folder.
+<source> comes from the file's "#@source <name>" line (default
+motanka-stack). <V> is the Motanka version (default: first line of
+packaging/VERSION). Files of other source packages in DIR/orig/ are left
+alone, so one DIR serves every components file. The main orig tarball
+(<source>_<V>.orig.tar.xz) is made by packaging/build.sh from the package
+folder, like for every other package, so it always matches the folder.
+
+Directives (lines starting with '#@', before or between components):
+  #@source <name>           source package the components belong to
+  #@packages <pkg>...       binary packages the package field may name
+                            ('-' is always allowed)
+A file without directives is the Stack: source motanka-stack, packages
+motanka-stack-libs, motanka-stack-hyprland and motanka-stack-tools.
 
 Options:
+  --components FILE    read (and update) FILE instead of stack/components.tsv
+                       (--tsv FILE is the same option)
   --out DIR            output folder (default ~/.cache/motanka-vm/stack-src-tarballs)
-  --update-checksums   write the computed SHA-256 into components.tsv for
-                       entries whose sha256 field is '-'. Pinned entries are
-                       never changed; a mismatch is still an error.
+  --update-checksums   write the computed SHA-256 into the components file
+                       for entries whose sha256 field is '-'. Pinned entries
+                       are never changed; a mismatch is still an error.
   --version V          Motanka version for the orig file names
-  --check              validate components.tsv only; no network, no writes
-  --tsv FILE           read (and update) FILE instead of stack/components.tsv
+  --check              validate the components file only; no network, no writes
 
 Exit codes: 0 success, 1 a component is unpinned, failed to download or is
 malformed, 2 usage error or invalid components.tsv, 6 checksum mismatch.
 
 It only downloads and verifies: it installs nothing and runs nothing it
 downloads, so it may run on the development host or in a test VM. It
-writes only inside DIR and, with --update-checksums, components.tsv.
+writes only inside DIR and, with --update-checksums, the components file.
 Written in Python because the host tool set has python3 but no curl, and
 the tarball checks need a tar reader.
 """
@@ -54,14 +65,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 TSV = os.path.join(HERE, "components.tsv")
 VERSION_FILE = os.path.join(REPO, "packaging", "VERSION")
-SOURCE = "motanka-stack"
+DEFAULT_SOURCE = "motanka-stack"
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), ".cache", "motanka-vm", "stack-src-tarballs")
 
 FIELDS = ("name", "version", "url", "sha256", "build", "suites", "package")
-BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool"}
+# qt: a Qt submodule (motanka-qt6). source: not built on its own; another
+# component's build uses its folder (libdwarf-lite for cpptrace).
+BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source"}
 SUITES = {"noble", "resolute", "both"}
-PACKAGES = {"-", "motanka-stack-libs", "motanka-stack-hyprland", "motanka-stack-tools"}
+DEFAULT_PACKAGES = {"-", "motanka-stack-libs", "motanka-stack-hyprland", "motanka-stack-tools"}
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MOTANKA_RE = re.compile(r"^motanka(-[a-z0-9][a-z0-9+.-]*)?$")
+DIRECTIVE_RE = re.compile(r"^#@([a-z]+)(?:[ \t]+(.*))?$")
 VERSION_RE = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 EXTS = ((".tar.gz", "gz"), (".tgz", "gz"), (".tar.xz", "xz"), (".tar.bz2", "bz2"))
@@ -91,14 +106,42 @@ def ext_of(url):
     raise TsvError(f"cannot tell the compression of {url} (expected .tar.gz, .tgz, .tar.xz or .tar.bz2)")
 
 
+def parse_directive(where, line, meta):
+    m = DIRECTIVE_RE.match(line.rstrip())
+    if not m:
+        raise TsvError(f"{where}: malformed directive '{line.strip()}' (expected '#@<name> <value>')")
+    key, value = m.group(1), (m.group(2) or "").split()
+    if key in meta["seen"]:
+        raise TsvError(f"{where}: duplicate #@{key} directive")
+    meta["seen"].add(key)
+    if key == "source":
+        if len(value) != 1 or not MOTANKA_RE.match(value[0]):
+            raise TsvError(f"{where}: #@source needs one source package name starting with 'motanka'")
+        meta["source"] = value[0]
+    elif key == "packages":
+        if not value:
+            raise TsvError(f"{where}: #@packages needs at least one package name")
+        for pkg in value:
+            if pkg != "-" and not MOTANKA_RE.match(pkg):
+                raise TsvError(f"{where}: #@packages: '{pkg}' is not a Motanka package name")
+        meta["packages"] = set(value) | {"-"}
+    else:
+        raise TsvError(f"{where}: unknown directive #@{key} (known: #@source, #@packages)")
+
+
 def parse_tsv(path):
-    """Returns (lines, components). lines keeps the file for rewriting;
-    each component is a dict with the FIELDS plus 'line' and 'ext'."""
+    """Returns (lines, components, meta). lines keeps the file for
+    rewriting; each component is a dict with the FIELDS plus 'line' and
+    'ext'; meta has 'source' and 'packages' from the directives."""
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
     comps = []
     seen = set()
+    meta = {"source": DEFAULT_SOURCE, "packages": set(DEFAULT_PACKAGES), "seen": set()}
     for i, line in enumerate(lines):
+        if line.startswith("#@"):
+            parse_directive(f"{path}:{i + 1}", line, meta)
+            continue
         if not line.strip() or line.startswith("#"):
             continue
         parts = line.split("\t")
@@ -121,14 +164,17 @@ def parse_tsv(path):
             raise TsvError(f"{where}: unknown build system '{c['build']}'")
         if c["suites"] not in SUITES:
             raise TsvError(f"{where}: suites must be noble, resolute or both")
-        if c["package"] not in PACKAGES:
-            raise TsvError(f"{where}: unknown package '{c['package']}'")
         c["ext"] = ext_of(c["url"])
         c["line"] = i
         comps.append(c)
+    for c in comps:
+        if c["package"] not in meta["packages"]:
+            allowed = ", ".join(sorted(meta["packages"]))
+            raise TsvError(f"{path}:{c['line'] + 1}: unknown package '{c['package']}' (allowed: {allowed})")
     if not comps:
         raise TsvError(f"{path}: no components")
-    return lines, comps
+    del meta["seen"]
+    return lines, comps, meta
 
 
 def sha256_of(path):
@@ -209,15 +255,15 @@ def rewrite_tsv(path, lines, updates):
     os.replace(tmp, path)
 
 
-def layout(out, version, comps, files):
+def layout(out, source, version, comps, files):
     orig = os.path.join(out, "orig")
     os.makedirs(orig, exist_ok=True)
-    prefix = f"{SOURCE}_"
+    prefix = f"{source}_"
     for n in os.listdir(orig):
         if n.startswith(prefix) and ".orig-" in n:
             os.unlink(os.path.join(orig, n))
     for c in comps:
-        dest = os.path.join(orig, f"{SOURCE}_{version}.orig-{c['name']}.tar.{c['ext']}")
+        dest = os.path.join(orig, f"{source}_{version}.orig-{c['name']}.tar.{c['ext']}")
         try:
             os.link(files[c["name"]], dest)
         except OSError:
@@ -226,12 +272,12 @@ def layout(out, version, comps, files):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="fetch-sources", description="Download and verify the Stack sources.")
+    p = argparse.ArgumentParser(prog="fetch-sources", description="Download and verify the sources of a Motanka source package.")
+    p.add_argument("--components", "--tsv", dest="tsv", default=TSV)
     p.add_argument("--out", default=DEFAULT_OUT)
     p.add_argument("--update-checksums", action="store_true")
     p.add_argument("--version")
     p.add_argument("--check", action="store_true")
-    p.add_argument("--tsv", default=TSV)
     args = p.parse_args(argv)
     tsv = os.path.abspath(args.tsv)
 
@@ -239,7 +285,7 @@ def main(argv=None):
         log("refusing to run as root")
         return EXIT_USAGE
     try:
-        lines, comps = parse_tsv(tsv)
+        lines, comps, meta = parse_tsv(tsv)
         version = args.version or read_version()
     except (TsvError, OSError) as e:
         log(str(e))
@@ -247,8 +293,9 @@ def main(argv=None):
     if not VERSION_RE.match(version) or "-" in version:
         log(f"invalid Motanka version '{version}'")
         return EXIT_USAGE
+    source = meta["source"]
     if args.check:
-        log(f"{tsv}: {len(comps)} components, valid")
+        log(f"{tsv}: {len(comps)} components, valid (source {source})")
         return 0
 
     out = os.path.abspath(args.out)
@@ -301,8 +348,8 @@ def main(argv=None):
             log(f"error: {msg}")
         return EXIT_MISMATCH if mismatch else EXIT_PROBLEM
 
-    orig = layout(out, version, comps, files)
-    log(f"{len(comps)} components verified; orig tarballs in {orig}")
+    orig = layout(out, source, version, comps, files)
+    log(f"{len(comps)} components of {source} verified; orig tarballs in {orig}")
     print(orig)
     return 0
 

@@ -1,0 +1,22 @@
+# Installed as /usr/lib/systemd/user/motanka-session-cleanup.service by
+# motanka-core and wanted by motanka-session.target through the link
+# motanka-session.target.wants/motanka-session-cleanup.service.
+#
+# When motanka-session.target stops (at logout, or because
+# graphical-session.target stopped), ExecStop gives every variable of the
+# Session_Env_List (/opt/motanka/share/motanka/session-env.list) back the
+# value the user manager had before the session, or unsets it (5.11). The
+# launcher does the same when it ends normally; this unit covers a launcher
+# that was killed.
+[Unit]
+Description=Motanka session: remove the session environment from the user manager
+Documentation=file:///usr/share/doc/motanka-core/README
+PartOf=motanka-session.target
+Before=motanka-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=/opt/motanka/libexec/motanka/session cleanup
+TimeoutStopSec=30

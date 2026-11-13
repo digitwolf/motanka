@@ -1,0 +1,6 @@
+# Defaults of the Motanka session's dconf database (motanka-core). Installed
+# as /etc/dconf/db/motanka.d/00-motanka; the postinst compiles it into
+# /etc/dconf/db/motanka. Only the Motanka session reads it, through
+# DCONF_PROFILE=motanka (/etc/dconf/profile/motanka).
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'

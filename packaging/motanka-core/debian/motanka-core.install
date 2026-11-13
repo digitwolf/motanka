@@ -1,0 +1,14 @@
+motanka.desktop usr/share/wayland-sessions/
+org.motanka.policy usr/share/polkit-1/actions/
+motanka-portals.conf usr/share/xdg-desktop-portal/
+systemd/motanka-session.target usr/lib/systemd/user/
+systemd/motanka-session-cleanup.service usr/lib/systemd/user/
+dconf/profile/motanka etc/dconf/profile/
+dconf/db/motanka.d/00-motanka etc/dconf/db/motanka.d/
+uwsm/env-motanka opt/motanka/share/uwsm/
+session-env.list opt/motanka/share/motanka/
+upstream.pin opt/motanka/share/motanka/
+compat/privileged.tsv opt/motanka/share/motanka/
+compat/home-paths.tsv opt/motanka/share/motanka/
+compat/migrations.tsv opt/motanka/share/motanka/
+debian/build/package-map.tsv opt/motanka/share/motanka/

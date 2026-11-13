@@ -310,6 +310,56 @@ PY
   refute_output --partial "$good:"
 }
 
+@test "the link /usr/share/omarchy to /opt/motanka/share/omarchy passes" {
+  new_pkg motanka-core
+  add /opt/motanka/share/omarchy/bin/omarchy-menu 0755
+  mkdir -p "$PKG/usr/share"
+  ln -s ../../opt/motanka/share/omarchy "$PKG/usr/share/omarchy"
+  build
+  debcheck "$DEB"
+  assert_success
+  assert_output ''
+}
+
+@test "an absolute link /usr/share/omarchy to /opt/motanka/share/omarchy passes" {
+  new_pkg motanka-core
+  mkdir -p "$PKG/usr/share"
+  ln -s /opt/motanka/share/omarchy "$PKG/usr/share/omarchy"
+  build
+  debcheck "$DEB"
+  assert_success
+}
+
+@test "/usr/share/omarchy linking elsewhere fails" {
+  new_pkg motanka-core
+  mkdir -p "$PKG/usr/share"
+  ln -s ../../opt/other "$PKG/usr/share/omarchy"
+  build
+  debcheck "$DEB"
+  assert_failure 1
+  assert_output --partial '/usr/share/omarchy: links to ../../opt/other, not to /opt/motanka/share/omarchy'
+}
+
+@test "/usr/share/omarchy as a folder fails" {
+  new_pkg motanka-core
+  add /usr/share/omarchy/bin/omarchy-menu 0755
+  build
+  debcheck "$DEB"
+  assert_failure 1
+  assert_output --partial '/usr/share/omarchy: must be a symbolic link to /opt/motanka/share/omarchy'
+  assert_output --partial '/usr/share/omarchy/bin/omarchy-menu: outside the file layout'
+}
+
+@test "another link outside the layout fails" {
+  new_pkg motanka-core
+  mkdir -p "$PKG/usr/share"
+  ln -s ../../opt/motanka/share/omarchy "$PKG/usr/share/omarchy2"
+  build
+  debcheck "$DEB"
+  assert_failure 1
+  assert_output --partial '/usr/share/omarchy2: outside the file layout'
+}
+
 @test "a missing file is an input error" {
   debcheck "$BATS_TEST_TMPDIR/missing.deb"
   assert_failure 2

@@ -1,0 +1,35 @@
+# Motanka's own files live in /opt/motanka by design (DESIGN.md, "Linux
+# practices: Filesystem layout"), so they never shadow a host package.
+dir-or-file-in-opt
+# /usr/share/omarchy is the package-owned link to the vendored Upstream tree,
+# because Upstream hardcodes that path in 27 files (design.md, spike S2).
+breakout-link
+# The CLI's manual page is task 24.5.
+no-manual-page
+binary-without-manpage
+# Everything below concerns /opt/motanka/share/omarchy: upstream Omarchy,
+# shipped byte for byte at the pinned commit (requirement 7.1). Motanka does
+# not change its shebangs, modes, scripts or bundled assets. Upstream
+# commands run only through the Wrappers in /opt/motanka/bin; packages they
+# need come from the Package_Map through the Helper.
+missing-dep-for-interpreter
+incorrect-path-for-interpreter
+wrong-path-for-interpreter
+unusual-interpreter
+interpreter-not-absolute
+script-not-executable
+executable-not-elf-or-script
+shell-script-fails-syntax-check
+bash-term-in-posix-shell
+missing-depends-on-sensible-utils
+package-contains-vcs-control-file
+package-contains-documentation-outside-usr-share-doc
+package-contains-empty-directory
+extra-license-file
+font-in-non-font-package
+embedded-javascript-library
+privacy-breach-generic
+national-encoding
+non-standard-file-perm
+non-standard-executable-perm
+desktop-entry-contains-unknown-key

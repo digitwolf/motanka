@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Motanka
+Comment=Omarchy-compatible Hyprland session
+Exec=/opt/motanka/libexec/motanka/session
+TryExec=/opt/motanka/libexec/motanka/session
+DesktopNames=Motanka;Hyprland

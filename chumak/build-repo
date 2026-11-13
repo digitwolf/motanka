@@ -12,6 +12,12 @@
 #                    for tests of the apt pin. Without it, a package whose
 #                    name is not motanka or motanka-* is refused (3.6).
 #
+# A .deb whose control has "Motanka-Build-Only: yes" (from XB-Motanka-Build-
+# Only in debian/control, for example motanka-qt6-dev) is a build-time
+# dependency of another Motanka source package. It is left out of every
+# suite, with a log line; packaging/build.sh hands such .debs to sbuild
+# directly.
+#
 # Layout of <out-dir>, which must not exist or be empty:
 #   pool/<suite>/main/<initial>/<source>/<file>.deb
 #   dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
@@ -117,6 +123,10 @@ suites=()
 add_deb() {
   local suite=$1 deb=$2 pkg arch src initial dest
   pkg=$(dpkg-deb --field "$deb" Package)
+  if [[ $(dpkg-deb --field "$deb" Motanka-Build-Only) == yes ]]; then
+    log "$suite: skipping $pkg $(dpkg-deb --field "$deb" Version): build-only package (Motanka-Build-Only: yes), never published"
+    return 0
+  fi
   arch=$(dpkg-deb --field "$deb" Architecture)
   src=$(dpkg-deb --field "$deb" Source)
   src=${src%% *}

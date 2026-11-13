@@ -1,0 +1,4 @@
+# Build files of the Qt in /opt/motanka (DESIGN.md, "Linux practices").
+dir-or-file-in-opt
+# Qt's tools find their libraries through RUNPATH /opt/motanka/lib.
+custom-library-search-path

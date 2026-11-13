@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Download and verify the Upstream tarball that motanka-core vendors.
+
+Usage:
+  tools/fetch-upstream [--out DIR] [--channel stable|edge] [--source NAME]
+                       [--version V] [--pin FILE] [--url-base URL]
+
+Reads the Channel's line of upstream.pin (<channel> TAB <commit> TAB
+<tag-or--> TAB <tarball-sha256>) and downloads
+<url-base>/<commit>.tar.gz into DIR/downloads/omarchy-<commit>.tar.gz,
+unless a file with the pinned SHA-256 is already there. It then checks:
+  - the SHA-256 against the pin; on a mismatch the download is deleted
+    (exit 6);
+  - that every member sits below the single top folder omarchy-<commit>/,
+    with no absolute path, no '..' part and no device file, and that the
+    tree has a bin/ folder.
+When both pass, DIR/orig/ gets one hard link (or copy) named as
+dpkg-source 3.0 (quilt) expects for the orig component "omarchy" of the
+source package (default motanka-core):
+
+  <source>_<V>.orig-omarchy.tar.gz
+
+<V> is the Motanka version (default: first line of packaging/VERSION).
+The last line on stdout is DIR/orig. packaging/build.sh unpacks the
+component with tools/vendor, which checks the tarball against the pin
+again, inside the build VM.
+
+Options:
+  --out DIR       output folder (default ~/.cache/motanka-vm/upstream-tarballs)
+  --channel C     stable (default) or edge
+  --source NAME   source package name (default motanka-core)
+  --version V     Motanka version for the orig file name
+  --pin FILE      read FILE instead of upstream.pin at the repository root
+  --url-base URL  https:// or file:// folder holding <commit>.tar.gz
+                  (default https://github.com/basecamp/omarchy/archive)
+
+Exit codes: 0 success, 1 download failed or malformed tarball, 2 usage
+error or invalid pin file, 6 checksum mismatch.
+
+It only downloads and verifies: it installs and runs nothing, so it may run
+on the development host. It writes only inside DIR. Written in Python
+because the host tool set has python3 but no curl, and the member checks
+need a tar reader (as stack/fetch-sources).
+"""
+
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+PIN = os.path.join(REPO, "upstream.pin")
+VERSION_FILE = os.path.join(REPO, "packaging", "VERSION")
+DEFAULT_OUT = os.path.join(os.path.expanduser("~"), ".cache", "motanka-vm", "upstream-tarballs")
+URL_BASE = "https://github.com/basecamp/omarchy/archive"
+COMPONENT = "omarchy"
+
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
+VERSION_RE = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
+
+ATTEMPTS = 5
+TIMEOUT = 60
+USER_AGENT = "motanka-fetch-upstream/1 (+https://github.com/digitwolf/motanka)"
+
+EXIT_PROBLEM = 1
+EXIT_USAGE = 2
+EXIT_MISMATCH = 6
+
+
+class UsageError(Exception):
+    pass
+
+
+def log(msg):
+    print(f"fetch-upstream: {msg}", file=sys.stderr)
+
+
+def read_pin(path, channel):
+    """Returns (commit, tag, sha256) of the channel's line."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [ln.rstrip("\n") for ln in f]
+    except OSError as e:
+        raise UsageError(f"cannot read the pin file {path}: {e}") from e
+    found = [ln for ln in lines if ln.split("\t", 1)[0] == channel]
+    if len(found) != 1:
+        raise UsageError(f"{path} must have exactly one line for {channel}, found {len(found)}")
+    parts = found[0].split("\t")
+    if len(parts) != 4:
+        raise UsageError(f"{path}: the {channel} line needs exactly 4 tab-separated fields")
+    _, commit, tag, sha = parts
+    if not COMMIT_RE.match(commit):
+        raise UsageError(f"{path}: invalid commit '{commit}' for {channel}")
+    if not SHA_RE.match(sha):
+        raise UsageError(f"{path}: invalid SHA-256 '{sha}' for {channel}")
+    if not tag:
+        raise UsageError(f"{path}: empty tag field for {channel}")
+    return commit, tag, sha
+
+
+def read_version():
+    try:
+        with open(VERSION_FILE, encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError as e:
+        raise UsageError(f"cannot read {VERSION_FILE}: {e}") from e
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(1 << 20)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def download(url, dest):
+    tmp = dest + ".part"
+    last = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp, open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out, 1 << 20)
+            os.replace(tmp, dest)
+            return
+        except (urllib.error.URLError, OSError) as e:
+            last = e
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            if attempt < ATTEMPTS and not url.startswith("file:"):
+                wait = 5 * attempt
+                log(f"download of {url} failed ({e}); retry {attempt}/{ATTEMPTS - 1} in {wait} s")
+                time.sleep(wait)
+            else:
+                break
+    raise OSError(f"download of {url} failed: {last}")
+
+
+def check_tar(path, top):
+    """Returns None if the tarball is well-formed, else a reason."""
+    has_bin = False
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            for m in tar:
+                name = m.name
+                if name.startswith("/") or ".." in name.split("/"):
+                    return f"unsafe member path '{name}'"
+                if m.isdev():
+                    return f"device file '{name}'"
+                parts = [p for p in name.split("/") if p not in ("", ".")]
+                if not parts:
+                    continue
+                if parts[0] != top:
+                    return f"member '{name}' is outside {top}/"
+                if len(parts) >= 2 and parts[1] == "bin":
+                    has_bin = True
+    except (tarfile.TarError, OSError, EOFError) as e:
+        return f"unreadable tarball: {e}"
+    if not has_bin:
+        return f"the tarball has no {top}/bin/ folder"
+    return None
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="fetch-upstream",
+                                description="Download and verify the vendored Upstream tarball.")
+    p.add_argument("--out", default=DEFAULT_OUT)
+    p.add_argument("--channel", default="stable", choices=("stable", "edge"))
+    p.add_argument("--source", default="motanka-core")
+    p.add_argument("--version")
+    p.add_argument("--pin", default=PIN)
+    p.add_argument("--url-base", default=URL_BASE)
+    args = p.parse_args(argv)
+
+    if os.geteuid() == 0:
+        log("refusing to run as root")
+        return EXIT_USAGE
+    try:
+        if not SOURCE_RE.match(args.source):
+            raise UsageError(f"invalid source package name '{args.source}'")
+        version = args.version or read_version()
+        if not VERSION_RE.match(version):
+            raise UsageError(f"invalid Motanka version '{version}'")
+        url_base = args.url_base.rstrip("/")
+        if not (url_base.startswith("https://") or url_base.startswith("file:///")):
+            raise UsageError("--url-base must start with https:// or file:///")
+        commit, tag, pinned = read_pin(os.path.abspath(args.pin), args.channel)
+    except UsageError as e:
+        log(str(e))
+        return EXIT_USAGE
+
+    out = os.path.abspath(args.out)
+    dl = os.path.join(out, "downloads")
+    os.makedirs(dl, exist_ok=True)
+    path = os.path.join(dl, f"{COMPONENT}-{commit}.tar.gz")
+    url = f"{url_base}/{commit}.tar.gz"
+
+    if os.path.exists(path) and sha256_of(path) != pinned:
+        log(f"cached {path} does not match the pinned checksum; downloading again")
+        os.unlink(path)
+    if os.path.exists(path):
+        log(f"{args.channel} {commit} ({tag}): cached")
+    else:
+        log(f"{args.channel} {commit} ({tag}): downloading {url}")
+        try:
+            download(url, path)
+        except OSError as e:
+            log(f"error: {e}")
+            return EXIT_PROBLEM
+        digest = sha256_of(path)
+        if digest != pinned:
+            os.unlink(path)
+            log(f"error: SHA-256 {digest} of {url} does not match the {args.channel} pin {pinned}; download deleted")
+            return EXIT_MISMATCH
+    reason = check_tar(path, f"{COMPONENT}-{commit}")
+    if reason:
+        log(f"error: {path}: {reason}")
+        return EXIT_PROBLEM
+
+    orig = os.path.join(out, "orig")
+    os.makedirs(orig, exist_ok=True)
+    prefix = f"{args.source}_"
+    for n in os.listdir(orig):
+        if n.startswith(prefix) and f".orig-{COMPONENT}." in n:
+            os.unlink(os.path.join(orig, n))
+    dest = os.path.join(orig, f"{args.source}_{version}.orig-{COMPONENT}.tar.gz")
+    try:
+        os.link(path, dest)
+    except OSError:
+        shutil.copy2(path, dest)
+    log(f"verified {args.channel} {commit} ({tag}); orig component in {dest}")
+    print(orig)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

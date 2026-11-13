@@ -1,0 +1,49 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: motanka-qt6
+Upstream-Contact: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Source: https://github.com/digitwolf/motanka
+Comment: The source package bundles the Qt submodules listed in
+ stack/qt6-components.tsv, one dpkg-source component per folder. The licence
+ of each component below is a summary; the authoritative texts are the
+ LICENSES folder and the SPDX headers in each component's folder. The
+ Motanka packaging (debian/ and the main tarball) is listed under Files: *.
+
+Files: *
+Copyright: 2026 Ruslan Babych
+License: LicenseRef-motanka-no-license-yet
+ The Motanka repository does not have a license file yet. Until the
+ copyright holder publishes one, no rights are granted beyond those that
+ apply by law.
+
+Files: qtbase/* qtshadertools/* qtsvg/* qtdeclarative/* qtwayland/*
+Copyright: 2008-2026 The Qt Company Ltd. and other contributors
+License: LGPL-3 or GPL-2 or GPL-3
+Comment: Qt's build tools (moc, rcc, qmlcachegen and others, shipped only in
+ the build-only motanka-qt6-dev) are under GPL-3 with the Qt GPL Exception
+ 1.0. The submodules also contain third-party code under their own
+ permissive licences (BSD-3-clause, Expat and others), listed in each
+ component's qt_attribution.json files.
+
+License: LGPL-3
+ This library is free software; you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License version 3 as
+ published by the Free Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU Lesser General Public
+ License version 3 can be found in /usr/share/common-licenses/LGPL-3.
+
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License version 2 as published
+ by the Free Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in /usr/share/common-licenses/GPL-2.
+
+License: GPL-3
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License version 3 as published
+ by the Free Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in /usr/share/common-licenses/GPL-3.

@@ -1,0 +1,13 @@
+# Upstream (Arch) package names whose Package_Map outcome for the suite
+# becomes a Depends of motanka-core. packaging/build.sh resolves them with
+# tools/pkgmap from packages.yaml and writes them in place of the line
+# @PKGMAP_DEPENDS@ in debian/control. Each must have an apt or motanka
+# outcome on every suite.
+#
+# Only what Upstream's session needs to start belongs here: the commands
+# its Hyprland autostart and the shell launcher call before any menu is
+# used. Everything else in Upstream's package lists is installed through
+# the Helper at first use, or later by a separate metapackage.
+fontconfig
+jq
+socat

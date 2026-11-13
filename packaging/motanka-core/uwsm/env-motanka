@@ -1,0 +1,25 @@
+# Installed as /opt/motanka/share/uwsm/env-motanka by motanka-core.
+# uwsm's environment preloader sources uwsm/env-<desktop> from every
+# folder of XDG_CONFIG_HOME, XDG_CONFIG_DIRS and XDG_DATA_DIRS, for each
+# lowercased name in XDG_CURRENT_DESKTOP. Only the Motanka session puts
+# /opt/motanka/share into XDG_DATA_DIRS and Motanka into
+# XDG_CURRENT_DESKTOP, so no other session reads this file.
+
+# uwsm sets XDG_SESSION_DESKTOP to the first desktop name, "Motanka"; GDM
+# sets "motanka" and SDDM "Motanka:Hyprland" (spike S5). The session uses
+# the session file's name, as GDM does.
+export XDG_SESSION_DESKTOP=motanka
+
+# uwsm looks up its compositor plugin (uwsm/plugins/start_hyprland.sh) in
+# the user manager's XDG_DATA_DIRS, which does not contain /opt/motanka/share
+# when the preloader runs, so the Stack's plugin is not found. These are
+# the plugin's settings: export Hyprland's variables at finalize and wait
+# for HYPRLAND_INSTANCE_SIGNATURE before the session counts as started.
+case " ${UWSM_WAIT_VARNAMES-} " in
+  *" HYPRLAND_INSTANCE_SIGNATURE "*) ;;
+  *)
+    UWSM_FINALIZE_VARNAMES="${UWSM_FINALIZE_VARNAMES-}${UWSM_FINALIZE_VARNAMES:+ }HYPRLAND_INSTANCE_SIGNATURE HYPRLAND_CMD HYPRCURSOR_THEME HYPRCURSOR_SIZE XCURSOR_SIZE XCURSOR_THEME"
+    UWSM_WAIT_VARNAMES="${UWSM_WAIT_VARNAMES-}${UWSM_WAIT_VARNAMES:+ }HYPRLAND_INSTANCE_SIGNATURE"
+    export UWSM_FINALIZE_VARNAMES UWSM_WAIT_VARNAMES
+    ;;
+esac

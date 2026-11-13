@@ -1,0 +1,44 @@
+#!/usr/bin/make -f
+# Builds the components of stack/shell-components.tsv (cpptrace and
+# Quickshell, with wayland-protocols and libdwarf-lite at build time) for
+# the suite in the changelog (noble or resolute, stamped by
+# packaging/build.sh) with prefix /opt/motanka, into motanka-stack-shell.
+# The work is done by debian/shell-build.sh; see the comment at its top.
+
+# LTO is off, as in motanka-stack and motanka-qt6.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+
+DIST := $(shell dpkg-parsechangelog -SDistribution)
+VERSION := $(shell dpkg-parsechangelog -SVersion)
+STAGE_LIB := $(CURDIR)/debian/shell-build/stage/opt/motanka/lib
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf debian/shell-build debian/shlibs.local
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	bash debian/shell-build.sh build $(DIST)
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	bash debian/shell-build.sh install $(DIST)
+
+override_dh_dwz:
+
+# Libraries in /opt/motanka/lib are outside the ldconfig path: no ldconfig
+# trigger, no shipped shlibs file. debian/shlibs.local covers libcpptrace
+# and, on noble, the libraries of motanka-qt6 and motanka-stack-libs.
+override_dh_makeshlibs:
+	bash debian/shell-build.sh shlibs $(DIST) $(VERSION)
+
+# -x: no self-dependency for libcpptrace. -S: look in this package's tree
+# first. -l: the staging folder, so a staged but unshipped library fails
+# with "no dependency information".
+override_dh_shlibdeps:
+	dh_shlibdeps -- -xmotanka-stack-shell \
+		-Sdebian/motanka-stack-shell -l$(STAGE_LIB)

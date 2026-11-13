@@ -1,0 +1,51 @@
+#!/usr/bin/make -f
+# Builds the Qt 6 submodules listed in stack/qt6-components.tsv for noble
+# with prefix /opt/motanka and splits the result into motanka-qt6 (runtime)
+# and motanka-qt6-dev (build files for motanka-stack-shell, never
+# published). The work is done by debian/qt6-build.sh; see the comment at
+# its top.
+
+# LTO is off, as in motanka-stack: it multiplies the time and memory a Qt
+# build needs.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+
+DIST := $(shell dpkg-parsechangelog -SDistribution)
+VERSION := $(shell dpkg-parsechangelog -SVersion)
+STAGE_LIB := $(CURDIR)/debian/qt6-build/stage/opt/motanka/lib
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf debian/qt6-build debian/shlibs.local
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	bash debian/qt6-build.sh build $(DIST)
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	bash debian/qt6-build.sh install $(DIST)
+
+# dwz is optional and slow on binaries of this size.
+override_dh_dwz:
+
+# The libraries live in /opt/motanka/lib, outside the ldconfig path, so no
+# ldconfig trigger and no shipped shlibs file. debian/shlibs.local maps each
+# SONAME shipped in motanka-qt6 to an exact-version dependency.
+override_dh_makeshlibs:
+	bash debian/qt6-build.sh shlibs $(DIST) $(VERSION)
+
+# -x motanka-qt6: no self-dependency (motanka-qt6-dev names it in
+# debian/control). -x libstdc++6 -x libgcc-s1: Qt is built with GCC 16 from
+# the toolchain PPA, whose C++ runtime 24.04 does not have; at run time the
+# libraries find GCC 16's libstdc++ and libgcc_s through RUNPATH in
+# /opt/motanka/lib, shipped by motanka-stack-libs, which debian/control
+# depends on. -S: look for libraries in motanka-qt6 first. -l: the staging
+# folder, so a library that is staged but not shipped fails with "no
+# dependency information" instead of being taken from somewhere else.
+override_dh_shlibdeps:
+	dh_shlibdeps -- -xmotanka-qt6 -xlibstdc++6 -xlibgcc-s1 \
+		-Sdebian/motanka-qt6 -l$(STAGE_LIB)

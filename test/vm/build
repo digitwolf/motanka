@@ -13,18 +13,36 @@
 # test/vm/build-provision.sh (idempotent), run packaging/build.sh once per
 # suite, copy the results back, tear the VM down.
 #
-# Build VM size: MOTANKA_BUILD_VM_CPUS (default host CPUs up to 10),
-# MOTANKA_BUILD_VM_RAM (default 10G), MOTANKA_VM_DISK (default 40G). When
-# packaging/motanka-stack is among the packages, the defaults are host CPUs
-# up to 16, half the host memory up to 16G (at least 10G) and an 80G disk;
-# the Stack compiles about 3,000 C++ files, and debian/rules runs one job
-# per 2 GiB of guest memory.
+# Packages are built in the order given, so a package whose sbuild-local
+# file names another one's .debs must come after it (for example
+# packaging/motanka-qt6 before packaging/motanka-stack-shell).
 #
-# The Stack's upstream tarballs come from stack/fetch-sources, which runs on
-# the host (it only downloads and verifies) and caches them in
+# Build VM size: MOTANKA_BUILD_VM_CPUS (default host CPUs up to 10),
+# MOTANKA_BUILD_VM_RAM (default 10G), MOTANKA_VM_DISK (default 40G). When a
+# package with upstream components (motanka-stack, motanka-qt6,
+# motanka-stack-shell) is among the packages, the defaults are host CPUs up
+# to 16, half the host memory up to 16G (at least 10G) and an 80G disk; the
+# Stack compiles about 3,000 C++ files, Qt several times that, and
+# debian/rules runs one job per 2 GiB of guest memory.
+#
+# Upstream tarballs: a package that imports a components file
+# (/stack/*components.tsv in its build-imports) gets its tarballs from
+# stack/fetch-sources --components <file>, which runs on the host (it only
+# downloads and verifies) and caches them in
 # ~/.cache/motanka-vm/stack-src-tarballs/, so a rebuild downloads nothing.
-# Unpinned checksums in stack/components.tsv stop the build; pin them with
-# stack/fetch-sources --update-checksums after review.
+# Only the tarballs of the packages being built are copied into the VM.
+# Unpinned checksums stop the build; pin them with
+# stack/fetch-sources --components <file> --update-checksums after review.
+# A package whose suites file lists none of the requested suites is not
+# fetched (packaging/build.sh skips it). A package that imports
+# /upstream.pin (motanka-core) gets the pinned Upstream tarball from
+# tools/fetch-upstream, cached in ~/.cache/motanka-vm/upstream-tarballs/.
+#
+# Local build dependencies: for each suite, the .debs that the packages'
+# sbuild-local files name (<name>_<version>_{amd64,all}.deb) are copied
+# from ~/.cache/motanka-vm/debs/<suite>/ into the VM when they exist there,
+# and packaging/build.sh gets them with --extra-debs. A .deb built earlier
+# in the same run takes precedence.
 #
 # Each suite's build runs detached inside the VM, so a dropped SSH
 # connection does not kill it; the host polls its log every 15 s.
@@ -47,6 +65,7 @@ MV_USAGE="test/vm/build [--keep] [--vm <name>] [--suite noble|resolute|all] <pac
 mv_init
 
 STACK_TARBALLS=$MV_STATE/stack-src-tarballs
+UPSTREAM_TARBALLS=$MV_STATE/upstream-tarballs
 POLL=15
 
 keep_vm=false
@@ -91,8 +110,62 @@ if [[ ! $timeout_s =~ ^[1-9][0-9]*$ ]]; then
 fi
 mv_need ssh ssh-keygen tar git
 
+# components_of <pkg-dir>: prints the components files (repository-relative)
+# that the package's build-imports names.
+components_of() {
+  local line
+  [[ -f $1/build-imports ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    line=${line//[[:space:]]/}
+    if [[ $line =~ ^/stack/[A-Za-z0-9._-]*components\.tsv$ ]]; then
+      printf '%s\n' "${line#/}"
+    fi
+  done <"$1/build-imports"
+}
+
+# builds_for <pkg-dir> <suite>: the package's suites file (if any) lists the
+# suite.
+builds_for() {
+  local line word
+  local -a words
+  [[ -f $1/suites ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    read -r -a words <<<"${line%%#*}"
+    for word in "${words[@]}"; do
+      [[ $word == "$2" ]] && return 0
+    done
+  done <"$1/suites"
+  return 1
+}
+
+# source_of <pkg-dir>: prints the Source field of debian/control(.in).
+source_of() {
+  local c=$1/debian/control
+  [[ -f $c ]] || c=$1/debian/control.in
+  sed -n 's/^Source:[[:space:]]*//p' "$c" | head -n 1
+}
+
+# local_names <pkg-dir> <suite>: prints the binary packages the package's
+# sbuild-local file names for the suite.
+local_names() {
+  local rsuite rest
+  local -a names
+  [[ -f $1/sbuild-local ]] || return 0
+  while read -r rsuite rest || [[ -n $rsuite ]]; do
+    if [[ -z $rsuite || $rsuite == \#* || $rsuite != "$2" ]]; then
+      continue
+    fi
+    read -r -a names <<<"${rest%%#*}"
+    if ((${#names[@]} > 0)); then
+      printf '%s\n' "${names[@]}"
+    fi
+  done <"$1/sbuild-local"
+}
+
 guest_pkgs=()
-stack=false
+abs_pkgs=()
+big=false
 for p in "${pkgs[@]}"; do
   if [[ ! -d $p ]]; then
     mv_die "no such folder: $p"
@@ -104,9 +177,16 @@ for p in "${pkgs[@]}"; do
   if [[ ! -f $abs/debian/control && ! -f $abs/debian/control.in ]]; then
     mv_die "$p has no debian/control or debian/control.in"
   fi
-  if [[ $abs == "$MV_REPO/packaging/motanka-stack" ]]; then
-    stack=true
+  wanted=false
+  for s in "${suites[@]}"; do
+    if builds_for "$abs" "$s"; then
+      wanted=true
+    fi
+  done
+  if $wanted && [[ -n $(components_of "$abs") ]]; then
+    big=true
   fi
+  abs_pkgs+=("$abs")
   guest_pkgs+=("$MV_GUEST_REPO/${abs#"$MV_REPO"/}")
 done
 
@@ -127,20 +207,104 @@ results=${MOTANKA_VM_RESULTS:-$MV_RESULTS/$run_id}
 mkdir -p "$results"
 export MOTANKA_VM_RESULTS="$results"
 
-# The Stack's sources, verified on the host before any VM boots.
+# Upstream sources, verified on the host before any VM boots. Only the
+# orig-<component> tarballs of the packages being built go into the VM.
 orig_host=""
-if $stack; then
+upstream_ver=$(bash "$MV_REPO/packaging/version.sh" resolute)
+upstream_ver=${upstream_ver%%-*}
+for abs in "${abs_pkgs[@]}"; do
+  wanted=false
+  for s in "${suites[@]}"; do
+    if builds_for "$abs" "$s"; then
+      wanted=true
+    fi
+  done
+  $wanted || continue
+  mapfile -t comp_files < <(components_of "$abs")
+  ((${#comp_files[@]} > 0)) || continue
+  src=$(source_of "$abs")
+  if [[ ! $src =~ ^motanka[a-z0-9+.-]*$ ]]; then
+    mv_die "${abs#"$MV_REPO"/} has no valid Source field"
+  fi
   mv_need python3
-  mv_log "fetching and verifying the Stack sources into $STACK_TARBALLS"
-  if ! python3 "$MV_REPO/stack/fetch-sources" --out "$STACK_TARBALLS" \
-    >"$results/fetch-sources.out" 2> >(tee "$results/fetch-sources.log" >&2); then
-    mv_die "stack/fetch-sources failed; log: $results/fetch-sources.log"
+  for cf in "${comp_files[@]}"; do
+    tag=$(basename "$cf" .tsv)
+    mv_log "fetching and verifying the sources of $src ($cf) into $STACK_TARBALLS"
+    if ! python3 "$MV_REPO/stack/fetch-sources" --components "$MV_REPO/$cf" --out "$STACK_TARBALLS" \
+      >"$results/fetch-sources-$tag.out" 2> >(tee "$results/fetch-sources-$tag.log" >&2); then
+      mv_die "stack/fetch-sources --components $cf failed; log: $results/fetch-sources-$tag.log"
+    fi
+    got=$(tail -n 1 "$results/fetch-sources-$tag.out")
+    if [[ $got != "$STACK_TARBALLS"/* || ! -d $got ]]; then
+      mv_die "stack/fetch-sources printed an unexpected folder '$got'"
+    fi
+    if [[ -z $orig_host ]]; then
+      orig_host="$MV_STATE/.origs-$run_id"
+      MV_CLEANUP_PATHS+=("$orig_host")
+      mkdir -p "$orig_host"
+    fi
+    shopt -s nullglob
+    for f in "$got/${src}_${upstream_ver}.orig-"*; do
+      ln -f "$f" "$orig_host/" 2>/dev/null || cp -f "$f" "$orig_host/"
+    done
+    shopt -u nullglob
+  done
+done
+
+# The vendored Upstream: a package that imports /upstream.pin (motanka-core)
+# gets the pinned Upstream tarball as its orig-omarchy component from
+# tools/fetch-upstream, which runs on the host (it only downloads and
+# verifies) and caches it in ~/.cache/motanka-vm/upstream-tarballs/.
+for abs in "${abs_pkgs[@]}"; do
+  [[ -f $abs/build-imports ]] || continue
+  grep -Eq '^[[:space:]]*/upstream\.pin[[:space:]]*(#.*)?$' "$abs/build-imports" || continue
+  src=$(source_of "$abs")
+  if [[ ! $src =~ ^motanka[a-z0-9+.-]*$ ]]; then
+    mv_die "${abs#"$MV_REPO"/} has no valid Source field"
   fi
-  orig_host=$(tail -n 1 "$results/fetch-sources.out")
-  if [[ $orig_host != "$STACK_TARBALLS"/* || ! -d $orig_host ]]; then
-    mv_die "stack/fetch-sources printed an unexpected folder '$orig_host'"
+  mv_need python3
+  mv_log "fetching and verifying the Upstream tarball for $src into $UPSTREAM_TARBALLS"
+  if ! python3 "$MV_REPO/tools/fetch-upstream" --source "$src" --out "$UPSTREAM_TARBALLS" \
+    >"$results/fetch-upstream-$src.out" 2> >(tee "$results/fetch-upstream-$src.log" >&2); then
+    mv_die "tools/fetch-upstream failed for $src; log: $results/fetch-upstream-$src.log"
   fi
-fi
+  got=$(tail -n 1 "$results/fetch-upstream-$src.out")
+  if [[ $got != "$UPSTREAM_TARBALLS"/* || ! -d $got ]]; then
+    mv_die "tools/fetch-upstream printed an unexpected folder '$got'"
+  fi
+  if [[ -z $orig_host ]]; then
+    orig_host="$MV_STATE/.origs-$run_id"
+    MV_CLEANUP_PATHS+=("$orig_host")
+    mkdir -p "$orig_host"
+  fi
+  shopt -s nullglob
+  for f in "$got/${src}_${upstream_ver}.orig-omarchy."*; do
+    ln -f "$f" "$orig_host/" 2>/dev/null || cp -f "$f" "$orig_host/"
+  done
+  shopt -u nullglob
+done
+
+# Locally built build dependencies, per suite, from the host's .deb cache.
+local_host="$MV_STATE/.local-debs-$run_id"
+MV_CLEANUP_PATHS+=("$local_host")
+declare -A have_local=()
+for s in "${suites[@]}"; do
+  sver=$(bash "$MV_REPO/packaging/version.sh" "$s")
+  for abs in "${abs_pkgs[@]}"; do
+    builds_for "$abs" "$s" || continue
+    while IFS= read -r name; do
+      [[ $name =~ ^motanka(-[a-z0-9][a-z0-9+.-]*)?$ ]] || mv_die "${abs#"$MV_REPO"/}/sbuild-local: invalid package name '$name'"
+      for f in "$MV_DEBS/$s/${name}_${sver}_amd64.deb" "$MV_DEBS/$s/${name}_${sver}_all.deb"; do
+        if [[ -f $f ]]; then
+          mkdir -p "$local_host/$s"
+          ln -f "$f" "$local_host/$s/" 2>/dev/null || cp -f "$f" "$local_host/$s/"
+          have_local[$s]=1
+          break
+        fi
+      done
+    done < <(local_names "$abs" "$s")
+  done
+done
 
 if [[ -n $vm ]]; then
   mv_require_running "$vm"
@@ -148,7 +312,7 @@ if [[ -n $vm ]]; then
 else
   mv_check_kvm
   mv_need qemu-system-x86_64 qemu-img python3 setsid timeout
-  if $stack; then
+  if $big; then
     host_cpus=$(nproc 2>/dev/null || echo 4)
     ((host_cpus <= 16)) || host_cpus=16
     host_mem_g=$(awk '$1 == "MemTotal:" { print int($2 / 1048576) }' /proc/meminfo 2>/dev/null || echo 20)
@@ -178,22 +342,32 @@ fi
 guest_base="/home/$MV_GUEST_USER/motanka-build/$run_id"
 orig_args=()
 if [[ -n $orig_host ]]; then
-  mv_log "copying the Stack sources into $vm"
+  mv_log "copying the upstream sources ($(du -sh "$orig_host" | cut -f1)) into $vm"
   mv_copy_to_vm "$vm" "$orig_host" "$guest_base/origs"
   orig_args=(--orig-dir "$guest_base/origs")
 fi
+for s in "${suites[@]}"; do
+  if [[ -n ${have_local[$s]:-} ]]; then
+    mv_log "copying local build dependencies for $s into $vm: $(cd "$local_host/$s" && echo *.deb)"
+    mv_copy_to_vm "$vm" "$local_host/$s" "$guest_base/local-debs/$s"
+  fi
+done
 
 # build_suite <suite> <guest-out>: runs packaging/build.sh detached in the VM
 # and streams its log into <results>/build-<suite>.log. Returns its exit code.
 build_suite() {
   local suite=$1 guest_out=$2 hostlog=$results/build-$1.log
   local glog="$guest_base/$1.log" grc="$guest_base/$1.rc" pgid size rc fails=0 deadline q_log q_rc
+  local -a extra_args=()
+  if [[ -n ${have_local[$suite]:-} ]]; then
+    extra_args=(--extra-debs "$guest_base/local-debs/$suite")
+  fi
   printf -v q_log '%q' "$glog"
   printf -v q_rc '%q' "$grc"
   : >"$hostlog"
   pgid=$("$MV_LIB_DIR/run" "$vm" -- bash -s -- "$glog" "$grc" "$sde" \
     "$MV_GUEST_REPO/packaging/build.sh" --suite "$suite" --out "$guest_out" \
-    "${orig_args[@]}" "${guest_pkgs[@]}" <<'EOS'
+    "${orig_args[@]}" "${extra_args[@]}" "${guest_pkgs[@]}" <<'EOS'
 set -euo pipefail
 log=$1 rcf=$2 sde=$3
 shift 3

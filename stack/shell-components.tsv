@@ -1,0 +1,33 @@
+#@source motanka-stack-shell
+#@packages motanka-stack-shell
+# Upstream components of motanka-stack-shell: Quickshell, the desktop shell
+# of upstream Omarchy v4.5.0, and cpptrace, which its crash handler needs.
+#
+# Same format as stack/components.tsv (see the comment there). Built by
+# packaging/motanka-stack-shell/debian/shell-build.sh in file order, for
+# both suites: against motanka-qt6 on noble and the archive's Qt 6.10 on
+# resolute.
+#
+#   wayland-protocols  build time only, the Stack's version (1.50, same
+#                      tarball and checksum as stack/components.tsv), so
+#                      Quickshell sees the same protocols as Hyprland on
+#                      both releases.
+#   libdwarf-lite      build "source": not built on its own. cpptrace's
+#                      CMake fetches it from git at configure time, which
+#                      the network-less sbuild chroot cannot do, so the
+#                      build points FETCHCONTENT_SOURCE_DIR_LIBDWARF at this
+#                      folder. The version must be the one cpptrace pins as
+#                      CPPTRACE_LIBDWARF_TAG; shell-build.sh fails when
+#                      cpptrace names a different version.
+#   cpptrace           shared, with libunwind (Quickshell's crash handler
+#                      refuses it otherwise); libcpptrace ships in
+#                      motanka-stack-shell.
+#   quickshell         the GitHub mirror's tag; no git submodules.
+#
+# Download, verify and pin: stack/fetch-sources --components stack/shell-components.tsv
+#
+# name	version	url	sha256	build	suites	package
+wayland-protocols	1.50	https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.50/downloads/wayland-protocols-1.50.tar.xz	4460c20cfcf68b994a5ee206ed15fc19ad312f16c96075186e83b0e3f4aa48a5	meson	both	-
+libdwarf-lite	2.1.0	https://github.com/jeremy-rifkin/libdwarf-lite/archive/5dfb2cd2aacf2bf473e5bfea79e41289f88b3a5f.tar.gz	ba0f0325e671e5010acbff4a897cedfe29c7f71202a905ca4b10085cbb839e51	source	both	-
+cpptrace	1.0.4	https://github.com/jeremy-rifkin/cpptrace/archive/refs/tags/v1.0.4.tar.gz	5c9f5b301e903714a4d01f1057b9543fa540f7bfcc5e3f8bd1748e652e24f9ea	cmake	both	motanka-stack-shell
+quickshell	0.3.2	https://github.com/quickshell-mirror/quickshell/archive/refs/tags/v0.3.2.tar.gz	946a27e2a276917a03c1079e5c60971af84ece73088c3661dee455d92eb420f7	cmake	both	motanka-stack-shell

@@ -1,0 +1,2 @@
+opt/motanka/share/omarchy usr/share/omarchy
+usr/lib/systemd/user/motanka-session-cleanup.service usr/lib/systemd/user/motanka-session.target.wants/motanka-session-cleanup.service

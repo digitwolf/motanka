@@ -1,0 +1,9 @@
+# The Stack, including its Qt, lives in /opt/motanka by design (DESIGN.md,
+# "Linux practices"), so it never shadows Ubuntu's own Qt.
+dir-or-file-in-opt
+# Qt's libraries, plugins and QML modules find each other and GCC 16's C++
+# runtime through RUNPATH /opt/motanka/lib instead of ld.so.conf.d or
+# LD_LIBRARY_PATH, which would leak into programs outside the Stack.
+custom-library-search-path
+# One package carries all Qt libraries of the Stack.
+package-name-doesnt-match-sonames

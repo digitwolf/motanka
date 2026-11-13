@@ -1,0 +1,739 @@
+#!/bin/bash
+# session: the Motanka_Session launcher (design.md, "Session"; DESIGN.md,
+# "Linux practices: Session"). Installed as
+# /opt/motanka/libexec/motanka/session. The display manager runs it from
+# /usr/share/wayland-sessions/motanka.desktop.
+#
+# usage: session            start the Motanka session (the display manager's call)
+#        session cleanup    restore the systemd user manager's environment
+#                           (ExecStop of motanka-session-cleanup.service)
+#
+# Start, in order:
+#   1. XDG_RUNTIME_DIR must be a folder (exit 1). flock -n on
+#      $XDG_RUNTIME_DIR/motanka/session.lock: a second launcher of the same
+#      user exits 12.
+#   2. Other graphical sessions (5.12). Exit 12, with the reason in the
+#      journal, when loginctl lists another session of this user whose type
+#      is wayland, x11 or mir, whose class is user and which is not closing,
+#      or when graphical-session.target of the user manager is active or
+#      activating (another desktop uses the shared user manager).
+#   3. GPU (8.6, 8.9). The driver of every DRM card (/sys/class/drm/cardN):
+#      i915, xe, amdgpu, radeon, nouveau and virtio_gpu are supported, and
+#      nvidia at version 555 or later (/proc/driver/nvidia/version, else
+#      /sys/module/nvidia/version). Exit 12, with the reason in the journal,
+#      when a card runs an older or unknown NVIDIA driver, or when no card
+#      has a supported driver. Other drivers next to a supported one (for
+#      example simpledrm or evdi) are logged and ignored.
+#   4. The Stack's uwsm, start-hyprland and Hyprland in /opt/motanka/bin
+#      must be executable (exit 1).
+#   5. Environment of this process and everything it starts (5.2, 5.14):
+#        XDG_CURRENT_DESKTOP=Motanka:Hyprland  XDG_SESSION_DESKTOP=motanka
+#        DCONF_PROFILE=motanka                 OMARCHY_PATH=/usr/share/omarchy
+#        PATH=/opt/motanka/bin:$PATH
+#        XDG_DATA_DIRS=/opt/motanka/share:$XDG_DATA_DIRS
+#      Earlier /opt/motanka entries are removed from PATH and XDG_DATA_DIRS
+#      first. LD_LIBRARY_PATH is never set; one passed in by the display
+#      manager is removed.
+#   6. The user manager's values of the Session_Env_List
+#      (/opt/motanka/share/motanka/session-env.list) are saved to
+#      $XDG_RUNTIME_DIR/motanka/session-env.pre. If the manager still holds
+#      the environment of an earlier Motanka session that did not end
+#      cleanly, that environment is restored first.
+#   7. Per-user setup, /opt/motanka/libexec/motanka/user-setup, when it is
+#      installed (6.1). It resumes an interrupted setup itself (6.7). If it
+#      fails, the compositor does not start (exit 1).
+#   8. uwsm's unit files (/opt/motanka/lib/systemd/user, from
+#      motanka-stack-tools) are linked into $XDG_RUNTIME_DIR/systemd/user,
+#      the user manager's runtime unit folder, for the length of the
+#      session; /opt/motanka/lib/systemd/user is not on its search path.
+#   9. The compositor starts the way Upstream starts it
+#      (default/wayland-sessions/omarchy.desktop), with the Stack's binaries:
+#        /opt/motanka/bin/uwsm start -U run -g -1 -e -D Motanka:Hyprland \
+#          -N Motanka -C "Omarchy-compatible Hyprland session" -- \
+#          /opt/motanka/bin/start-hyprland --path /opt/motanka/bin/Hyprland
+#      uwsm's environment preloader exports this process's environment into
+#      the user manager and removes it when the compositor stops. The
+#      launcher imports nothing itself: an import before uwsm records the
+#      manager's state would make uwsm's own cleanup keep Motanka's values.
+#      Once graphical-session.target is active, the launcher starts
+#      motanka-session.target (5.4).
+#  10. When uwsm returns: motanka-session.target is stopped, the user
+#      manager's environment is restored from session-env.pre (5.11) and
+#      the unit links are removed. The exit code is uwsm's.
+#  TERM, HUP or INT while uwsm runs is passed on to uwsm, which stops the
+#  compositor; the launcher then runs step 10.
+#
+# cleanup: for every Session_Env_List variable, sets the value the user
+# manager had before the session (session-env.pre) or unsets it when it had
+# none. Without a complete session-env.pre, PATH and XDG_DATA_DIRS lose
+# their /opt/motanka entries and the other variables are unset. With the
+# reference D-Bus daemon (not dbus-broker) the same values also go to its
+# activation environment, empty for unset ones, because it cannot unset.
+#
+# Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of the
+# /opt/motanka, /sys and /proc paths. loginctl, systemctl, systemd-cat,
+# flock and dbus-update-activation-environment are found through PATH.
+#
+# Exit codes: uwsm's when it ran; 0 cleanup done; 1 error; 2 usage;
+# 12 session refused.
+set -euo pipefail
+
+readonly S_PREFIX=/opt/motanka
+readonly S_OMARCHY_PATH=/usr/share/omarchy
+readonly S_CURRENT_DESKTOP=Motanka:Hyprland
+readonly S_SESSION_DESKTOP=motanka
+readonly S_DCONF_PROFILE=motanka
+readonly S_TARGET=motanka-session.target
+readonly S_NVIDIA_MIN_MAJOR=555
+readonly S_DRIVERS="i915 xe amdgpu radeon nouveau virtio_gpu"
+# motanka-session.target is started once graphical-session.target is
+# active, polled every 0.5 s for at most 240 polls (120 s).
+readonly S_TARGET_POLLS=240
+readonly S_DEFAULT_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+readonly S_NAME_RE='^[A-Za-z_][A-Za-z0-9_]*$'
+readonly S_PLAIN_RE='^[A-Za-z0-9_@%+=:,./-]*$'
+# $'...' and "..." values as systemctl show-environment prints them.
+_s_q="'"
+readonly S_ANSI_RE='^[$]'"$_s_q"'([^'"$_s_q"'\\]|\\.)*'"$_s_q"'$'
+# shellcheck disable=SC2016 # a regular expression, not an expansion
+readonly S_DQ_RE='^"([^"\\$`]|\\.)*"$'
+
+_s_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_s_base=${_s_self%/*}
+if [[ ! -r $_s_base/lib/common.sh ]]; then
+  _s_base=${_s_base%/*}
+fi
+MK_CMD=session
+# shellcheck source=../lib/common.sh
+source "$_s_base/lib/common.sh"
+
+S_UWSM=$(mk_path "$S_PREFIX/bin/uwsm")
+S_START_HYPRLAND=$(mk_path "$S_PREFIX/bin/start-hyprland")
+S_HYPRLAND=$(mk_path "$S_PREFIX/bin/Hyprland")
+S_USER_SETUP=$(mk_path "$S_PREFIX/libexec/motanka/user-setup")
+S_ENV_LIST=$(mk_path "$S_PREFIX/share/motanka/session-env.list")
+S_UWSM_UNITS=$(mk_path "$S_PREFIX/lib/systemd/user")
+
+S_LIST=()
+declare -A S_CUR=() S_PRE=()
+S_UWSM_PID=""
+S_SIGNAL=0
+
+_s_usage() {
+  cat <<'EOF'
+usage: session            start the Motanka session
+       session cleanup    restore the systemd user manager's environment
+
+The display manager runs this launcher when "Motanka" is chosen at the login
+screen. It refuses to start (exit 12) while another graphical session of the
+same user is active, or when the GPU driver is not supported.
+EOF
+}
+
+# --- lists and values ---------------------------------------------------
+
+# _s_strip_list <value> <entry>...: the colon-separated <value> without
+# empty entries and without entries equal to any <entry> (with or without a
+# trailing slash).
+_s_strip_list() {
+  local value=$1 entry d keep
+  shift
+  local -a parts=() out=()
+  IFS=: read -r -a parts <<<"$value"
+  for entry in "${parts[@]}"; do
+    if [[ -z $entry ]]; then
+      continue
+    fi
+    keep=1
+    for d in "$@"; do
+      if [[ $entry == "$d" || $entry == "$d/" ]]; then
+        keep=0
+        break
+      fi
+    done
+    if ((keep)); then
+      out+=("$entry")
+    fi
+  done
+  local IFS=:
+  printf '%s\n' "${out[*]}"
+}
+
+# _s_decode <rhs>: sets REPLY to the value of a right-hand side as
+# systemctl show-environment prints it: plain, $'...' or "...". Returns 1
+# for a quoted form it cannot read. Only those two quoted forms are
+# evaluated, and only after the regular expressions above have shown that
+# they expand nothing.
+_s_decode() {
+  local rhs=$1
+  REPLY=$rhs
+  case $rhs in
+    \$"$_s_q"*)
+      [[ $rhs =~ $S_ANSI_RE ]] || return 1
+      eval "REPLY=$rhs"
+      ;;
+    \"*)
+      [[ $rhs =~ $S_DQ_RE ]] || return 1
+      eval "REPLY=$rhs"
+      ;;
+  esac
+  return 0
+}
+
+# _s_quote <value>: the value as one line that _s_decode reads back.
+_s_quote() {
+  local v=$1 q="" c i
+  if [[ $v =~ $S_PLAIN_RE ]]; then
+    printf '%s\n' "$v"
+    return 0
+  fi
+  for ((i = 0; i < ${#v}; i++)); do
+    c=${v:i:1}
+    # shellcheck disable=SC1003 # the backslash pairs below are literal on purpose
+    case $c in
+      \\) q+='\\' ;;
+      "$_s_q") q+="\\$_s_q" ;;
+      $'\n') q+='\n' ;;
+      $'\t') q+='\t' ;;
+      [[:cntrl:]])
+        printf -v c '\\x%02x' "'$c"
+        q+=$c
+        ;;
+      *) q+=$c ;;
+    esac
+  done
+  printf '$%s%s%s\n' "$_s_q" "$q" "$_s_q"
+}
+
+# _s_env_list: prints the Session_Env_List, one variable name per line.
+# Blank lines and text after '#' are ignored.
+_s_env_list() {
+  local line
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    line=${line//[[:space:]]/}
+    if [[ -z $line ]]; then
+      continue
+    fi
+    if [[ $line =~ $S_NAME_RE ]]; then
+      printf '%s\n' "$line"
+    else
+      mk_warn "ignoring the invalid variable name '$line' in $S_ENV_LIST"
+    fi
+  done <"$S_ENV_LIST"
+}
+
+# _s_load_list: fills S_LIST, or exits 1.
+_s_load_list() {
+  if [[ ! -r $S_ENV_LIST ]]; then
+    mk_die "$MK_EXIT_ERROR" "cannot read the Session_Env_List $S_ENV_LIST; reinstall motanka-core"
+  fi
+  mapfile -t S_LIST < <(_s_env_list)
+  if ((${#S_LIST[@]} == 0)); then
+    mk_die "$MK_EXIT_ERROR" "the Session_Env_List $S_ENV_LIST names no variable"
+  fi
+}
+
+# --- the user manager's environment -------------------------------------
+
+# _s_read_cur: fills S_CUR with the user manager's environment. Returns 1
+# if systemctl cannot read it.
+_s_read_cur() {
+  local text line name rhs
+  S_CUR=()
+  text=$(systemctl --user show-environment 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    if [[ $line != *=* ]]; then
+      continue
+    fi
+    name=${line%%=*}
+    rhs=${line#*=}
+    if [[ ! $name =~ $S_NAME_RE ]]; then
+      continue
+    fi
+    if _s_decode "$rhs"; then
+      S_CUR[$name]=$REPLY
+    else
+      S_CUR[$name]=$rhs
+    fi
+  done <<<"$text"
+}
+
+# _s_read_pre <file>: fills S_PRE from a complete snapshot. Returns 1 if
+# the file is missing or incomplete.
+_s_read_pre() {
+  local file=$1 line name complete=0
+  S_PRE=()
+  if [[ ! -r $file ]]; then
+    return 1
+  fi
+  while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+      '# complete')
+        complete=1
+        continue
+        ;;
+      '' | '#'*) continue ;;
+    esac
+    name=${line%%=*}
+    if [[ ! $name =~ $S_NAME_RE || $line != *=* ]]; then
+      continue
+    fi
+    if _s_decode "${line#*=}"; then
+      S_PRE[$name]=$REPLY
+    fi
+  done <"$file"
+  if ((complete == 0)); then
+    S_PRE=()
+    return 1
+  fi
+}
+
+# _s_save_pre <file>: writes the Session_Env_List values of S_CUR into a
+# snapshot, through a temporary file and a rename.
+_s_save_pre() {
+  local file=$1 name
+  {
+    printf '# Session_Env_List values of the systemd user manager before the Motanka session\n'
+    for name in "${S_LIST[@]}"; do
+      if [[ -v S_CUR[$name] ]]; then
+        printf '%s=%s\n' "$name" "$(_s_quote "${S_CUR[$name]}")"
+      fi
+    done
+    printf '# complete\n'
+  } >"$file.tmp"
+  mv -f -- "$file.tmp" "$file"
+}
+
+# _s_dbus_daemon: 0 if the session bus is the reference D-Bus daemon, which
+# keeps an activation environment of its own.
+_s_dbus_daemon() {
+  local id
+  id=$(systemctl --user show -p Id --value dbus.service 2>/dev/null) || return 1
+  [[ -n $id && $id != dbus-broker.service ]]
+}
+
+# _s_restore <snapshot>: restores the Session_Env_List variables of the
+# user manager (see "cleanup" at the top). Returns 1 if systemctl failed.
+_s_restore() {
+  local file=$1 name v have_pre=0 rc=0
+  local -a set_args=() unset_names=() dbus_args=()
+  if ! _s_read_cur; then
+    mk_warn "cannot read the environment of the systemd user manager; nothing was restored"
+    return 1
+  fi
+  if _s_read_pre "$file"; then
+    have_pre=1
+  fi
+  for name in "${S_LIST[@]}"; do
+    if ((have_pre)) && [[ -v S_PRE[$name] ]]; then
+      v=${S_PRE[$name]}
+      if [[ ! -v S_CUR[$name] || ${S_CUR[$name]} != "$v" ]]; then
+        set_args+=("$name=$v")
+      fi
+      dbus_args+=("$name=$v")
+      continue
+    fi
+    if ((have_pre == 0)) && [[ $name == PATH || $name == XDG_DATA_DIRS ]]; then
+      if [[ ! -v S_CUR[$name] ]]; then
+        continue
+      fi
+      v=$(_s_strip_list "${S_CUR[$name]}" "$S_PREFIX/bin" "$S_PREFIX/share")
+      if [[ -n $v ]]; then
+        if [[ $v != "${S_CUR[$name]}" ]]; then
+          set_args+=("$name=$v")
+        fi
+        dbus_args+=("$name=$v")
+        continue
+      fi
+    fi
+    if [[ -v S_CUR[$name] ]]; then
+      unset_names+=("$name")
+    fi
+    if [[ $name != PATH ]]; then
+      dbus_args+=("$name=")
+    fi
+  done
+  if ((${#unset_names[@]} > 0)); then
+    if ! systemctl --user unset-environment "${unset_names[@]}"; then
+      mk_warn "systemctl --user unset-environment failed for: ${unset_names[*]}"
+      rc=1
+    fi
+  fi
+  if ((${#set_args[@]} > 0)); then
+    if ! systemctl --user set-environment "${set_args[@]}"; then
+      mk_warn "systemctl --user set-environment failed for: ${set_args[*]%%=*}"
+      rc=1
+    fi
+  fi
+  if ((${#dbus_args[@]} > 0)) && command -v dbus-update-activation-environment >/dev/null 2>&1 &&
+    _s_dbus_daemon; then
+    if ! dbus-update-activation-environment "${dbus_args[@]}" >/dev/null 2>&1; then
+      mk_log warning "could not update the activation environment of the D-Bus daemon"
+    fi
+  fi
+  if ((have_pre)); then
+    mk_log info "restored the user manager's environment from $file (unset: ${unset_names[*]:-none}; reset: ${set_args[*]%%=*})"
+  else
+    mk_log info "removed the Motanka session's environment from the user manager without a snapshot (unset: ${unset_names[*]:-none}; reset: ${set_args[*]%%=*})"
+  fi
+  return "$rc"
+}
+
+# _s_prepare_manager <snapshot>: step 6 of the start.
+_s_prepare_manager() {
+  local file=$1
+  if ! _s_read_cur; then
+    mk_warn "cannot read the environment of the systemd user manager; it is not restored when the session ends"
+    rm -f -- "$file"
+    return 0
+  fi
+  if [[ ${S_CUR[DCONF_PROFILE]:-} == "$S_DCONF_PROFILE" || ${S_CUR[OMARCHY_PATH]:-} == "$S_OMARCHY_PATH" ||
+    ${S_CUR[XDG_CURRENT_DESKTOP]:-} == Motanka:* ]]; then
+    mk_warn "the systemd user manager still has the environment of an earlier Motanka session; restoring it first"
+    _s_restore "$file" || true
+    if ! _s_read_cur; then
+      rm -f -- "$file"
+      return 0
+    fi
+  fi
+  _s_save_pre "$file"
+}
+
+# --- checks -------------------------------------------------------------
+
+# _s_own_session: the logind session ID of this process, or nothing.
+_s_own_session() {
+  local id=${XDG_SESSION_ID:-} f
+  if [[ -z $id ]]; then
+    f=$(mk_path /proc/self/sessionid)
+    if [[ -r $f ]]; then
+      id=$(<"$f")
+      if [[ $id == 4294967295 ]]; then
+        id=""
+      fi
+    fi
+  fi
+  printf '%s\n' "$id"
+}
+
+# _s_check_other_sessions: step 2.
+_s_check_other_sessions() {
+  local uid own sessions s key val type state class gs
+  local -a others=() ids=()
+  uid=$(id -u)
+  own=$(_s_own_session)
+  if ! sessions=$(loginctl show-user "$uid" -p Sessions --value 2>/dev/null); then
+    mk_warn "loginctl cannot list the sessions of user $uid; only the user manager is checked for another graphical session"
+    sessions=""
+  fi
+  read -r -a ids <<<"$sessions"
+  for s in "${ids[@]}"; do
+    if [[ $s == "$own" || ! $s =~ ^[A-Za-z0-9._-]+$ ]]; then
+      continue
+    fi
+    type="" state="" class=""
+    while IFS='=' read -r key val; do
+      case $key in
+        Type) type=$val ;;
+        State) state=$val ;;
+        Class) class=$val ;;
+      esac
+    done < <(loginctl show-session "$s" -p Type -p State -p Class 2>/dev/null || true)
+    case $type in
+      wayland | x11 | mir) ;;
+      *) continue ;;
+    esac
+    if [[ $class != user* || $state == closing ]]; then
+      continue
+    fi
+    others+=("$s ($type, $state)")
+  done
+  if ((${#others[@]} > 0)); then
+    mk_die "$MK_EXIT_SESSION" "refused: user $(id -un) already has another graphical session (logind session ${others[*]}); log out of it before starting Motanka"
+  fi
+  gs=$(systemctl --user is-active graphical-session.target 2>/dev/null || true)
+  case $gs in
+    active | activating | reloading | refreshing)
+      mk_die "$MK_EXIT_SESSION" "refused: graphical-session.target of user $(id -un) is $gs, so another desktop session uses the systemd user manager; log out of it before starting Motanka"
+      ;;
+  esac
+}
+
+# _s_nvidia_version: the loaded NVIDIA driver version, or nothing.
+_s_nvidia_version() {
+  local f line tok
+  local -a toks=()
+  f=$(mk_path /proc/driver/nvidia/version)
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    read -r -a toks <<<"$line"
+    for tok in "${toks[@]}"; do
+      if [[ $tok =~ ^[0-9]+\.[0-9]+(\.[0-9]+)*$ ]]; then
+        printf '%s\n' "$tok"
+        return 0
+      fi
+    done
+  fi
+  f=$(mk_path /sys/module/nvidia/version)
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    if [[ $line =~ ^[0-9]+\.[0-9]+(\.[0-9]+)*$ ]]; then
+      printf '%s\n' "$line"
+    fi
+  fi
+}
+
+# _s_check_gpu: step 3.
+_s_check_gpu() {
+  local drm card name drv ver major
+  local -a supported=() refused=() other=()
+  drm=$(mk_path /sys/class/drm)
+  for card in "$drm"/card*; do
+    name=${card##*/}
+    if [[ ! $name =~ ^card[0-9]+$ ]]; then
+      continue
+    fi
+    drv=none
+    if [[ -L $card/device/driver ]]; then
+      drv=$(readlink -- "$card/device/driver") || drv=none
+      drv=${drv##*/}
+    fi
+    if [[ " $S_DRIVERS " == *" $drv "* ]]; then
+      supported+=("$name ($drv)")
+    elif [[ $drv == nvidia ]]; then
+      ver=$(_s_nvidia_version)
+      major=${ver%%.*}
+      if [[ $major =~ ^[0-9]+$ ]] && ((10#$major >= S_NVIDIA_MIN_MAJOR)); then
+        supported+=("$name (nvidia $ver)")
+      else
+        refused+=("$name runs the NVIDIA driver ${ver:-of unknown version}")
+      fi
+    else
+      other+=("$name ($drv)")
+    fi
+  done
+  if ((${#refused[@]} > 0)); then
+    mk_die "$MK_EXIT_SESSION" "refused: ${refused[*]}; the Motanka session needs the NVIDIA driver $S_NVIDIA_MIN_MAJOR or later"
+  fi
+  if ((${#supported[@]} == 0)); then
+    if ((${#other[@]} == 0)); then
+      mk_die "$MK_EXIT_SESSION" "refused: no GPU with a kernel display driver was found (no card in /sys/class/drm); the Motanka session needs one of the drivers $S_DRIVERS, or NVIDIA $S_NVIDIA_MIN_MAJOR or later"
+    fi
+    mk_die "$MK_EXIT_SESSION" "refused: the GPU driver of ${other[*]} is not supported; the Motanka session needs one of the drivers $S_DRIVERS, or NVIDIA $S_NVIDIA_MIN_MAJOR or later"
+  fi
+  if ((${#other[@]} > 0)); then
+    mk_log warning "ignoring ${other[*]}: driver not supported by the Stack; the session uses ${supported[*]}"
+  fi
+  mk_log info "GPU: ${supported[*]}"
+}
+
+# _s_check_stack: step 4.
+_s_check_stack() {
+  local f
+  for f in "$S_UWSM" "$S_START_HYPRLAND" "$S_HYPRLAND"; do
+    if [[ ! -f $f || ! -x $f ]]; then
+      mk_die "$MK_EXIT_ERROR" "$f is missing or not executable; reinstall motanka-stack"
+    fi
+  done
+}
+
+# --- start --------------------------------------------------------------
+
+# _s_export_env: step 5.
+_s_export_env() {
+  local rest data
+  if [[ -v LD_LIBRARY_PATH ]]; then
+    mk_warn "LD_LIBRARY_PATH was set for the session and is removed: Stack programs find their libraries through RUNPATH"
+    unset LD_LIBRARY_PATH
+  fi
+  export XDG_CURRENT_DESKTOP=$S_CURRENT_DESKTOP
+  export XDG_SESSION_DESKTOP=$S_SESSION_DESKTOP
+  export DCONF_PROFILE=$S_DCONF_PROFILE
+  export OMARCHY_PATH=$S_OMARCHY_PATH
+  rest=$(_s_strip_list "${PATH:-$S_DEFAULT_PATH}" "$S_PREFIX/bin")
+  export PATH="$S_PREFIX/bin${rest:+:$rest}"
+  data=$(_s_strip_list "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" "$S_PREFIX/share")
+  export XDG_DATA_DIRS="$S_PREFIX/share${data:+:$data}"
+}
+
+# _s_user_setup: step 7.
+_s_user_setup() {
+  local rc=0
+  if [[ ! -e $S_USER_SETUP ]]; then
+    mk_log info "no per-user setup is installed ($S_USER_SETUP); starting without it"
+    return 0
+  fi
+  if [[ ! -x $S_USER_SETUP ]]; then
+    mk_die "$MK_EXIT_ERROR" "per-user setup $S_USER_SETUP is not executable; reinstall motanka-core"
+  fi
+  mk_log info "running per-user setup ($S_USER_SETUP)"
+  "$S_USER_SETUP" || rc=$?
+  if ((rc != 0)); then
+    mk_die "$MK_EXIT_ERROR" "per-user setup failed (exit $rc), so the Motanka session was not started; details: journalctl -t motanka"
+  fi
+}
+
+# _s_link_units: step 8.
+_s_link_units() {
+  local dst=$XDG_RUNTIME_DIR/systemd/user f name n=0
+  local -a units=()
+  shopt -s nullglob
+  units=("$S_UWSM_UNITS"/*-graphical.slice "$S_UWSM_UNITS"/wayland-session*.service
+    "$S_UWSM_UNITS"/wayland-session*.target "$S_UWSM_UNITS"/wayland-wm*.service)
+  shopt -u nullglob
+  if ((${#units[@]} == 0)); then
+    mk_die "$MK_EXIT_ERROR" "no uwsm unit files in $S_UWSM_UNITS; reinstall motanka-stack-tools"
+  fi
+  mkdir -p -- "$dst"
+  for f in "${units[@]}"; do
+    name=${f##*/}
+    if [[ -e $dst/$name && ! -L $dst/$name ]]; then
+      mk_warn "$dst/$name was not made by Motanka; it stays and replaces uwsm's own unit"
+      continue
+    fi
+    ln -sfn -- "$f" "$dst/$name"
+    n=$((n + 1))
+  done
+  if ! systemctl --user daemon-reload; then
+    mk_die "$MK_EXIT_ERROR" "systemctl --user daemon-reload failed after linking uwsm's units"
+  fi
+  mk_log info "linked $n uwsm unit files into $dst"
+}
+
+# _s_unlink_units: removes the links _s_link_units made.
+_s_unlink_units() {
+  local dst=$XDG_RUNTIME_DIR/systemd/user f t n=0
+  if [[ ! -d $dst ]]; then
+    return 0
+  fi
+  for f in "$dst"/*; do
+    if [[ ! -L $f ]]; then
+      continue
+    fi
+    t=$(readlink -- "$f") || continue
+    if [[ $t == "$S_UWSM_UNITS"/* ]]; then
+      rm -f -- "$f"
+      n=$((n + 1))
+    fi
+  done
+  if ((n > 0)) && ! systemctl --user daemon-reload; then
+    mk_log warning "systemctl --user daemon-reload failed after removing uwsm's unit links"
+  fi
+}
+
+# _s_start_target_when_ready: runs in the background; starts
+# motanka-session.target once graphical-session.target is active.
+_s_start_target_when_ready() {
+  local i state
+  for ((i = 0; i < S_TARGET_POLLS; i++)); do
+    state=$(systemctl --user is-active graphical-session.target 2>/dev/null || true)
+    if [[ $state == active ]]; then
+      if systemctl --user start "$S_TARGET"; then
+        mk_log info "started $S_TARGET"
+      else
+        mk_log err "could not start $S_TARGET"
+      fi
+      return 0
+    fi
+    sleep 0.5
+  done
+  mk_log warning "graphical-session.target did not become active within $((S_TARGET_POLLS / 2)) s; $S_TARGET was not started"
+}
+
+# shellcheck disable=SC2329 # called through trap
+_s_on_signal() {
+  S_SIGNAL=1
+  if [[ -n $S_UWSM_PID ]]; then
+    kill -TERM "$S_UWSM_PID" 2>/dev/null || true
+  fi
+}
+
+_s_start() {
+  local state lock_fd pre watcher rc
+  if [[ -z ${XDG_RUNTIME_DIR:-} || ! -d $XDG_RUNTIME_DIR ]]; then
+    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set or not a folder; choose Motanka at the login screen to start it"
+  fi
+  state=$XDG_RUNTIME_DIR/motanka
+  pre=$state/session-env.pre
+  mkdir -p -- "$state"
+  chmod 0700 -- "$state"
+  if ! exec {lock_fd}>>"$state/session.lock"; then
+    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $state/session.lock"
+  fi
+  if ! flock -n "$lock_fd"; then
+    mk_die "$MK_EXIT_SESSION" "refused: another Motanka session of user $(id -un) is starting or running"
+  fi
+
+  _s_check_other_sessions
+  _s_check_gpu
+  _s_check_stack
+  _s_load_list
+  _s_export_env
+  _s_prepare_manager "$pre"
+  _s_user_setup
+  _s_link_units
+
+  mk_log info "starting the compositor: $S_UWSM start -- $S_START_HYPRLAND --path $S_HYPRLAND"
+  S_SIGNAL=0
+  trap _s_on_signal TERM HUP INT
+  "$S_UWSM" start -U run -g -1 -e -D "$S_CURRENT_DESKTOP" -N Motanka \
+    -C "Omarchy-compatible Hyprland session" -- \
+    "$S_START_HYPRLAND" --path "$S_HYPRLAND" &
+  S_UWSM_PID=$!
+  _s_start_target_when_ready &
+  watcher=$!
+
+  while :; do
+    S_SIGNAL=0
+    rc=0
+    wait "$S_UWSM_PID" || rc=$?
+    if ((S_SIGNAL && rc > 128)) && kill -0 "$S_UWSM_PID" 2>/dev/null; then
+      mk_log info "signal received; waiting for uwsm to stop the compositor"
+      continue
+    fi
+    break
+  done
+  trap '' TERM HUP INT
+  S_UWSM_PID=""
+
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  systemctl --user stop "$S_TARGET" 2>/dev/null || true
+  _s_restore "$pre" || true
+  _s_unlink_units
+  rm -f -- "$pre"
+  mk_log info "the Motanka session ended (uwsm exit $rc)"
+  exit "$rc"
+}
+
+_s_cleanup() {
+  if [[ -z ${XDG_RUNTIME_DIR:-} ]]; then
+    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set; cannot find the session snapshot"
+  fi
+  _s_load_list
+  if ! _s_restore "$XDG_RUNTIME_DIR/motanka/session-env.pre"; then
+    exit "$MK_EXIT_ERROR"
+  fi
+}
+
+case ${1:-} in
+  "")
+    if (($# > 1)); then
+      mk_usage_error "unexpected argument '$2'"
+    fi
+    _s_start
+    ;;
+  cleanup)
+    if (($# > 1)); then
+      mk_usage_error "unexpected argument '$2'"
+    fi
+    _s_cleanup
+    ;;
+  -h | --help)
+    _s_usage
+    ;;
+  *)
+    mk_usage_error "unknown argument '$1'"
+    ;;
+esac

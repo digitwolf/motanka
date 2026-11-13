@@ -1,0 +1,22 @@
+#@source motanka-qt6
+#@packages motanka-qt6
+# Upstream components of motanka-qt6, Qt 6 for the Stack on Ubuntu 24.04.
+#
+# Same format as stack/components.tsv (see the comment there); build "qt"
+# is a Qt submodule built by packaging/motanka-qt6/debian/qt6-build.sh, in
+# file order, each against the ones before it. The package field names
+# motanka-qt6; the build splits the files into motanka-qt6 (runtime) and
+# motanka-qt6-dev (build files, never published) by path.
+#
+# Spike S1 addendum (design.md): Quickshell 0.3.2 needs Qt >= 6.6; 24.04
+# has 6.4.2, 26.04 has 6.10.2 in its archive. So every line is noble only,
+# and packaging/motanka-qt6/suites skips the package for resolute.
+#
+# Download, verify and pin: stack/fetch-sources --components stack/qt6-components.tsv
+#
+# name	version	url	sha256	build	suites	package
+qtbase	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtbase-everywhere-src-6.10.2.tar.xz	aeb78d29291a2b5fd53cb55950f8f5065b4978c25fb1d77f627d695ab9adf21e	qt	noble	motanka-qt6
+qtshadertools	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtshadertools-everywhere-src-6.10.2.tar.xz	18d9dbbc4f7e6e96e6ed89a9965dc032e2b58158b65156c035537826216716c9	qt	noble	motanka-qt6
+qtsvg	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtsvg-everywhere-src-6.10.2.tar.xz	f07ff80f38caf235187200345392ca7479445ddf49a36c3694cd52a735dad6e1	qt	noble	motanka-qt6
+qtdeclarative	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtdeclarative-everywhere-src-6.10.2.tar.xz	a249914ff66cdcdbf0df8b5ffad997a2ee6dce01cc17d43c6cc56fdc1d0f4b0f	qt	noble	motanka-qt6
+qtwayland	6.10.2	https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtwayland-everywhere-src-6.10.2.tar.xz	391998eb432719df26a6a67d8efdc67f8bf2afdd76c1ee3381ebff4fe7527ee2	qt	noble	motanka-qt6

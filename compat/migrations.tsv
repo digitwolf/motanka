@@ -1,0 +1,10 @@
+# migrations.tsv: the class of each Upstream migration (design.md, Data
+# Models; requirement 9.6). Installed as
+# /opt/motanka/share/motanka/migrations.tsv.
+#
+# PLACEHOLDER: task 21.3 (migration runner and tools/classify-migrations)
+# fills it. Until then it lists no migration, and the omarchy-migrate
+# override runs none.
+#
+# Fields, separated by tabs:
+#   <migration-id>  ok|override|n/a  <note>

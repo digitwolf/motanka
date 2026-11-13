@@ -1,0 +1,43 @@
+motanka-core
+============
+
+Source of the motanka-core package: the motanka command, upstream Omarchy
+vendored unmodified at the stable Upstream_Pin, the compatibility layer that
+runs it on Ubuntu, and the Motanka login session. Installed as
+/usr/share/doc/motanka-core/README.
+
+Building
+--------
+
+test/vm/build builds it inside a build VM. On the host it first runs
+tools/fetch-upstream, which downloads the pinned Upstream tarball into
+~/.cache/motanka-vm/upstream-tarballs/ and checks its SHA-256. The tarball
+becomes the dpkg-source component omarchy/ (motanka-core_<version>.orig-
+omarchy.tar.gz); packaging/build.sh unpacks it with tools/vendor, which
+checks it against upstream.pin again. debian/control is generated per suite
+from debian/control.in, and the Depends listed in debian/pkgmap-depends are
+resolved from packages.yaml. debian/core-install.sh does the build steps.
+
+Builds are Dev_Builds (they ship /opt/motanka/share/motanka/DEV_BUILD)
+unless the build profile pkg.motanka.release is set.
+
+The session
+-----------
+
+/usr/share/wayland-sessions/motanka.desktop runs
+/opt/motanka/libexec/motanka/session. The launcher refuses to start while
+another graphical session of the same user is active, or when the GPU
+driver is not supported; the reason is in the journal
+(journalctl -t motanka). It sets XDG_CURRENT_DESKTOP=Motanka:Hyprland,
+XDG_SESSION_DESKTOP=motanka, DCONF_PROFILE=motanka,
+OMARCHY_PATH=/usr/share/omarchy and puts /opt/motanka/bin first on PATH and
+/opt/motanka/share first in XDG_DATA_DIRS, and then starts the Stack's
+Hyprland through the Stack's uwsm and start-hyprland, as upstream Omarchy
+does.
+
+Once the session runs, the launcher starts motanka-session.target, which is
+bound to graphical-session.target. Its unit motanka-session-cleanup.service
+gives the systemd user manager back its earlier environment when the
+session ends. Desktop settings of the session are in the dconf database
+"motanka" (/etc/dconf/profile/motanka; defaults in
+/etc/dconf/db/motanka.d/), which no other session reads.

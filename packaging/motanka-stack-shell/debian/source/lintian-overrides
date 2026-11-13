@@ -1,0 +1,11 @@
+# The orig-<component> tarballs are upstream release tarballs and tag
+# archives, used unmodified and pinned by SHA-256 in
+# stack/shell-components.tsv. Their test data and documentation are not
+# rebuilt from source because nothing from them is built or shipped.
+source-is-missing
+source-contains-prebuilt-binary
+source-contains-prebuilt-windows-binary
+source-contains-prebuilt-javascript-object
+source-contains-prebuilt-wasm-binary
+source-contains-prebuilt-doxygen-documentation
+very-long-line-length-in-source-file

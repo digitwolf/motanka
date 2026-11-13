@@ -1,0 +1,10 @@
+# The orig-omarchy component is upstream Omarchy's GitHub archive at the
+# pinned commit, used unmodified and pinned by SHA-256 in upstream.pin. Its
+# web assets, images and fonts are shipped as Upstream ships them; nothing
+# in it is built.
+source-is-missing
+source-contains-prebuilt-binary
+source-contains-prebuilt-javascript-object
+source-contains-prebuilt-wasm-binary
+source-contains-prebuilt-sphinx-documentation
+very-long-line-length-in-source-file

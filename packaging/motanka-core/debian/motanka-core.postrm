@@ -1,0 +1,27 @@
+#!/bin/sh
+# postrm of motanka-core: removes the files the postinst generated (3.13):
+# the compiled dconf database /etc/dconf/db/motanka and a temporary file a
+# failed compile may have left.
+#
+# They go on remove as well as on purge. dpkg removes the conffiles in
+# /etc/dconf/db/motanka.d/ and /etc/dconf/profile/ before "postrm purge"
+# runs, and it removes their folders only if they are empty by then; a
+# compiled database still in /etc/dconf/db would keep that folder. Without
+# the package nothing reads the database, and the postinst compiles it
+# again on reinstall.
+set -e
+
+case "$1" in
+  remove | purge)
+    rm -f /etc/dconf/db/motanka /etc/dconf/db/motanka.tmp
+    ;;
+  upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+  *)
+    echo "postrm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

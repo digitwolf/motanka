@@ -1,0 +1,12 @@
+# Files copied into the source tree by packaging/build.sh. A path starting
+# with '/' is relative to the repository root; others to packaging/. A path
+# ending in '/' copies that folder with everything below it.
+/src/
+/tools/pkgmap
+/tools/genwrappers
+/packages.yaml
+/upstream.pin
+/compat/privileged.tsv
+/compat/home-paths.tsv
+/compat/migrations.tsv
+keys/motanka-archive.asc

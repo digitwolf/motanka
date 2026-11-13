@@ -1,0 +1,12 @@
+# Installed as /usr/lib/systemd/user/motanka-session.target by motanka-core.
+# The Motanka session's own target (design.md, "Session"; 5.4, 5.5). The
+# session launcher (/opt/motanka/libexec/motanka/session) starts it once
+# graphical-session.target is active, so it never runs in another desktop.
+# Motanka's user units are wanted only by this target, through the
+# package-owned links in motanka-session.target.wants/; nothing is enabled
+# per user.
+[Unit]
+Description=Motanka session
+Documentation=file:///usr/share/doc/motanka-core/README
+BindsTo=graphical-session.target
+Before=graphical-session.target

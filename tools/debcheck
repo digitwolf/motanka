@@ -5,7 +5,9 @@ Usage: tools/debcheck <file.deb>...
 
 Fails on:
   - any path outside the File layout table of
-    .kiro/specs/motanka-layer/design.md (LAYOUT below);
+    .kiro/specs/motanka-layer/design.md (LAYOUT below), apart from the
+    symbolic link /usr/share/omarchy to /opt/motanka/share/omarchy
+    (SYMLINKS below), which fails if it is anything else;
   - any entry under /etc/ld.so.conf.d, /etc/sudoers.d, /etc/profile.d or
     /etc/sysctl.d (requirements 3.12, 5.3, 8.8);
   - any setuid or setgid entry (3.11);
@@ -21,6 +23,7 @@ contain any byte, which a Bash parser of `tar -tv` output gets wrong.
 """
 
 import fnmatch
+import posixpath
 import re
 import subprocess
 import sys
@@ -50,6 +53,13 @@ LAYOUT = (
     "/usr/share/zsh/vendor-completions/_motanka",
     "/usr/share/lintian/overrides/<pkg>",
 )
+
+# Symbolic links allowed outside LAYOUT, with the one target each must
+# resolve to. Upstream hardcodes /usr/share/omarchy (design.md, spike S2),
+# so motanka-core ships it as a link to the vendored tree, and nothing else.
+SYMLINKS = {
+    "/usr/share/omarchy": "/opt/motanka/share/omarchy",
+}
 
 FORBIDDEN_DIRS = (
     "/etc/ld.so.conf.d",
@@ -106,6 +116,13 @@ def allowed(path, is_dir, layout):
 
 def under(path, folder):
     return path.startswith(folder + "/")
+
+
+def link_target(path, linkname):
+    """The absolute, normalised target of a symbolic link at <path>."""
+    if not linkname.startswith("/"):
+        linkname = posixpath.join(posixpath.dirname(path), linkname)
+    return posixpath.normpath(linkname)
 
 
 def norm(name):
@@ -168,7 +185,13 @@ def check_deb(deb):
         for folder in FORBIDDEN_DIRS:
             if under(path, folder):
                 problems.append((path, f"file under {folder} is forbidden"))
-        if not allowed(path, m.isdir(), layout):
+        if path in SYMLINKS:
+            want = SYMLINKS[path]
+            if not m.issym():
+                problems.append((path, f"must be a symbolic link to {want}"))
+            elif link_target(path, m.linkname) != want:
+                problems.append((path, f"links to {m.linkname}, not to {want}"))
+        elif not allowed(path, m.isdir(), layout):
             problems.append((path, "outside the file layout"))
         if not m.issym() and m.mode & 0o4000:
             problems.append((path, "setuid bit set"))

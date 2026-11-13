@@ -1,0 +1,7 @@
+motanka-core (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial package: the motanka command, upstream Omarchy v4.5.0
+    (ac2690cd) vendored unmodified, the compatibility layer and the
+    Motanka session.
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

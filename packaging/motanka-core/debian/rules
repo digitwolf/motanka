@@ -1,0 +1,57 @@
+#!/usr/bin/make -f
+# Builds motanka-core for the suite in the changelog (noble or resolute,
+# stamped by packaging/build.sh). The steps are in debian/core-install.sh;
+# see the comment at its top for the inputs and the installed layout.
+#
+# Build profile pkg.motanka.release leaves out the Dev_Build marker
+# /opt/motanka/share/motanka/DEV_BUILD; every other build is a Dev_Build
+# (requirement 14.8).
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+DIST := $(shell dpkg-parsechangelog -SDistribution)
+VENDORED := opt/motanka/share/omarchy
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf debian/build
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	bash debian/core-install.sh build $(DIST)
+
+override_dh_auto_test:
+	bash debian/core-install.sh test $(DIST)
+
+override_dh_auto_install:
+	bash debian/core-install.sh install $(DIST)
+
+# Upstream's files ship byte for byte (7.1): nothing strips them, rewrites
+# their timestamps or archive metadata, or rewrites their symbolic links.
+override_dh_strip:
+	dh_strip -X$(VENDORED)
+
+override_dh_strip_nondeterminism:
+	dh_strip_nondeterminism -X$(VENDORED)
+
+override_dh_link:
+	dh_link -X$(VENDORED)
+
+# Upstream's modes are kept as git records them (0644 or 0755); dpkg-deb
+# makes every file root-owned.
+override_dh_fixperms:
+	dh_fixperms -X$(VENDORED)
+
+override_dh_shlibdeps:
+	dh_shlibdeps -X$(VENDORED)
+
+# Motanka's user units are wired by the package-owned link in
+# debian/motanka-core.links and never enabled per user (5.4).
+override_dh_installsystemduser:
+
+override_dh_builddeb:
+	bash debian/core-install.sh verify $(DIST)
+	dh_builddeb

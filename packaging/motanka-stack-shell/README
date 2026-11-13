@@ -1,0 +1,16 @@
+Source of motanka-stack-shell: Quickshell 0.3.2, the desktop shell of
+upstream Omarchy v4.5.0, and cpptrace 1.0.4 (shared, with libunwind and a
+bundled libdwarf-lite), under /opt/motanka, for both suites.
+
+The upstream tarballs are listed in stack/shell-components.tsv (imported by
+build-imports); test/vm/build fetches them with stack/fetch-sources
+--components stack/shell-components.tsv. debian/control is generated per
+suite from debian/control.in:
+  noble     builds against motanka-qt6-dev (Qt 6.10 in /opt/motanka). That
+            package and motanka-qt6 and motanka-stack-libs are locally
+            built .debs, given to sbuild with --extra-package
+            (sbuild-local), so packaging/motanka-stack and
+            packaging/motanka-qt6 must be built for noble first. GCC 16
+            comes from the toolchain PPA (sbuild-repos).
+  resolute  builds against the archive's Qt 6.10 and depends on its QML
+            modules and Wayland platform plugin.

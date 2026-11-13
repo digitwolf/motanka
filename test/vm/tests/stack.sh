@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
-# VM test for the Stack packages (tasks 7.1 to 7.4): install the
-# motanka-stack .debs of one release in a fresh VM with a virgl GPU, check
-# library resolution, RUNPATH, the C++ runtime and debcheck, start Hyprland
-# on tty1, take a screenshot, purge, and compare Fingerprints.
+# VM test for the Stack packages (tasks 7.1 to 7.6): install the Stack
+# .debs of one release (motanka-stack, motanka-stack-shell and, on noble,
+# motanka-qt6) in a fresh VM with a virgl GPU, check library resolution,
+# RUNPATH, the C++ runtime and debcheck, start Hyprland on tty1, take a
+# screenshot, run Quickshell with a one-panel config, take a second
+# screenshot, purge, and compare Fingerprints.
 #
 # Usage: test/vm/tests/stack.sh     (test/run-all runs it)
 #
 # Environment:
 #   MOTANKA_VM_RELEASE     resolute (default) or noble
 #   MOTANKA_VM_RESULTS     log folder
-#   MOTANKA_STACK_REBUILD  1 to rebuild the Stack even if .debs of the
-#                          current version are in ~/.cache/motanka-vm/debs/
+#   MOTANKA_STACK_REBUILD  1 to rebuild every Stack source package even if
+#                          .debs of the current version are in
+#                          ~/.cache/motanka-vm/debs/
 #
-# The .debs come from ~/.cache/motanka-vm/debs/<release>/. If one is missing
-# (or MOTANKA_STACK_REBUILD=1), test/vm/build builds packaging/motanka-stack
-# for the release first, which takes more than an hour.
+# The .debs come from ~/.cache/motanka-vm/debs/<release>/. For each source
+# package with a missing .deb (or with MOTANKA_STACK_REBUILD=1),
+# test/vm/build builds it for the release first, in one build VM and in
+# this order: packaging/motanka-stack (more than an hour),
+# packaging/motanka-qt6 (noble only) and packaging/motanka-stack-shell.
+# motanka-qt6-dev is needed for the shell build only and is not installed.
 #
 # Checks (requirements 1.3, 3.4, 5.14, 8.1, 8.2, 8.4, 8.5, 8.8; the guest
 # half is test/vm/stack-guest.sh):
-#   - the four packages install from local files with apt
+#   - the Stack packages install from local files with apt
 #   - tools/debcheck passes on every Stack .deb
 #   - every file is under /opt/motanka, apart from /usr/share/doc/<pkg> and
 #     the package's lintian overrides
@@ -31,6 +37,13 @@
 #   - start-hyprland on tty1 (getty autologin) runs /opt/motanka/bin/Hyprland,
 #     hyprctl monitors lists Virtual-1, grim captures a screenshot into the
 #     results folder, and no process has LD_LIBRARY_PATH
+#   - quickshell --version reports the version in stack/shell-components.tsv;
+#     every Qt library ldd resolves for it, and every Qt library and plugin
+#     the running Quickshell maps, is under /opt/motanka on noble and from
+#     the system on resolute
+#   - in the running Hyprland session, Quickshell shows a magenta
+#     PanelWindow: hyprctl layers lists its namespace, a pixel inside it is
+#     magenta, and grim saves shot-shell-<release>.png to the results folder
 #   - after purging the Stack and the packages it pulled in, the
 #     Fingerprint equals the one taken before the install, apart from the
 #     Allowlist (this includes sysctl.txt, so the Stack changed no sysctl)
@@ -53,7 +66,14 @@ results=${MOTANKA_VM_RESULTS:-$MV_RESULTS/$run_id-stack}
 mkdir -p "$results"
 export MOTANKA_VM_RESULTS="$results"
 GUEST_T=/tmp/motanka-stack-test
-PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
+# Binary packages per source package. Installed: everything but -dev.
+STACK_DEBS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
+QT_DEBS=(motanka-qt6 motanka-qt6-dev)
+SHELL_DEBS=(motanka-stack-shell)
+PKGS=("${STACK_DEBS[@]}" "${SHELL_DEBS[@]}")
+if [[ $release == noble ]]; then
+  PKGS+=(motanka-qt6)
+fi
 
 failures=0
 pass() { mv_log "PASS: $*"; }
@@ -75,25 +95,43 @@ hypr_version=$(awk -F'\t' '$1 == "hyprland" { print $2 }' "$MV_REPO/stack/compon
 if [[ -z $hypr_version ]]; then
   mv_die "stack/components.tsv has no hyprland line"
 fi
+qs_version=$(awk -F'\t' '$1 == "quickshell" { print $2 }' "$MV_REPO/stack/shell-components.tsv")
+if [[ -z $qs_version ]]; then
+  mv_die "stack/shell-components.tsv has no quickshell line"
+fi
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 # --- 1. the .debs -------------------------------------------------------------
+# have_debs <package>...: every .deb of the current version is cached.
 have_debs() {
   local p
-  for p in "${PKGS[@]}"; do
+  for p in "$@"; do
     [[ -f $MV_DEBS/$release/${p}_${ver}_amd64.deb ]] || return 1
   done
 }
-if [[ ${MOTANKA_STACK_REBUILD:-0} == 1 ]] || ! have_debs; then
-  mv_log "building packaging/motanka-stack for $release (this takes a while)"
-  if ! "$MV_LIB_DIR/build" --suite "$release" "$MV_REPO/packaging/motanka-stack" \
-    >"$results/debs.txt"; then
-    fail "test/vm/build failed for motanka-stack on $release (logs in $results/build-$release*)"
+rebuild=${MOTANKA_STACK_REBUILD:-0}
+to_build=()
+if [[ $rebuild == 1 ]] || ! have_debs "${STACK_DEBS[@]}"; then
+  to_build+=("$MV_REPO/packaging/motanka-stack")
+fi
+qt_rebuilt=false
+if [[ $release == noble ]] && { [[ $rebuild == 1 ]] || ! have_debs "${QT_DEBS[@]}"; }; then
+  to_build+=("$MV_REPO/packaging/motanka-qt6")
+  qt_rebuilt=true
+fi
+# Quickshell uses Qt's private API, so it is rebuilt with every Qt build.
+if [[ $rebuild == 1 ]] || $qt_rebuilt || ! have_debs "${SHELL_DEBS[@]}"; then
+  to_build+=("$MV_REPO/packaging/motanka-stack-shell")
+fi
+if ((${#to_build[@]} > 0)); then
+  mv_log "building for $release (this takes a while): ${to_build[*]#"$MV_REPO"/}"
+  if ! "$MV_LIB_DIR/build" --suite "$release" "${to_build[@]}" >"$results/debs.txt"; then
+    fail "test/vm/build failed on $release (logs in $results/build-$release*)"
     finish
   fi
 fi
-if ! have_debs; then
-  fail "no motanka-stack .debs of version $ver in $MV_DEBS/$release/"
+if ! have_debs "${PKGS[@]}"; then
+  fail "not every Stack .deb of version $ver is in $MV_DEBS/$release/ (${PKGS[*]})"
   finish
 fi
 stage=$results/stage
@@ -117,7 +155,7 @@ mv_copy_to_vm "$tvm" "$stage" "$GUEST_T"
 # phase <name>: runs one guest phase, logs it and counts its checks.
 phase() {
   local name=$1 rc=0 f p
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" \
+  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" \
     </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)
@@ -142,6 +180,13 @@ if phase install; then
     pass "screenshot saved: $results/shot-$release.png"
   else
     fail "no screenshot in $results/shot-$release.png"
+  fi
+  rm -f -- "$results/shot-shell-$release.png"
+  "$MV_LIB_DIR/run" "$tvm" -- "cat $GUEST_T/shot-shell.png" </dev/null >"$results/shot-shell-$release.png" 2>/dev/null || true
+  if [[ $(head -c 8 "$results/shot-shell-$release.png" 2>/dev/null | od -An -tx1 | tr -d ' \n') == 89504e470d0a1a0a ]]; then
+    pass "Quickshell screenshot saved: $results/shot-shell-$release.png"
+  else
+    fail "no Quickshell screenshot in $results/shot-shell-$release.png"
   fi
 fi
 phase purge || true

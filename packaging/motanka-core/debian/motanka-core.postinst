@@ -1,0 +1,33 @@
+#!/bin/sh
+# postinst of motanka-core: compiles the Motanka session's dconf system
+# database /etc/dconf/db/motanka from the keyfiles in
+# /etc/dconf/db/motanka.d/ (design.md, File layout; 5.6).
+#
+# Only this database is compiled, with "dconf compile". "dconf update" would
+# also recompile every other database under /etc/dconf/db whose keyfiles
+# are newer than it, and so could change the settings other desktops see
+# (DESIGN.md rule 3). The compiled file is generated, not owned by the
+# package; postrm removes it on remove and on purge (3.13).
+set -e
+
+case "$1" in
+  configure)
+    if command -v dconf >/dev/null 2>&1; then
+      rm -f /etc/dconf/db/motanka.tmp
+      dconf compile /etc/dconf/db/motanka.tmp /etc/dconf/db/motanka.d
+      chmod 0644 /etc/dconf/db/motanka.tmp
+      mv -f /etc/dconf/db/motanka.tmp /etc/dconf/db/motanka
+    else
+      echo "motanka-core: dconf is not installed; /etc/dconf/db/motanka was not compiled" >&2
+    fi
+    ;;
+  abort-upgrade | abort-remove | abort-deconfigure) ;;
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,28 @@
+Source of motanka-qt6 and motanka-qt6-dev: Qt 6.10.2 (qtbase,
+qtshadertools, qtsvg, qtdeclarative, qtwayland) under /opt/motanka for
+Ubuntu 24.04 only. Quickshell (motanka-stack-shell) needs Qt 6.6 or later;
+24.04 has 6.4.2, while 26.04 has 6.10.2 in its archive, so the suites file
+lists noble and packaging/build.sh skips the package for resolute.
+
+The upstream tarballs are listed in stack/qt6-components.tsv (imported by
+build-imports). test/vm/build downloads and verifies them with
+stack/fetch-sources --components stack/qt6-components.tsv and passes them
+to packaging/build.sh as dpkg-source 3.0 (quilt) orig-<component>
+tarballs. GCC 16 comes from the Ubuntu toolchain PPA (sbuild-repos), at
+build time only.
+
+Packages:
+  motanka-qt6      libraries (/opt/motanka/lib/libQt6*.so.*), plugins and
+                   QML modules (/opt/motanka/lib/qt6/{plugins,qml}). Depends
+                   on motanka-stack-libs, which ships GCC 16's libstdc++ in
+                   /opt/motanka/lib.
+  motanka-qt6-dev  headers, CMake and pkg-config files, tools, mkspecs and
+                   static helper libraries. Build time only: its control
+                   carries "Motanka-Build-Only: yes", chumak/build-repo
+                   leaves it out of every suite, and packaging/build.sh gives
+                   it to the motanka-stack-shell build through sbuild
+                   --extra-package (packaging/motanka-stack-shell/sbuild-local).
+
+Build order on noble: packaging/motanka-stack (for motanka-stack-libs, which
+the shell build installs as a dependency of motanka-qt6), then
+packaging/motanka-qt6, then packaging/motanka-stack-shell.

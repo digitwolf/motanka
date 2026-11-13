@@ -1,0 +1,54 @@
+# session-env.list: the Session_Env_List (design.md, Terms). Installed as
+# /opt/motanka/share/motanka/session-env.list.
+#
+# One variable name per line; blank lines and text after '#' are ignored.
+# These are the variables the Motanka session puts into the systemd user
+# manager, which outlives the session and is shared with the user's other
+# sessions. When the session ends, the launcher
+# (/opt/motanka/libexec/motanka/session) and, if the launcher was killed,
+# motanka-session-cleanup.service give each of them back the value it had
+# before the session, or unset it (5.11).
+
+# Set by the launcher and exported by uwsm's environment preloader.
+XDG_CURRENT_DESKTOP
+XDG_SESSION_DESKTOP
+DCONF_PROFILE
+OMARCHY_PATH
+PATH
+XDG_DATA_DIRS
+
+# Set by uwsm's environment preloader (prepare-env.sh) and by
+# /opt/motanka/share/uwsm/env-motanka.
+XDG_SESSION_TYPE
+XDG_MENU_PREFIX
+XDG_BACKEND
+XDG_CONFIG_DIRS
+XDG_CONFIG_HOME
+XDG_DATA_HOME
+XDG_CACHE_HOME
+XDG_STATE_HOME
+UWSM_FINALIZE_VARNAMES
+UWSM_WAIT_VARNAMES
+
+# Set by the compositor (Hyprland's own import, uwsm finalize).
+WAYLAND_DISPLAY
+DISPLAY
+HYPRLAND_INSTANCE_SIGNATURE
+HYPRLAND_CMD
+HYPRCURSOR_THEME
+HYPRCURSOR_SIZE
+XCURSOR_SIZE
+XCURSOR_THEME
+QT_QPA_PLATFORMTHEME
+
+# Set by Upstream's Hyprland configuration (default/hypr/envs.lua) and uwsm
+# defaults (default/uwsm/default), and exported by its
+# "dbus-update-activation-environment --systemd --all".
+GDK_BACKEND
+QT_QPA_PLATFORM
+MOZ_ENABLE_WAYLAND
+ELECTRON_OZONE_PLATFORM_HINT
+OZONE_PLATFORM
+XCOMPOSEFILE
+TERMINAL
+EDITOR

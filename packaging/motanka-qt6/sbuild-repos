@@ -1,0 +1,4 @@
+# Extra apt sources for sbuild, used at build time only, never shipped.
+# Format: <suite> <key file under packaging/> <one-line apt source>
+# GCC 16 for noble (spike S1): 24.04 has no gcc-16 in its archive.
+noble keys/ubuntu-toolchain-r-test.asc deb http://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu noble main

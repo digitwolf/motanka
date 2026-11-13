@@ -1,0 +1,7 @@
+motanka-stack-shell (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial package: Quickshell 0.3.2 and cpptrace 1.0.4 under /opt/motanka,
+    built with GCC 16 against motanka-qt6 (24.04) or the archive's Qt 6.10
+    (26.04).
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

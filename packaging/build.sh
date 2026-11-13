@@ -5,30 +5,48 @@
 #
 # Usage: SOURCE_DATE_EPOCH=<seconds> \
 #   bash packaging/build.sh --suite <noble|resolute> --out <dir>
-#                           [--orig-dir <dir>] <package-dir>...
+#                           [--orig-dir <dir>] [--extra-debs <dir>]...
+#                           <package-dir>...
 #
-# For each package folder (one with debian/control or debian/control.in):
+# Packages are built in the order given. For each package folder (one with
+# debian/control or debian/control.in):
+#   0. if the folder has a suites file (suite names, '#' comments) that does
+#      not list <suite>, skip it with its first comment as the reason; a
+#      skipped package is not a failure;
 #   1. copy it to <out>/.work/<source>/<source>-<version>/ and add the files
 #      listed in its build-imports file (paths under packaging/, or under
-#      the repository root when they start with '/');
+#      the repository root when they start with '/'; a path ending in '/'
+#      copies that folder with everything below it);
 #   2. stamp debian/changelog: the UNRELEASED top entry becomes
 #      <source> (<version from packaging/version.sh>) <suite>, dated
 #      SOURCE_DATE_EPOCH, so dpkg-buildpackage in the chroot derives the
 #      same SOURCE_DATE_EPOCH;
 #   3. if there is a debian/control.in, generate debian/control for the
 #      suite: lines between "#if <suite>..." and "#endif" are kept only when
-#      the suite is listed, the directive lines are dropped;
+#      the suite is listed, the directive lines are dropped. If the package
+#      has a debian/pkgmap-depends file (Upstream package names), the line
+#      "@PKGMAP_DEPENDS@" in debian/control becomes one line per apt or
+#      motanka outcome of those names for the suite (tools/pkgmap compile
+#      of the package's imported packages.yaml);
 #   4. make the orig tarball reproducibly (sorted, fixed owner and mtime);
 #      then copy every <source>_<upstream>.orig-<component>.tar.* found in
 #      --orig-dir next to it and unpack it into <component>/ (dpkg-source
-#      3.0 (quilt) multi-orig). A package that imports /stack/components.tsv
-#      needs one such tarball per component listed there;
+#      3.0 (quilt) multi-orig). A package that imports a components file
+#      (/stack/*components.tsv) needs one such tarball per component listed
+#      there. A package that imports /upstream.pin needs the component
+#      omarchy, the Upstream tarball (tools/fetch-upstream makes it); it is
+#      unpacked by tools/vendor, which first checks it against the stable
+#      pin (7.1);
 #   5. make the source package with dpkg-source -b (format 3.0 (quilt): a
 #      native package cannot carry the Debian revision of the version scheme);
 #   6. sbuild in unshare mode with ~/.cache/sbuild/<suite>-amd64.tar.zst,
 #      DEB_BUILD_MAINT_OPTIONS=hardening=+all (debian/rules must export it),
 #      plus the extra apt sources its sbuild-repos file lists for the suite
-#      (build time only);
+#      and, through sbuild --extra-package, the locally built Motanka .debs
+#      its sbuild-local file lists for the suite (lines "<suite> <binary
+#      package>..."). Each one must be <name>_<version>_{amd64,all}.deb of
+#      the version being built, found in <out> (built earlier in this run)
+#      or in a --extra-debs folder. Both are build time only;
 #   7. lintian on the .dsc and the .debs: errors fail the build, warnings
 #      are printed;
 #   8. tools/debcheck on the .debs except -dbgsym packages (their files are
@@ -41,7 +59,7 @@ export LC_ALL=C.UTF-8
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
-usage="packaging/build.sh --suite <noble|resolute> --out <dir> [--orig-dir <dir>] <package-dir>..."
+usage="packaging/build.sh --suite <noble|resolute> --out <dir> [--orig-dir <dir>] [--extra-debs <dir>]... <package-dir>..."
 
 log() {
   printf 'build.sh: %s\n' "$*" >&2
@@ -71,14 +89,19 @@ guard() {
 
 # import_files <pkgdir> <tree>: copies the files named in <pkgdir>/build-imports.
 # A path is relative to packaging/, or to the repository root if it starts
-# with '/'; it lands at the same relative path in the tree.
+# with '/'; it lands at the same relative path in the tree. A path ending in
+# '/' names a folder, which is copied with everything below it.
 import_files() {
-  local pkgdir=$1 tree=$2 line base rel
+  local pkgdir=$1 tree=$2 line base rel folder
   [[ -f $pkgdir/build-imports ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%#*}
     line=${line//[[:space:]]/}
     [[ -n $line ]] || continue
+    folder=0
+    if [[ $line == ?*/ ]]; then
+      folder=1
+    fi
     if [[ $line == /* ]]; then
       base=$repo
       rel=${line#/}
@@ -86,9 +109,23 @@ import_files() {
       base=$repo/packaging
       rel=$line
     fi
+    rel=${rel%/}
     if [[ ! $rel =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || $rel == *..* ]]; then
       log "invalid path '$line' in $pkgdir/build-imports"
       return 1
+    fi
+    if ((folder)); then
+      if [[ ! -d $base/$rel || -L $base/$rel ]]; then
+        log "${base#"$repo"/}/$rel/ (from $pkgdir/build-imports) is not a folder"
+        return 1
+      fi
+      if [[ -e $tree/$rel ]]; then
+        log "$rel/ (from $pkgdir/build-imports) clashes with $rel in the package folder"
+        return 1
+      fi
+      mkdir -p "$tree/$rel"
+      cp -R -- "$base/$rel/." "$tree/$rel/" || return 1
+      continue
     fi
     if [[ ! -f $base/$rel ]]; then
       log "${base#"$repo"/}/$rel (from $pkgdir/build-imports) is missing"
@@ -124,6 +161,65 @@ gen_control() {
   ' "$1" >"$2.new" && mv -f "$2.new" "$2"
 }
 
+# pkgmap_depends <tree> <suite>: when <tree>/debian/pkgmap-depends exists,
+# replaces the line "@PKGMAP_DEPENDS@" (optionally followed by a comma) of
+# <tree>/debian/control with the suite's apt or motanka outcomes of the
+# Upstream package names listed there, one "         <name>," line each,
+# sorted and without duplicates. A name without an entry, or with a skip,
+# flatpak or binary outcome, fails the build.
+pkgmap_depends() {
+  local tree=$1 s=$2 list=$1/debian/pkgmap-depends control=$1/debian/control map line kind targets
+  local -a names=() deps=() t=()
+  [[ -f $list ]] || return 0
+  map=$tree/packages.yaml
+  [[ -f $map ]] || map=$repo/packages.yaml
+  if ! grep -Eq '^[[:space:]]*@PKGMAP_DEPENDS@,?[[:space:]]*$' "$control"; then
+    log "$list exists, but debian/control has no @PKGMAP_DEPENDS@ line"
+    return 1
+  fi
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    line=${line//[[:space:]]/}
+    if [[ -n $line ]]; then
+      names+=("$line")
+    fi
+  done <"$list"
+  if ! python3 "$repo/tools/pkgmap" compile "$s" --map "$map" -o "$tree/debian/pkgmap-depends.tsv"; then
+    log "tools/pkgmap could not compile $map for $s"
+    return 1
+  fi
+  for line in "${names[@]}"; do
+    kind=$(awk -F'\t' -v n="$line" '$1 == n { print $2 "\t" $3; exit }' "$tree/debian/pkgmap-depends.tsv")
+    targets=${kind#*$'\t'}
+    kind=${kind%%$'\t'*}
+    case $kind in
+      apt | motanka) ;;
+      "")
+        log "debian/pkgmap-depends: $line has no entry in $map"
+        return 1
+        ;;
+      *)
+        log "debian/pkgmap-depends: $line has the outcome '$kind' on $s; only apt and motanka outcomes can be Depends"
+        return 1
+        ;;
+    esac
+    IFS=, read -r -a t <<<"$targets"
+    deps+=("${t[@]}")
+  done
+  rm -f -- "$tree/debian/pkgmap-depends.tsv"
+  : >"$tree/debian/pkgmap-depends.lines"
+  if ((${#deps[@]} > 0)); then
+    printf '%s\n' "${deps[@]}" | LC_ALL=C sort -u |
+      awk 'NF { printf "         %s,\n", $0 }' >"$tree/debian/pkgmap-depends.lines"
+  fi
+  awk -v f="$tree/debian/pkgmap-depends.lines" '
+    /^[[:space:]]*@PKGMAP_DEPENDS@,?[[:space:]]*$/ { while ((getline l < f) > 0) print l; next }
+    { print }
+  ' "$control" >"$control.new" && mv -f "$control.new" "$control"
+  rm -f -- "$tree/debian/pkgmap-depends.lines"
+  log "Depends from packages.yaml for $s: ${deps[*]:-none}"
+}
+
 # unpack_components <src> <upstream> <work> <tree>: copies the orig
 # component tarballs of the source package from $orig_dir into <work> and
 # unpacks each into <tree>/<component>, as dpkg-source -x would.
@@ -147,6 +243,17 @@ unpack_components() {
         return 1
       fi
       cp -f "$f" "$work/" || return 1
+      if [[ $comp == omarchy && -f $tree/upstream.pin ]]; then
+        # The vendored Upstream: tools/vendor refuses a tarball whose
+        # SHA-256 differs from the stable pin and unpacks it unchanged.
+        if ! bash "$repo/tools/vendor" --pin "$tree/upstream.pin" --tarball "$f" stable "$tree/$comp"; then
+          log "tools/vendor refused ${f##*/} for the stable pin in upstream.pin"
+          shopt -u nullglob
+          return 1
+        fi
+        found+=("$comp")
+        continue
+      fi
       mkdir "$tree/$comp" || return 1
       if ! tar -C "$tree/$comp" --strip-components=1 --no-same-owner -xf "$f"; then
         log "could not unpack ${f##*/}"
@@ -157,18 +264,26 @@ unpack_components() {
     done
     shopt -u nullglob
   fi
-  if [[ -f $tree/stack/components.tsv ]]; then
+  if [[ -f $tree/upstream.pin && ! " ${found[*]} " == *" omarchy "* ]]; then
+    log "no ${src}_$upstream.orig-omarchy.tar.gz in '${orig_dir:-(no --orig-dir)}'"
+    log "run tools/fetch-upstream (test/vm/build does it) and pass --orig-dir"
+    return 1
+  fi
+  shopt -s nullglob
+  local -a tsvs=("$tree"/stack/*components.tsv)
+  shopt -u nullglob
+  for f in "${tsvs[@]}"; do
     while IFS=$'\t' read -r name _; do
       [[ -z $name || $name == \#* ]] && continue
       if [[ ! " ${found[*]} " == *" $name "* ]]; then
         missing+=("$name")
       fi
-    done <"$tree/stack/components.tsv"
-    if ((${#missing[@]} > 0)); then
-      log "no ${src}_$upstream.orig-<component> tarball in '${orig_dir:-(no --orig-dir)}' for: ${missing[*]}"
-      log "run stack/fetch-sources (test/vm/build does it) and pass --orig-dir"
-      return 1
-    fi
+    done <"$f"
+  done
+  if ((${#missing[@]} > 0)); then
+    log "no ${src}_$upstream.orig-<component> tarball in '${orig_dir:-(no --orig-dir)}' for: ${missing[*]}"
+    log "run stack/fetch-sources --components <file> (test/vm/build does it) and pass --orig-dir"
+    return 1
   fi
   if ((${#found[@]} > 0)); then
     log "$src: ${#found[@]} orig components"
@@ -197,6 +312,67 @@ sbuild_repo_args() {
   done <"$pkgdir/sbuild-repos"
 }
 
+# local_deb_args <pkgdir> <src> <suite> <version>: fills SBUILD_LOCAL_ARGS
+# from the package's sbuild-local file (<suite> <binary package>...).
+local_deb_args() {
+  local pkgdir=$1 src=$2 s=$3 version=$4 rsuite rest name d f found
+  local -a names
+  SBUILD_LOCAL_ARGS=()
+  [[ -f $pkgdir/sbuild-local ]] || return 0
+  while read -r rsuite rest || [[ -n $rsuite ]]; do
+    [[ -z $rsuite || $rsuite == \#* ]] && continue
+    [[ $rsuite == "$s" ]] || continue
+    rest=${rest%%#*}
+    read -r -a names <<<"$rest"
+    for name in "${names[@]}"; do
+      if [[ ! $name =~ ^motanka(-[a-z0-9][a-z0-9+.-]*)?$ ]]; then
+        log "$pkgdir/sbuild-local: '$name' is not a Motanka package name"
+        return 1
+      fi
+      found=""
+      for d in "$out" "${extra_debs[@]}"; do
+        for f in "$d/${name}_${version}_amd64.deb" "$d/${name}_${version}_all.deb"; do
+          if [[ -f $f ]]; then
+            found=$f
+            break 2
+          fi
+        done
+      done
+      if [[ -z $found ]]; then
+        log "$src needs ${name}_${version}_amd64.deb for $s, which is neither built earlier in this run nor in --extra-debs (${extra_debs[*]:-none given})"
+        log "build the source package that makes $name for $s first, or name it before $src"
+        return 1
+      fi
+      SBUILD_LOCAL_ARGS+=("--extra-package=$found")
+      log "local build dependency for $s: ${found##*/}"
+    done
+  done <"$pkgdir/sbuild-local"
+}
+
+# skip_reason <pkgdir> <suite>: prints why the package is not built for the
+# suite and returns 0, or returns 1 if it is built.
+skip_reason() {
+  local pkgdir=$1 s=$2 line word reason="" listed=""
+  local -a words
+  [[ -f $pkgdir/suites ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line =~ ^#[[:space:]]*(.*)$ ]]; then
+      if [[ -z $reason ]]; then
+        reason=${BASH_REMATCH[1]}
+      fi
+      continue
+    fi
+    read -r -a words <<<"${line%%#*}"
+    for word in "${words[@]}"; do
+      if [[ $word == "$s" ]]; then
+        return 1
+      fi
+      listed+=" $word"
+    done
+  done <"$pkgdir/suites"
+  printf 'built for%s only%s\n' "${listed:- no suite}" "${reason:+: $reason}"
+}
+
 # stamp_changelog <file> <source> <version> <suite>
 stamp_changelog() {
   local file=$1 src=$2 version=$3 suite=$4 date
@@ -211,8 +387,12 @@ stamp_changelog() {
 
 # build_one <package-dir>: returns non-zero if the package failed.
 build_one() {
-  local pkgdir=$1 src first version upstream work base tree logs control f
+  local pkgdir=$1 src first version upstream work base tree logs control f why
   local -a debs checked
+  if why=$(skip_reason "$pkgdir" "$suite"); then
+    log "skipping ${pkgdir##*/} for $suite: $why ($pkgdir/suites)"
+    return 0
+  fi
   control=$pkgdir/debian/control
   if [[ ! -f $control && -f $pkgdir/debian/control.in ]]; then
     control=$pkgdir/debian/control.in
@@ -258,6 +438,7 @@ build_one() {
     fi
     rm -f -- "$tree/debian/control.in"
   fi
+  pkgmap_depends "$tree" "$suite" || return 1
 
   if ! tar -C "$work" --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
     --owner=0 --group=0 --numeric-owner --mode=go-w,a+rX --format=gnu \
@@ -268,6 +449,7 @@ build_one() {
   fi
   unpack_components "$src" "$upstream" "$work" "$tree" || return 1
   sbuild_repo_args "$pkgdir" "$suite" || return 1
+  local_deb_args "$pkgdir" "$src" "$suite" "$version" || return 1
   if ! (cd "$work" && dpkg-source -b "$base") >"$logs/$src.source.log" 2>&1; then
     cat "$logs/$src.source.log" >&2
     log "dpkg-source failed for $src"
@@ -283,7 +465,8 @@ build_one() {
   if ! (cd "$work" && DEB_BUILD_MAINT_OPTIONS=hardening=+all sbuild \
     --chroot-mode=unshare --chroot="$suite-amd64" --dist="$suite" --arch=amd64 \
     --arch-all --arch-any --no-run-lintian --no-run-piuparts \
-    --no-run-autopkgtest --build-dir="$work" "${SBUILD_REPO_ARGS[@]}" "$dsc") \
+    --no-run-autopkgtest --build-dir="$work" "${SBUILD_REPO_ARGS[@]}" \
+    "${SBUILD_LOCAL_ARGS[@]}" "$dsc") \
     >"$logs/$src.sbuild.log" 2>&1; then
     find "$work" -maxdepth 1 -type f -name '*.build' -exec cp -f {} "$logs/" \;
     tail -n 60 "$logs/$src.sbuild.log" >&2
@@ -333,10 +516,12 @@ suite=""
 out=""
 orig_dir=""
 pkgs=()
+extra_debs=()
 SBUILD_REPO_ARGS=()
+SBUILD_LOCAL_ARGS=()
 while (($# > 0)); do
   case $1 in
-    --suite | --out | --orig-dir)
+    --suite | --out | --orig-dir | --extra-debs)
       if (($# < 2)); then
         die_usage "$1 needs a value"
       fi
@@ -344,6 +529,7 @@ while (($# > 0)); do
         --suite) suite=$2 ;;
         --out) out=$2 ;;
         --orig-dir) orig_dir=$2 ;;
+        --extra-debs) extra_debs+=("$2") ;;
       esac
       shift 2
       ;;
@@ -387,6 +573,12 @@ if [[ -n $orig_dir ]]; then
   fi
   orig_dir=$(cd "$orig_dir" && pwd)
 fi
+for i in "${!extra_debs[@]}"; do
+  if [[ ! -d ${extra_debs[$i]} ]]; then
+    die_usage "--extra-debs ${extra_debs[$i]} is not a folder"
+  fi
+  extra_debs[i]=$(cd "${extra_debs[$i]}" && pwd)
+done
 
 failed=()
 for p in "${pkgs[@]}"; do
