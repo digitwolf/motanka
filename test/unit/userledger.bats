@@ -988,6 +988,6 @@ $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
   [[ -f $H/.config/btop/theme ]]
   run mk_userledger_revert
   assert_success
-  refute_line --partial .config/btop/theme
+  refute_output --partial .config/btop/theme
   [[ -f $H/.config/btop/theme ]]
 }

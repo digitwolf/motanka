@@ -177,8 +177,9 @@ motanka() {
 @test "doctor runs no guards" {
   touch "$MOTANKA_ROOT/etc/motanka-protected"
   motanka doctor
-  assert_failure 2
-  assert_output 'motanka doctor: not implemented yet'
+  # A guard would stop it with exit 7 before any report.
+  refute_output --partial 'protected'
+  assert_output --partial 'Home folder of'
 }
 
 @test "a Dev_Build outside a VM exits 7 unless --i-know-this-is-not-a-vm is given" {
