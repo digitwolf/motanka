@@ -1,0 +1,5 @@
+# The Stack lives in /opt/motanka by design (DESIGN.md, "Linux practices"),
+# so it never shadows a host package.
+dir-or-file-in-opt
+# Stack binaries find their libraries through RUNPATH /opt/motanka/lib.
+custom-library-search-path

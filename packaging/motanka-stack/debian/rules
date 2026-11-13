@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+# Builds every Stack component listed in stack/components.tsv for the suite
+# in the changelog (noble or resolute, stamped by packaging/build.sh) with
+# prefix /opt/motanka, and splits the result into motanka-stack-libs,
+# motanka-stack-hyprland and motanka-stack-tools. The work is done by
+# debian/stack-build.sh; see the comment at its top.
+
+# LTO is off: Hyprland disables it itself ("it may break plugins"), and it
+# multiplies the memory a C++26 build of this size needs.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+
+DIST := $(shell dpkg-parsechangelog -SDistribution)
+VERSION := $(shell dpkg-parsechangelog -SVersion)
+STAGE_LIB := $(CURDIR)/debian/stack-build/stage/opt/motanka/lib
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf debian/stack-build debian/shlibs.local
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	bash debian/stack-build.sh build $(DIST)
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	bash debian/stack-build.sh install $(DIST)
+
+# dwz is optional and slow on binaries of this size.
+override_dh_dwz:
+
+# The bundled C++ runtime (noble) is a copy of the toolchain's stripped
+# library; its debug data belongs to the toolchain's own -dbgsym package.
+override_dh_strip:
+	dh_strip -Xlibstdc++.so.6 -Xlibgcc_s.so.1
+
+# The libraries live in /opt/motanka/lib, outside the ldconfig path, so no
+# ldconfig trigger and no shipped shlibs file. debian/shlibs.local maps each
+# SONAME shipped in motanka-stack-libs to an exact-version dependency.
+override_dh_makeshlibs:
+	bash debian/stack-build.sh shlibs $(DIST) $(VERSION)
+
+# -S: look for libraries in motanka-stack-libs first (they are found through
+# the RUNPATH /opt/motanka/lib). -l: the staging folder, so a library that is
+# staged but not shipped fails with "no dependency information" instead of
+# being taken from somewhere else.
+override_dh_shlibdeps:
+	dh_shlibdeps -pmotanka-stack-libs -- -xmotanka-stack-libs \
+		-Sdebian/motanka-stack-libs -l$(STAGE_LIB)
+	dh_shlibdeps -Nmotanka-stack-libs -- \
+		-Sdebian/motanka-stack-libs -l$(STAGE_LIB)

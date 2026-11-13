@@ -30,6 +30,7 @@ main() {
     exit 1
   fi
   export DEBIAN_FRONTEND=noninteractive
+  export NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1
 
   apt_update
   apt_get install ubuntu-desktop-minimal

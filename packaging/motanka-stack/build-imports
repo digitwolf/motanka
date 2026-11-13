@@ -1,0 +1,3 @@
+# Files copied into the source tree by packaging/build.sh. A path starting
+# with '/' is relative to the repository root; others to packaging/.
+/stack/components.tsv

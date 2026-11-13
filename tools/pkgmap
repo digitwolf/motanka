@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+"""Validate, compile and summarise the Package_Map (packages.yaml).
+
+usage:
+  tools/pkgmap validate --upstream <dir> --aptnames <dir> [--map FILE]
+  tools/pkgmap compile <release> [--map FILE] [-o FILE]
+  tools/pkgmap report [--map FILE]
+
+The default map is packages.yaml at the repository root.
+
+validate
+  <dir> given to --upstream is an Upstream tree; its package lists are
+  install/omarchy-base.packages, install/omarchy-other.packages and
+  install/omarchy-x86_64-only.packages (UPSTREAM_LISTS). <dir> given to
+  --aptnames holds <release>.txt for every release in RELEASES, one Ubuntu
+  package name per line. Fails, printing one line per problem, when:
+    - a package named in an Upstream list has no entry (7.2, 7.9);
+    - an apt target does not exist in that release's name list;
+    - a binary outcome lacks url, sha256 or dest;
+    - a non-apt outcome lacks a reason;
+    - the file breaks the format below, or its keys are not sorted.
+  Entries for packages that no Upstream list names are reported as warnings
+  on stderr; they do not fail validation.
+
+compile
+  Writes package-map.tsv for one release (stdout, or FILE through a
+  temporary file and a rename). First line is a "#" header; then one line
+  per Arch package, sorted by name, fields separated by tabs:
+    <arch-name>  apt      <name[,name...]>      <note or ->
+    <arch-name>  motanka  <package[,package...]>  <reason>
+    <arch-name>  flatpak  <flathub-app-id>      <reason>
+    <arch-name>  binary   <url>  <sha256>  <dest>
+    <arch-name>  skip     -                     <reason>
+  A binary line has a fifth field, dest, because a binary outcome needs
+  url, sha256 and destination.
+
+report
+  Prints the number of entries per outcome per release.
+
+Format of packages.yaml (a strict YAML subset, so no YAML library is
+needed; every valid file is also valid YAML):
+
+  # comment lines anywhere
+  <arch-name>:
+    all: {<outcome>}            the same outcome on every release, or
+    noble: {<outcome>}          one line per release, all releases present
+    resolute: {<outcome>}
+
+  <outcome> is a flow mapping with exactly one kind key and, where noted,
+  a reason:
+    {apt: <name>}  or  {apt: [<name>, <name>]}   optional reason: a note
+    {motanka: <package>}  or a list               reason required
+    {flatpak: <app-id>}                           reason required
+    {binary: {dest: <path>, sha256: <hex>, url: "<https-url>"}, reason: ...}
+    {skip: "<reason>"}
+
+  Scalars are plain (letters, digits and @ . _ + / ~ -) or double-quoted
+  (escapes \\" and \\\\ only). Top-level keys are unique and sorted in byte
+  order; release keys come in the order all, noble, resolute; keys inside a
+  flow mapping are sorted.
+
+Exit codes: 0 success, 1 validation problems, 2 usage or input error.
+Python 3 standard library only.
+"""
+
+import argparse
+import os
+import re
+import sys
+import tempfile
+
+RELEASES = ("noble", "resolute")
+RELEASE_KEYS = ("all",) + RELEASES
+KINDS = ("apt", "motanka", "flatpak", "binary", "skip")
+UPSTREAM_LISTS = (
+    "install/omarchy-base.packages",
+    "install/omarchy-other.packages",
+    "install/omarchy-x86_64-only.packages",
+)
+NAMESPACED_HOME = (
+    "~/.config/omarchy/",
+    "~/.local/share/omarchy/",
+    "~/.local/state/omarchy/",
+    "~/.local/state/motanka/",
+    "~/.cache/omarchy/",
+    "~/.cache/motanka/",
+)
+MAX_REASON = 200
+
+ARCH_NAME_RE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]*$")
+DEB_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
+FLATPAK_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PLAIN_RE = re.compile(r"[A-Za-z0-9@._+/~-]+")
+KEY_RE = re.compile(r"[a-z0-9]+")
+TOP_RE = re.compile(r"^([^\s:#][^\s:]*):\s*$")
+RELEASE_RE = re.compile(r"^  ([a-z]+):[ ]+(\{.*)$")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MAP = os.path.join(os.path.dirname(HERE), "packages.yaml")
+
+
+class InputError(Exception):
+    pass
+
+
+class ParseError(Exception):
+    pass
+
+
+# --- parser -----------------------------------------------------------------
+
+
+class FlowParser:
+    """Recursive-descent parser for one flow mapping on one line."""
+
+    def __init__(self, text):
+        self.s = text
+        self.i = 0
+
+    def error(self, msg):
+        raise ParseError(f"column {self.i + 1}: {msg}")
+
+    def ws(self):
+        while self.i < len(self.s) and self.s[self.i] == " ":
+            self.i += 1
+
+    def peek(self):
+        return self.s[self.i] if self.i < len(self.s) else ""
+
+    def expect(self, ch):
+        self.ws()
+        if self.peek() != ch:
+            self.error(f"expected '{ch}'")
+        self.i += 1
+
+    def scalar(self):
+        self.ws()
+        if self.peek() == '"':
+            self.i += 1
+            out = []
+            while True:
+                if self.i >= len(self.s):
+                    self.error("unterminated string")
+                c = self.s[self.i]
+                if c == "\\":
+                    nxt = self.s[self.i + 1:self.i + 2]
+                    if nxt not in ('"', "\\"):
+                        self.error("only \\\" and \\\\ escapes are allowed")
+                    out.append(nxt)
+                    self.i += 2
+                    continue
+                if c == '"':
+                    self.i += 1
+                    return "".join(out)
+                if c == "\t" or ord(c) < 0x20:
+                    self.error("control character in string")
+                out.append(c)
+                self.i += 1
+        m = PLAIN_RE.match(self.s, self.i)
+        if not m:
+            self.error("expected a value")
+        self.i = m.end()
+        return m.group(0)
+
+    def value(self):
+        self.ws()
+        c = self.peek()
+        if c == "{":
+            return self.mapping()
+        if c == "[":
+            return self.sequence()
+        return self.scalar()
+
+    def sequence(self):
+        self.expect("[")
+        items = []
+        while True:
+            items.append(self.scalar())
+            self.ws()
+            if self.peek() == ",":
+                self.i += 1
+                continue
+            self.expect("]")
+            return items
+
+    def mapping(self):
+        self.expect("{")
+        keys = []
+        out = {}
+        while True:
+            self.ws()
+            m = KEY_RE.match(self.s, self.i)
+            if not m:
+                self.error("expected a key")
+            key = m.group(0)
+            self.i = m.end()
+            if self.peek() != ":":
+                self.error("expected ':' after key")
+            self.i += 1
+            if self.peek() != " ":
+                self.error("expected a space after ':'")
+            if key in out:
+                self.error(f"duplicate key '{key}'")
+            out[key] = self.value()
+            keys.append(key)
+            self.ws()
+            if self.peek() == ",":
+                self.i += 1
+                continue
+            self.expect("}")
+            if keys != sorted(keys):
+                raise ParseError(f"keys {keys} are not sorted")
+            return out
+
+    def parse(self):
+        result = self.mapping()
+        self.ws()
+        rest = self.s[self.i:]
+        if rest and not rest.startswith("#"):
+            self.error("unexpected text after '}'")
+        return result
+
+
+def parse_map(path):
+    """Returns ({arch-name: {release-key: outcome}}, [problems])."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except (OSError, UnicodeDecodeError) as e:
+        raise InputError(f"{path}: {e}")
+    entries = {}
+    order = []
+    problems = []
+    current = None
+    for n, line in enumerate(lines, 1):
+        where = f"{os.path.basename(path)}:{n}"
+        if line.strip() == "" or line.lstrip().startswith("#"):
+            continue
+        if "\t" in line:
+            problems.append(f"{where}: tab character")
+            continue
+        m = TOP_RE.match(line)
+        if m:
+            name = m.group(1)
+            if not ARCH_NAME_RE.match(name):
+                problems.append(f"{where}: invalid package name '{name}'")
+            if name in entries:
+                problems.append(f"{where}: duplicate entry '{name}'")
+                current = None
+                continue
+            entries[name] = {}
+            order.append(name)
+            current = name
+            continue
+        m = RELEASE_RE.match(line)
+        if m and current is not None:
+            rel = m.group(1)
+            if rel not in RELEASE_KEYS:
+                problems.append(f"{where}: unknown release '{rel}'")
+                continue
+            if rel in entries[current]:
+                problems.append(f"{where}: duplicate release '{rel}' for {current}")
+                continue
+            try:
+                entries[current][rel] = FlowParser(m.group(2)).parse()
+            except ParseError as e:
+                problems.append(f"{where}: {e}")
+                entries[current][rel] = None
+            continue
+        problems.append(f"{where}: line does not match the format")
+    if order != sorted(order):
+        for a, b in zip(order, order[1:]):
+            if b < a:
+                problems.append(f"entries not sorted: '{b}' comes after '{a}'")
+    for name in order:
+        rels = [r for r in RELEASE_KEYS if r in entries[name]]
+        if not rels:
+            problems.append(f"{name}: no outcome")
+        elif "all" in rels and len(rels) > 1:
+            problems.append(f"{name}: 'all' cannot be combined with a release")
+        elif "all" not in rels:
+            missing = [r for r in RELEASES if r not in rels]
+            if missing:
+                problems.append(f"{name}: no outcome for {', '.join(missing)}")
+    return entries, problems
+
+
+# --- outcome checks ----------------------------------------------------------
+
+
+def as_list(value):
+    return value if isinstance(value, list) else [value]
+
+
+def text_ok(value):
+    return isinstance(value, str) and value != "" and not any(
+        ord(c) < 0x20 or c == "\x7f" for c in value)
+
+
+def check_reason(where, outcome, required):
+    problems = []
+    if "reason" not in outcome:
+        if required:
+            problems.append(f"{where}: non-apt outcome without a reason")
+        return problems
+    r = outcome["reason"]
+    if not text_ok(r):
+        problems.append(f"{where}: reason must be a non-empty string")
+    elif len(r) > MAX_REASON:
+        problems.append(f"{where}: reason longer than {MAX_REASON} characters")
+    return problems
+
+
+def check_outcome(where, outcome):
+    """Structural checks of one outcome; returns problems."""
+    if not isinstance(outcome, dict):
+        return [f"{where}: outcome must be a mapping"]
+    kinds = [k for k in outcome if k in KINDS]
+    extra = [k for k in outcome if k not in KINDS and k != "reason"]
+    problems = [f"{where}: unknown key '{k}'" for k in extra]
+    if len(kinds) != 1:
+        return problems + [f"{where}: exactly one of {', '.join(KINDS)} is required"]
+    kind = kinds[0]
+    value = outcome[kind]
+    if kind == "apt":
+        for name in as_list(value):
+            if not isinstance(name, str) or not DEB_NAME_RE.match(name):
+                problems.append(f"{where}: invalid apt name '{name}'")
+        problems += check_reason(where, outcome, required=False)
+    elif kind == "motanka":
+        for name in as_list(value):
+            if not isinstance(name, str) or not (
+                    name == "motanka" or (name.startswith("motanka-") and DEB_NAME_RE.match(name))):
+                problems.append(f"{where}: '{name}' is not a Motanka_Package name")
+        problems += check_reason(where, outcome, required=True)
+    elif kind == "flatpak":
+        if not isinstance(value, str) or not FLATPAK_RE.match(value):
+            problems.append(f"{where}: invalid Flatpak app ID '{value}'")
+        problems += check_reason(where, outcome, required=True)
+    elif kind == "binary":
+        if not isinstance(value, dict):
+            problems.append(f"{where}: binary needs a mapping with url, sha256 and dest")
+        else:
+            for key in ("url", "sha256", "dest"):
+                if key not in value:
+                    problems.append(f"{where}: binary without {key}")
+            for key in value:
+                if key not in ("url", "sha256", "dest"):
+                    problems.append(f"{where}: unknown binary key '{key}'")
+            url = value.get("url")
+            if url is not None and (not text_ok(url) or not url.startswith("https://")):
+                problems.append(f"{where}: binary url must start with https://")
+            sha = value.get("sha256")
+            if sha is not None and (not isinstance(sha, str) or not SHA256_RE.match(sha)):
+                problems.append(f"{where}: binary sha256 must be 64 lowercase hex digits")
+            dest = value.get("dest")
+            if dest is not None and not (
+                    text_ok(dest) and ".." not in dest.split("/") and (
+                        dest.startswith("/opt/motanka/")
+                        or any(dest.startswith(p) for p in NAMESPACED_HOME))):
+                problems.append(f"{where}: binary dest must be under /opt/motanka/ or a Namespaced_Path")
+        problems += check_reason(where, outcome, required=True)
+    elif kind == "skip":
+        if "reason" in outcome:
+            problems.append(f"{where}: skip carries its reason as its value")
+        if not text_ok(value):
+            problems.append(f"{where}: skip needs a non-empty reason")
+        elif len(value) > MAX_REASON:
+            problems.append(f"{where}: reason longer than {MAX_REASON} characters")
+    return problems
+
+
+def outcome_for(entry, release):
+    return entry.get("all", entry.get(release))
+
+
+def kind_of(outcome):
+    for k in KINDS:
+        if k in outcome:
+            return k
+    return None
+
+
+def structural_problems(entries):
+    problems = []
+    for name, rels in entries.items():
+        for rel, outcome in rels.items():
+            if outcome is None:
+                continue
+            problems += check_outcome(f"{name} ({rel})", outcome)
+    return problems
+
+
+# --- inputs ------------------------------------------------------------------
+
+
+def read_upstream(upstream):
+    names = set()
+    for rel in UPSTREAM_LISTS:
+        path = os.path.join(upstream, rel)
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.split("#", 1)[0].strip()
+                    if line:
+                        names.add(line)
+        except (OSError, UnicodeDecodeError) as e:
+            raise InputError(f"cannot read Upstream list {path}: {e}")
+    return names
+
+
+def read_aptnames(aptdir):
+    out = {}
+    for rel in RELEASES:
+        path = os.path.join(aptdir, rel + ".txt")
+        try:
+            with open(path, encoding="utf-8") as f:
+                out[rel] = {line.strip() for line in f if line.strip()}
+        except (OSError, UnicodeDecodeError) as e:
+            raise InputError(f"cannot read apt name list {path}: {e}")
+        if not out[rel]:
+            raise InputError(f"apt name list {path} is empty")
+    return out
+
+
+# --- commands ----------------------------------------------------------------
+
+
+def cmd_validate(args):
+    entries, problems = parse_map(args.map)
+    problems += structural_problems(entries)
+    upstream = read_upstream(args.upstream)
+    aptnames = read_aptnames(args.aptnames)
+    for name in sorted(upstream - set(entries)):
+        problems.append(f"{name}: in an Upstream list but not in the Package_Map")
+    for name in sorted(entries):
+        for rel in RELEASES:
+            outcome = outcome_for(entries[name], rel)
+            if not isinstance(outcome, dict) or kind_of(outcome) != "apt":
+                continue
+            for target in as_list(outcome["apt"]):
+                if isinstance(target, str) and target not in aptnames[rel]:
+                    problems.append(f"{name} ({rel}): apt package '{target}' does not exist in {rel}")
+    for name in sorted(set(entries) - upstream):
+        print(f"pkgmap: warning: {name}: not in any Upstream list", file=sys.stderr)
+    for p in problems:
+        print(p)
+    if problems:
+        print(f"pkgmap: {len(problems)} problem(s) in {args.map}", file=sys.stderr)
+        return 1
+    print(f"pkgmap: {len(entries)} entries, {len(upstream)} Upstream packages, no problems",
+          file=sys.stderr)
+    return 0
+
+
+def tsv_field(value):
+    if any(c in value for c in "\t\n\r"):
+        raise InputError(f"value {value!r} contains a tab or newline")
+    return value
+
+
+def compile_lines(entries, release):
+    lines = [f"# package-map.tsv for {release}, generated by tools/pkgmap from packages.yaml; do not edit"]
+    for name in sorted(entries):
+        o = outcome_for(entries[name], release)
+        kind = kind_of(o)
+        if kind == "apt":
+            row = [name, "apt", ",".join(as_list(o["apt"])), o.get("reason", "-")]
+        elif kind in ("motanka", "flatpak"):
+            row = [name, kind, ",".join(as_list(o[kind])), o["reason"]]
+        elif kind == "binary":
+            b = o["binary"]
+            row = [name, "binary", b["url"], b["sha256"], b["dest"]]
+        else:
+            row = [name, "skip", "-", o["skip"]]
+        lines.append("\t".join(tsv_field(v) for v in row))
+    return lines
+
+
+def load_valid(path):
+    entries, problems = parse_map(path)
+    problems += structural_problems(entries)
+    if problems:
+        for p in problems:
+            print(p)
+        print(f"pkgmap: {path} has {len(problems)} problem(s); run 'tools/pkgmap validate'",
+              file=sys.stderr)
+        return None
+    return entries
+
+
+def cmd_compile(args):
+    if args.release not in RELEASES:
+        raise InputError(f"unknown release '{args.release}' (expected {' or '.join(RELEASES)})")
+    entries = load_valid(args.map)
+    if entries is None:
+        return 1
+    text = "\n".join(compile_lines(entries, args.release)) + "\n"
+    if args.output in (None, "-"):
+        sys.stdout.write(text)
+        return 0
+    out = os.path.abspath(args.output)
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".package-map.", dir=os.path.dirname(out))
+    except OSError as e:
+        raise InputError(f"cannot write {out}: {e}")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, out)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise InputError(f"cannot write {out}: {e}")
+    return 0
+
+
+def cmd_report(args):
+    entries = load_valid(args.map)
+    if entries is None:
+        return 1
+    counts = {rel: {k: 0 for k in KINDS} for rel in RELEASES}
+    for name in entries:
+        for rel in RELEASES:
+            counts[rel][kind_of(outcome_for(entries[name], rel))] += 1
+    width = max(len(r) for r in RELEASES)
+    print("outcome  " + "  ".join(f"{r:>{width}}" for r in RELEASES))
+    for k in KINDS:
+        print(f"{k:<7}  " + "  ".join(f"{counts[r][k]:>{width}}" for r in RELEASES))
+    print(f"{'total':<7}  " + "  ".join(f"{sum(counts[r].values()):>{width}}" for r in RELEASES))
+    return 0
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"pkgmap: {message}", file=sys.stderr)
+        sys.exit(2)
+
+
+def main(argv):
+    p = Parser(prog="tools/pkgmap", description="Validate, compile and summarise packages.yaml.")
+    sub = p.add_subparsers(dest="command", parser_class=Parser)
+    v = sub.add_parser("validate", help="check the map against Upstream and the apt name lists")
+    v.add_argument("--upstream", required=True, help="Upstream tree with install/*.packages")
+    v.add_argument("--aptnames", required=True, help="folder with <release>.txt name lists")
+    v.add_argument("--map", default=DEFAULT_MAP)
+    c = sub.add_parser("compile", help="write package-map.tsv for one release")
+    c.add_argument("release")
+    c.add_argument("--map", default=DEFAULT_MAP)
+    c.add_argument("-o", "--output", help="output file (default: stdout)")
+    r = sub.add_parser("report", help="count outcomes per release")
+    r.add_argument("--map", default=DEFAULT_MAP)
+    args = p.parse_args(argv)
+    if args.command is None:
+        p.error("a command is required: validate, compile or report")
+    try:
+        if args.command == "validate":
+            return cmd_validate(args)
+        if args.command == "compile":
+            return cmd_compile(args)
+        return cmd_report(args)
+    except InputError as e:
+        print(f"pkgmap: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

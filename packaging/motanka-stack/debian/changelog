@@ -1,0 +1,6 @@
+motanka-stack (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial Stack packages: Hyprland 0.57.2 and its libraries and companion
+    programs under /opt/motanka, built with GCC 16.
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

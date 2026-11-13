@@ -1,0 +1,10 @@
+Source of the Motanka Stack packages: motanka-stack-libs,
+motanka-stack-hyprland, motanka-stack-tools and the motanka-stack
+metapackage. All files install under /opt/motanka.
+
+The upstream components are listed in stack/components.tsv (imported into
+this source package by build-imports). stack/fetch-sources downloads and
+verifies them; test/vm/build passes them to packaging/build.sh as
+dpkg-source 3.0 (quilt) orig-<component> tarballs. debian/control is
+generated per suite from debian/control.in, and the noble build gets GCC 16
+from the Ubuntu toolchain PPA (sbuild-repos), at build time only.

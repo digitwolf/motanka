@@ -1,0 +1,485 @@
+# Package_Map: one outcome per Supported_Release for every package named in
+# Upstream's package lists.
+#
+# Upstream pin: basecamp/omarchy v4.5.0 (stable),
+#   commit ac2690cd7be4f47e4a255f5e2e78d904d436b068
+# Lists: install/omarchy-base.packages, install/omarchy-other.packages and
+#   install/omarchy-x86_64-only.packages. The aarch64 lists are out of scope.
+#
+# Format: a strict YAML subset, documented in tools/pkgmap. Entries are
+# sorted in byte order; each has `all` or one line per release:
+#   name:
+#     all: {apt: ubuntu-name}               or {apt: [name, name]}
+#     noble: {motanka: motanka-pkg, reason: "..."}
+#     resolute: {flatpak: org.example.App, reason: "..."}
+#   binary: {binary: {dest: /opt/motanka/..., sha256: <hex>, url: "https://..."}, reason: "..."}
+#   skip:   {skip: "reason"}
+# Every outcome other than apt carries a reason. On apt, a reason is a note.
+#
+# This file is maintained by hand. After a pin bump, check it with
+#   tools/pkgmap validate --upstream <upstream-tree> --aptnames <dir>
+# where <dir> holds noble.txt and resolute.txt, every package name in that
+# release's main and universe archive (with -updates and -security), one
+# per line. Validation names each Upstream package without an entry and
+# each apt name missing from a release; add or fix those entries and rerun.
+# Build input for a release: tools/pkgmap compile <release> -o package-map.tsv
+
+aether:
+  all: {skip: "Upstream repository package; port pending"}
+alsa-utils:
+  all: {apt: alsa-utils}
+apple-bcm-firmware-fetcher:
+  all: {skip: "host drivers stay the host's"}
+apple-t2-audio-config:
+  all: {skip: "host drivers stay the host's"}
+asdcontrol:
+  all: {skip: "Upstream repository package; port pending"}
+asus-proart-p14-speaker-firmware:
+  all: {skip: "host drivers stay the host's"}
+asusctl:
+  all: {skip: "host drivers stay the host's"}
+autoconf-archive:
+  all: {apt: autoconf-archive}
+avahi:
+  all: {apt: avahi-daemon}
+base:
+  all: {skip: "Arch base system; the host is Ubuntu"}
+base-devel:
+  all: {apt: build-essential}
+bash-completion:
+  all: {apt: bash-completion}
+bat:
+  all: {apt: bat, reason: "Ubuntu installs the command as batcat"}
+bluez:
+  all: {apt: bluez}
+bluez-tools:
+  all: {apt: bluez-tools}
+bluez-utils:
+  all: {apt: bluez, reason: "Ubuntu's bluez includes bluetoothctl"}
+bolt:
+  all: {apt: bolt}
+brightnessctl:
+  all: {apt: brightnessctl}
+broadcom-wl-dkms:
+  all: {skip: "host drivers stay the host's"}
+btop:
+  all: {apt: btop}
+btrfs-progs:
+  all: {skip: "filesystem tooling with initramfs hooks stays the host's"}
+chromium:
+  all: {flatpak: org.chromium.Chromium, reason: "Ubuntu ships Chromium only as a snap"}
+cliamp:
+  all: {skip: "Upstream repository package; port pending"}
+cups:
+  all: {apt: cups}
+cups-filters:
+  all: {apt: cups-filters}
+cups-pk-helper:
+  all: {apt: cups-pk-helper}
+ddcutil:
+  all: {apt: ddcutil}
+dell-xps-touchpad-haptics:
+  all: {skip: "host drivers stay the host's"}
+dell-xps13-sidecar-amps:
+  all: {skip: "host drivers stay the host's"}
+disktree-bin:
+  all: {skip: "Upstream repository package; port pending"}
+dkms:
+  all: {skip: "Motanka installs no kernel modules and no DKMS"}
+docker:
+  all: {apt: docker.io}
+docker-buildx:
+  all: {apt: docker-buildx}
+docker-compose:
+  all: {apt: docker-compose-v2, reason: "Compose v2, the version Arch ships"}
+dosfstools:
+  all: {apt: dosfstools}
+dotnet-runtime:
+  all: {apt: dotnet-runtime-10.0}
+egl-wayland:
+  all: {skip: "host drivers stay the host's"}
+evince:
+  all: {apt: evince}
+exfatprogs:
+  all: {apt: exfatprogs}
+expac:
+  all: {skip: "Arch package tool; the Compat_Layer shims replace it"}
+eza:
+  all: {apt: eza}
+fakeroot:
+  all: {apt: fakeroot}
+fastfetch:
+  noble: {skip: "not in the 24.04 archive; needs a decision"}
+  resolute: {apt: fastfetch}
+fcitx5:
+  all: {apt: fcitx5}
+fcitx5-chewing:
+  all: {apt: fcitx5-chewing}
+fcitx5-chinese-addons:
+  all: {apt: fcitx5-chinese-addons}
+fcitx5-gtk:
+  all: {apt: [fcitx5-frontend-gtk3, fcitx5-frontend-gtk4]}
+fcitx5-hangul:
+  all: {apt: fcitx5-hangul}
+fcitx5-mozc:
+  all: {apt: fcitx5-mozc}
+fcitx5-qt:
+  all: {apt: [fcitx5-frontend-qt5, fcitx5-frontend-qt6]}
+fcitx5-table-extra:
+  all: {apt: fcitx5-table-extra}
+fd:
+  all: {apt: fd-find, reason: "Ubuntu installs the command as fdfind"}
+ffmpeg:
+  all: {apt: ffmpeg}
+ffmpegthumbnailer:
+  all: {apt: ffmpegthumbnailer}
+fontconfig:
+  all: {apt: fontconfig}
+foot:
+  all: {apt: foot}
+fzf:
+  all: {apt: fzf}
+git:
+  all: {apt: git}
+gliff:
+  all: {skip: "Upstream repository package; port pending"}
+gnome-disk-utility:
+  all: {apt: gnome-disk-utility}
+gnome-keyring:
+  all: {apt: gnome-keyring}
+gnome-themes-extra:
+  all: {apt: gnome-themes-extra}
+gpu-screen-recorder:
+  all: {skip: "needs a decision: Flathub has com.dec05eba.gpu_screen_recorder, but Upstream calls the command"}
+grim:
+  all: {apt: grim}
+gst-plugin-pipewire:
+  all: {apt: gstreamer1.0-pipewire}
+gtk4-layer-shell:
+  noble: {skip: "not in the 24.04 archive; needs a decision"}
+  resolute: {apt: libgtk4-layer-shell0}
+gum:
+  noble: {skip: "not in the 24.04 archive; needs a decision"}
+  resolute: {apt: gum}
+gvfs-mtp:
+  all: {apt: gvfs-backends}
+gvfs-nfs:
+  all: {apt: gvfs-backends}
+gvfs-smb:
+  all: {apt: gvfs-backends}
+herdr:
+  all: {skip: "Upstream repository package; port pending"}
+hype:
+  all: {skip: "Upstream repository package; port pending"}
+hyprland:
+  all: {motanka: motanka-stack-hyprland, reason: "Stack build at the version Upstream expects"}
+hyprland-guiutils:
+  all: {motanka: motanka-stack-hyprland, reason: "Stack build at the version Upstream expects"}
+hyprland-preview-share-picker:
+  all: {skip: "Upstream repository package; port pending"}
+hyprpicker:
+  all: {motanka: motanka-stack-tools, reason: "Stack build at the version Upstream expects"}
+hyprsunset:
+  all: {motanka: motanka-stack-tools, reason: "Stack build at the version Upstream expects"}
+imagemagick:
+  all: {apt: imagemagick}
+imv:
+  all: {apt: imv}
+inetutils:
+  all: {apt: hostname, reason: "Upstream needs the hostname command, which Ubuntu ships in hostname"}
+inotify-tools:
+  all: {apt: inotify-tools}
+intel-ipu7-camera:
+  all: {skip: "host drivers stay the host's"}
+intel-lpmd:
+  all: {skip: "host power management stays the host's"}
+intel-media-driver:
+  all: {skip: "host drivers stay the host's"}
+inxi:
+  all: {apt: inxi}
+jq:
+  all: {apt: jq}
+kernel-modules-hook:
+  all: {skip: "kernel and boot changes are out of scope"}
+lazygit:
+  noble: {skip: "not in the 24.04 archive; needs a decision"}
+  resolute: {apt: lazygit}
+less:
+  all: {apt: less}
+lib32-nvidia-580xx-utils:
+  all: {skip: "host drivers stay the host's"}
+lib32-nvidia-utils:
+  all: {skip: "host drivers stay the host's"}
+libpulse:
+  all: {apt: libpulse0}
+libreoffice-fresh:
+  all: {apt: libreoffice}
+libsecret:
+  all: {apt: libsecret-tools, reason: "secret-tool and the library"}
+libva-intel-driver:
+  all: {skip: "host drivers stay the host's"}
+libva-nvidia-driver:
+  all: {skip: "host drivers stay the host's"}
+libvips:
+  all: {apt: libvips-tools, reason: "vips commands and the library"}
+libvpl:
+  all: {skip: "host drivers stay the host's"}
+libyaml:
+  all: {apt: libyaml-dev, reason: "headers included, as Arch's package has them"}
+limine:
+  all: {skip: "bootloader changes are out of scope"}
+limine-mkinitcpio-hook:
+  all: {skip: "bootloader and initramfs changes are out of scope"}
+limine-snapper-sync:
+  all: {skip: "bootloader changes are out of scope"}
+linux-firmware:
+  all: {skip: "host drivers stay the host's"}
+linux-firmware-cirrus-dx13260:
+  all: {skip: "host drivers stay the host's"}
+linux-firmware-marvell:
+  all: {skip: "host drivers stay the host's"}
+linux-omarchy:
+  all: {skip: "kernel and boot changes are out of scope"}
+linux-omarchy-headers:
+  all: {skip: "kernel and boot changes are out of scope"}
+linux-t2:
+  all: {skip: "kernel and boot changes are out of scope"}
+linux-t2-headers:
+  all: {skip: "kernel and boot changes are out of scope"}
+localsend:
+  all: {flatpak: org.localsend.localsend_app, reason: "not in the Ubuntu archive; Upstream also ships it as a Flatpak"}
+lsp-plugins-lv2:
+  all: {apt: lsp-plugins-lv2}
+lua51:
+  all: {apt: lua5.1}
+luarocks:
+  all: {apt: luarocks}
+macbook12-spi-driver-dkms:
+  all: {skip: "host drivers stay the host's"}
+man-db:
+  all: {apt: man-db}
+mariadb-libs:
+  all: {apt: libmariadb-dev, reason: "headers included, as Arch's package has them"}
+mise-bin:
+  all: {skip: "not in the Ubuntu archive; needs a decision"}
+monologue:
+  all: {skip: "Upstream repository package; port pending"}
+moonlight-qt:
+  all: {flatpak: com.moonlight_stream.Moonlight, reason: "not in the Ubuntu archive"}
+mpv:
+  all: {apt: mpv}
+mpv-mpris:
+  all: {apt: mpv-mpris}
+nautilus:
+  all: {apt: nautilus}
+nautilus-python:
+  all: {apt: python3-nautilus}
+networkmanager:
+  all: {apt: network-manager}
+noto-fonts:
+  all: {apt: fonts-noto-core}
+noto-fonts-cjk:
+  all: {apt: fonts-noto-cjk}
+noto-fonts-emoji:
+  all: {apt: fonts-noto-color-emoji}
+nss-mdns:
+  all: {apt: libnss-mdns}
+nvidia-580xx-dkms:
+  all: {skip: "host drivers stay the host's"}
+nvidia-580xx-utils:
+  all: {skip: "host drivers stay the host's"}
+nvidia-dkms:
+  all: {skip: "host drivers stay the host's"}
+nvidia-open-dkms:
+  all: {skip: "host drivers stay the host's"}
+nvidia-utils:
+  all: {skip: "host drivers stay the host's"}
+nvim:
+  all: {apt: neovim}
+obsidian:
+  all: {flatpak: md.obsidian.Obsidian, reason: "not in the Ubuntu archive; distributed upstream as a Flatpak"}
+omacalc:
+  all: {skip: "Upstream repository package; port pending"}
+omacut:
+  all: {skip: "Upstream repository package; port pending"}
+omarchy-hyprland-titlebars:
+  all: {skip: "Upstream repository package; port pending"}
+omarchy-nvim:
+  all: {skip: "Upstream repository package; port pending"}
+omarchy-power-profiles-daemon:
+  all: {skip: "Upstream repository package; port pending"}
+omasnap:
+  all: {skip: "Upstream repository package; port pending"}
+omawrite:
+  all: {skip: "Upstream repository package; port pending"}
+owe:
+  all: {skip: "Upstream repository package; port pending"}
+pacman-contrib:
+  all: {skip: "Arch package tool; the Compat_Layer shims replace it"}
+pamixer:
+  all: {apt: pamixer}
+pinta:
+  all: {flatpak: com.github.PintaProject.Pinta, reason: "not in the Ubuntu archive"}
+pipewire:
+  all: {apt: pipewire}
+pipewire-alsa:
+  all: {apt: pipewire-alsa}
+pipewire-jack:
+  all: {apt: pipewire-jack}
+pipewire-libcamera:
+  all: {apt: pipewire-libcamera}
+pipewire-pulse:
+  all: {apt: pipewire-pulse}
+plocate:
+  all: {apt: plocate}
+plymouth:
+  all: {skip: "boot splash changes are out of scope"}
+postgresql-libs:
+  all: {apt: libpq-dev, reason: "headers included, as Arch's package has them"}
+python-gobject:
+  all: {apt: python3-gi}
+python-poetry-core:
+  all: {apt: python3-poetry-core}
+qemu-user-static-binfmt:
+  noble: {apt: qemu-user-static}
+  resolute: {apt: qemu-user-binfmt, reason: "26.04 builds qemu-user statically and registers it here"}
+qmk-hid:
+  all: {skip: "host drivers stay the host's"}
+qrencode:
+  all: {apt: qrencode}
+qt6-base:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qt6-qpa-plugins, reason: "Qt GUI runtime and platform plugins"}
+qt6-declarative:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qml6-module-qtquick, reason: "QML and Qt Quick runtime"}
+qt6-imageformats:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qt6-image-formats-plugins}
+qt6-multimedia:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qml6-module-qtmultimedia, reason: "Qt Multimedia runtime and its QML module"}
+qt6-svg:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qt6-svg-plugins}
+qt6-wayland:
+  noble: {motanka: motanka-qt6, reason: "24.04 has Qt 6.4; Quickshell needs 6.6 or later, so the Stack bundles Qt"}
+  resolute: {apt: qt6-wayland}
+quickshell:
+  noble: {motanka: motanka-stack-shell, reason: "Stack build of Quickshell, using the bundled motanka-qt6"}
+  resolute: {motanka: motanka-stack-shell, reason: "Stack build of Quickshell against the system Qt"}
+ripgrep:
+  all: {apt: ripgrep}
+ruby:
+  all: {apt: ruby}
+sddm:
+  all: {skip: "Motanka uses the host's display manager"}
+signed:
+  all: {skip: "Upstream repository package; port pending"}
+slurp:
+  all: {apt: slurp}
+snapper:
+  all: {skip: "snapper stays the host's; the Updater uses it only where it is already configured"}
+socat:
+  all: {apt: socat}
+sof-firmware:
+  all: {skip: "host drivers stay the host's"}
+starship:
+  noble: {skip: "not in the 24.04 archive; needs a decision"}
+  resolute: {apt: starship}
+superwhisper-bin:
+  all: {skip: "Upstream repository package; port pending"}
+sushi:
+  all: {apt: gnome-sushi}
+system-config-printer:
+  all: {apt: system-config-printer}
+t2fanrd:
+  all: {skip: "host drivers stay the host's"}
+tesseract:
+  all: {apt: tesseract-ocr}
+tesseract-data-eng:
+  all: {apt: tesseract-ocr-eng}
+thermald:
+  all: {skip: "host power management stays the host's"}
+tldr:
+  all: {apt: tldr-py, reason: "the Python tldr client, as on Arch"}
+tmux:
+  all: {apt: tmux}
+tobi-try:
+  all: {skip: "Upstream repository package; port pending"}
+tree-sitter-cli:
+  all: {apt: tree-sitter-cli}
+ttf-ia-writer:
+  all: {skip: "Upstream repository package; port pending"}
+ttf-jetbrains-mono-nerd-basic:
+  all: {skip: "Upstream repository package; port pending"}
+ttfx:
+  all: {skip: "Upstream repository package; port pending"}
+tuxedo-drivers-nocompatcheck-dkms:
+  all: {skip: "host drivers stay the host's"}
+tzupdate:
+  all: {skip: "Upstream repository package; port pending"}
+udiskie:
+  all: {apt: udiskie}
+ufw:
+  all: {apt: ufw}
+ufw-docker:
+  all: {skip: "Upstream repository package; port pending"}
+unzip:
+  all: {apt: unzip}
+usage:
+  all: {skip: "Upstream repository package; port pending"}
+uwsm:
+  all: {motanka: motanka-stack-tools, reason: "Stack ships uwsm so both releases run the version Upstream expects (S2)"}
+v4l2-relayd:
+  all: {skip: "host drivers stay the host's"}
+v4l2loopback-dkms:
+  all: {skip: "host drivers stay the host's"}
+v4l2loopback-utils:
+  all: {skip: "needs the v4l2loopback kernel module; host drivers stay the host's"}
+vi:
+  all: {apt: vim-tiny, reason: "provides the vi command"}
+vpl-gpu-rt:
+  all: {skip: "host drivers stay the host's"}
+vulkan-asahi:
+  all: {skip: "host drivers stay the host's"}
+vulkan-intel:
+  all: {skip: "host drivers stay the host's"}
+vulkan-radeon:
+  all: {skip: "host drivers stay the host's"}
+webp-pixbuf-loader:
+  all: {apt: webp-pixbuf-loader}
+whois:
+  all: {apt: whois}
+wireless-regdb:
+  all: {apt: wireless-regdb}
+wireplumber:
+  all: {apt: wireplumber}
+wl-clipboard:
+  all: {apt: wl-clipboard}
+woff2-font-awesome:
+  all: {apt: fonts-font-awesome}
+wtype:
+  all: {apt: wtype}
+xdg-desktop-portal-gtk:
+  all: {apt: xdg-desktop-portal-gtk}
+xdg-desktop-portal-hyprland:
+  all: {motanka: motanka-stack-hyprland, reason: "Stack build matching the Stack's Hyprland"}
+xdg-terminal-exec:
+  all: {apt: xdg-terminal-exec}
+xorg-xsetroot:
+  all: {apt: x11-xserver-utils, reason: "provides xsetroot"}
+yaru-icon-theme:
+  all: {apt: yaru-theme-icon}
+yay:
+  all: {skip: "Arch package tool; the Compat_Layer shims replace it"}
+yay-debug:
+  all: {skip: "Arch package tool; the Compat_Layer shims replace it"}
+yt-dlp:
+  all: {apt: yt-dlp}
+zbar:
+  all: {apt: zbar-tools}
+zoxide:
+  all: {apt: zoxide}
+zram-generator:
+  all: {skip: "system swap configuration stays the host's"}

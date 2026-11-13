@@ -1,0 +1,15 @@
+# The orig-<component> tarballs are upstream release tarballs and tag
+# archives, used unmodified and pinned by SHA-256 in stack/components.tsv.
+# Their test data, documentation and bundled third-party trees (for example
+# Hyprland's tracy submodule and CMake's test suite) are not rebuilt from
+# source because nothing from them is built or shipped.
+source-is-missing
+source-contains-prebuilt-binary
+source-contains-prebuilt-windows-binary
+source-contains-prebuilt-javascript-object
+source-contains-prebuilt-wasm-binary
+source-contains-prebuilt-java-object
+source-contains-prebuilt-ms-help-file
+source-contains-prebuilt-doxygen-documentation
+source-contains-prebuilt-sphinx-documentation
+very-long-line-length-in-source-file

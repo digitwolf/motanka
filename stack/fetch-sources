@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Download and verify the upstream tarballs of the Motanka Stack.
+
+Usage:
+  stack/fetch-sources [--out DIR] [--update-checksums] [--version V]
+  stack/fetch-sources --check
+
+Reads stack/components.tsv. For every component it downloads the tarball
+into DIR/downloads/<name>-<version>.tar.<ext> (skipped when a file with the
+pinned SHA-256 is already there), verifies its SHA-256 and checks that it
+holds exactly one top-level folder with no absolute or '..' paths. When all
+components pass, DIR/orig/ is rebuilt with one hard link (or copy) per
+component, named as dpkg-source 3.0 (quilt) expects for the motanka-stack
+source package:
+
+  motanka-stack_<V>.orig-<name>.tar.<ext>
+
+<V> is the Motanka version (default: first line of packaging/VERSION). The
+main orig tarball (motanka-stack_<V>.orig.tar.xz) is made by
+packaging/build.sh from packaging/motanka-stack/, like for every other
+package, so it always matches the package folder.
+
+Options:
+  --out DIR            output folder (default ~/.cache/motanka-vm/stack-src-tarballs)
+  --update-checksums   write the computed SHA-256 into components.tsv for
+                       entries whose sha256 field is '-'. Pinned entries are
+                       never changed; a mismatch is still an error.
+  --version V          Motanka version for the orig file names
+  --check              validate components.tsv only; no network, no writes
+
+Exit codes: 0 success, 1 a component is unpinned, failed to download or is
+malformed, 2 usage error or invalid components.tsv, 6 checksum mismatch.
+
+It only downloads and verifies: it installs nothing and runs nothing it
+downloads, so it may run on the development host or in a test VM. It
+writes only inside DIR and, with --update-checksums, components.tsv.
+Written in Python because the host tool set has python3 but no curl, and
+the tarball checks need a tar reader.
+"""
+
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+TSV = os.path.join(HERE, "components.tsv")
+VERSION_FILE = os.path.join(REPO, "packaging", "VERSION")
+SOURCE = "motanka-stack"
+DEFAULT_OUT = os.path.join(os.path.expanduser("~"), ".cache", "motanka-vm", "stack-src-tarballs")
+
+FIELDS = ("name", "version", "url", "sha256", "build", "suites", "package")
+BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool"}
+SUITES = {"noble", "resolute", "both"}
+PACKAGES = {"-", "motanka-stack-libs", "motanka-stack-hyprland", "motanka-stack-tools"}
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+VERSION_RE = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+EXTS = ((".tar.gz", "gz"), (".tgz", "gz"), (".tar.xz", "xz"), (".tar.bz2", "bz2"))
+
+ATTEMPTS = 5
+TIMEOUT = 60
+USER_AGENT = "motanka-fetch-sources/1 (+https://github.com/digitwolf/motanka)"
+
+EXIT_PROBLEM = 1
+EXIT_USAGE = 2
+EXIT_MISMATCH = 6
+
+
+class TsvError(Exception):
+    pass
+
+
+def log(msg):
+    print(f"fetch-sources: {msg}", file=sys.stderr)
+
+
+def ext_of(url):
+    path = url.split("?", 1)[0]
+    for suffix, ext in EXTS:
+        if path.endswith(suffix):
+            return ext
+    raise TsvError(f"cannot tell the compression of {url} (expected .tar.gz, .tgz, .tar.xz or .tar.bz2)")
+
+
+def parse_tsv(path):
+    """Returns (lines, components). lines keeps the file for rewriting;
+    each component is a dict with the FIELDS plus 'line' and 'ext'."""
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    comps = []
+    seen = set()
+    for i, line in enumerate(lines):
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != len(FIELDS):
+            raise TsvError(f"{path}:{i + 1}: expected {len(FIELDS)} tab-separated fields, found {len(parts)}")
+        c = dict(zip(FIELDS, parts))
+        where = f"{path}:{i + 1}"
+        if not NAME_RE.match(c["name"]):
+            raise TsvError(f"{where}: invalid name '{c['name']}'")
+        if c["name"] in seen:
+            raise TsvError(f"{where}: duplicate component '{c['name']}'")
+        seen.add(c["name"])
+        if not VERSION_RE.match(c["version"]):
+            raise TsvError(f"{where}: invalid version '{c['version']}'")
+        if not c["url"].startswith("https://"):
+            raise TsvError(f"{where}: the URL must use https")
+        if c["sha256"] != "-" and not SHA_RE.match(c["sha256"]):
+            raise TsvError(f"{where}: sha256 must be 64 lowercase hex digits or '-'")
+        if c["build"] not in BUILDS:
+            raise TsvError(f"{where}: unknown build system '{c['build']}'")
+        if c["suites"] not in SUITES:
+            raise TsvError(f"{where}: suites must be noble, resolute or both")
+        if c["package"] not in PACKAGES:
+            raise TsvError(f"{where}: unknown package '{c['package']}'")
+        c["ext"] = ext_of(c["url"])
+        c["line"] = i
+        comps.append(c)
+    if not comps:
+        raise TsvError(f"{path}: no components")
+    return lines, comps
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(1 << 20)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def download(url, dest):
+    tmp = dest + ".part"
+    last = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp, open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out, 1 << 20)
+            os.replace(tmp, dest)
+            return
+        except (urllib.error.URLError, OSError) as e:
+            last = e
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            if attempt < ATTEMPTS:
+                wait = 5 * attempt
+                log(f"download of {url} failed ({e}); retry {attempt}/{ATTEMPTS - 1} in {wait} s")
+                time.sleep(wait)
+    raise OSError(f"download of {url} failed after {ATTEMPTS} attempts: {last}")
+
+
+def check_tar(path):
+    """Returns None if the tarball is well-formed, else a reason."""
+    tops = set()
+    try:
+        with tarfile.open(path, "r:*") as tar:
+            for m in tar:
+                name = m.name
+                if name.startswith("/") or ".." in name.split("/"):
+                    return f"unsafe member path '{name}'"
+                if m.isdev():
+                    return f"device file '{name}'"
+                parts = [p for p in name.split("/") if p not in ("", ".")]
+                if not parts:
+                    continue
+                if len(parts) == 1 and not m.isdir():
+                    return f"file '{name}' at the top level"
+                tops.add(parts[0])
+    except (tarfile.TarError, OSError, EOFError) as e:
+        return f"unreadable tarball: {e}"
+    if len(tops) != 1:
+        return f"expected one top-level folder, found {len(tops)}: {', '.join(sorted(tops)[:5])}"
+    return None
+
+
+def read_version():
+    try:
+        with open(VERSION_FILE, encoding="utf-8") as f:
+            v = f.readline().strip()
+    except OSError as e:
+        raise TsvError(f"cannot read {VERSION_FILE}: {e}") from e
+    return v
+
+
+def rewrite_tsv(lines, updates):
+    for idx, digest in updates.items():
+        parts = lines[idx].split("\t")
+        parts[3] = digest
+        lines[idx] = "\t".join(parts)
+    tmp = TSV + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    os.replace(tmp, TSV)
+
+
+def layout(out, version, comps, files):
+    orig = os.path.join(out, "orig")
+    os.makedirs(orig, exist_ok=True)
+    prefix = f"{SOURCE}_"
+    for n in os.listdir(orig):
+        if n.startswith(prefix) and ".orig-" in n:
+            os.unlink(os.path.join(orig, n))
+    for c in comps:
+        dest = os.path.join(orig, f"{SOURCE}_{version}.orig-{c['name']}.tar.{c['ext']}")
+        try:
+            os.link(files[c["name"]], dest)
+        except OSError:
+            shutil.copy2(files[c["name"]], dest)
+    return orig
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="fetch-sources", description="Download and verify the Stack sources.")
+    p.add_argument("--out", default=DEFAULT_OUT)
+    p.add_argument("--update-checksums", action="store_true")
+    p.add_argument("--version")
+    p.add_argument("--check", action="store_true")
+    args = p.parse_args(argv)
+
+    if os.geteuid() == 0:
+        log("refusing to run as root")
+        return EXIT_USAGE
+    try:
+        lines, comps = parse_tsv(TSV)
+        version = args.version or read_version()
+    except (TsvError, OSError) as e:
+        log(str(e))
+        return EXIT_USAGE
+    if not VERSION_RE.match(version) or "-" in version:
+        log(f"invalid Motanka version '{version}'")
+        return EXIT_USAGE
+    if args.check:
+        log(f"{TSV}: {len(comps)} components, valid")
+        return 0
+
+    out = os.path.abspath(args.out)
+    dl = os.path.join(out, "downloads")
+    os.makedirs(dl, exist_ok=True)
+
+    problems = []
+    mismatch = False
+    updates = {}
+    files = {}
+    for c in comps:
+        name, pinned = c["name"], c["sha256"]
+        path = os.path.join(dl, f"{name}-{c['version']}.tar.{c['ext']}")
+        if os.path.exists(path) and pinned != "-" and sha256_of(path) != pinned:
+            log(f"{name}: cached file does not match the pinned checksum; downloading again")
+            os.unlink(path)
+        if os.path.exists(path):
+            log(f"{name} {c['version']}: cached")
+        else:
+            log(f"{name} {c['version']}: downloading {c['url']}")
+            try:
+                download(c["url"], path)
+            except OSError as e:
+                problems.append(f"{name}: {e}")
+                continue
+        digest = sha256_of(path)
+        if pinned == "-":
+            if args.update_checksums:
+                updates[c["line"]] = digest
+                log(f"{name}: pinning sha256 {digest}")
+            else:
+                problems.append(f"{name}: no sha256 pinned (computed {digest}); review it and run with --update-checksums")
+                continue
+        elif digest != pinned:
+            os.unlink(path)
+            mismatch = True
+            problems.append(f"{name}: sha256 {digest} does not match the pinned {pinned}; download deleted")
+            continue
+        reason = check_tar(path)
+        if reason:
+            problems.append(f"{name}: {reason}")
+            continue
+        files[name] = path
+
+    if updates:
+        rewrite_tsv(lines, updates)
+        log(f"wrote {len(updates)} checksum(s) into {TSV}")
+    if problems:
+        for msg in problems:
+            log(f"error: {msg}")
+        return EXIT_MISMATCH if mismatch else EXIT_PROBLEM
+
+    orig = layout(out, version, comps, files)
+    log(f"{len(comps)} components verified; orig tarballs in {orig}")
+    print(orig)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

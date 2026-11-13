@@ -1,0 +1,114 @@
+#!/bin/bash
+# motanka: command-line entry point, installed as /usr/bin/motanka.
+#
+# Dispatches to src/cmd/<command>.sh. install, remove, update and rollback
+# run the guards (src/lib/guard.sh) before anything else, including option
+# parsing. Libraries are found next to this script in a source tree, and in
+# /opt/motanka/libexec/motanka when installed.
+set -euo pipefail
+
+_mk_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_mk_here=$(dirname -- "$_mk_self")
+if [[ -r $_mk_here/lib/common.sh ]]; then
+  MK_LIBEXEC=$_mk_here
+else
+  MK_LIBEXEC=/opt/motanka/libexec/motanka
+fi
+readonly MK_LIBEXEC
+
+# shellcheck source=lib/common.sh
+source "$MK_LIBEXEC/lib/common.sh"
+# shellcheck source=lib/guard.sh
+source "$MK_LIBEXEC/lib/guard.sh"
+
+mk_main_usage() {
+  cat <<'EOF'
+usage: motanka <command> [options]
+
+Commands:
+  install   [--dry-run] [--yes] [--channel stable|edge]
+            add Motanka to this Ubuntu installation
+  remove    [--dry-run] [--yes] [--purge]
+            remove Motanka and restore the earlier state
+  update    [--dry-run] [--yes] [--system]
+            update Motanka and move to the channel's Upstream pin
+  rollback  [--dry-run] [--yes]
+            return to the latest snapshot
+  doctor    [--json] [--fix]
+            report Motanka's state; --fix switches the repository suite
+
+Run 'motanka <command> --help' for the options of one command.
+Set NO_COLOR to turn off coloured output.
+
+Exit codes:
+   0  success
+   1  unexpected error
+   2  usage error
+   3  unsupported host: release, architecture or universe
+   4  preflight failed: dpkg state, free space or display manager
+   5  a package Motanka does not own would change
+   6  checksum or signature verification failed
+   7  guard refused: protected host, or development build outside a VM
+   8  migration failed
+   9  another Motanka process holds the lock
+  10  repository suite does not match the running release
+  11  authorisation denied
+  12  session refused
+EOF
+}
+
+mk_main() {
+  local cmd
+  mk_color_init
+  if (($# == 0)); then
+    mk_main_usage >&2
+    exit "$MK_EXIT_USAGE"
+  fi
+  cmd=$1
+  shift
+  case $cmd in
+    -h | --help | help)
+      mk_main_usage
+      exit "$MK_EXIT_OK"
+      ;;
+    install | remove | update | rollback)
+      MK_CMD=$cmd
+      mk_guards "$@"
+      ;;
+    doctor)
+      MK_CMD=$cmd
+      ;;
+    *)
+      mk_usage_error "unknown command '$cmd'"
+      ;;
+  esac
+  case $cmd in
+    install)
+      # shellcheck source=cmd/install.sh
+      source "$MK_LIBEXEC/cmd/install.sh"
+      mk_cmd_install "$@"
+      ;;
+    remove)
+      # shellcheck source=cmd/remove.sh
+      source "$MK_LIBEXEC/cmd/remove.sh"
+      mk_cmd_remove "$@"
+      ;;
+    update)
+      # shellcheck source=cmd/update.sh
+      source "$MK_LIBEXEC/cmd/update.sh"
+      mk_cmd_update "$@"
+      ;;
+    rollback)
+      # shellcheck source=cmd/rollback.sh
+      source "$MK_LIBEXEC/cmd/rollback.sh"
+      mk_cmd_rollback "$@"
+      ;;
+    doctor)
+      # shellcheck source=cmd/doctor.sh
+      source "$MK_LIBEXEC/cmd/doctor.sh"
+      mk_cmd_doctor "$@"
+      ;;
+  esac
+}
+
+mk_main "$@"

@@ -19,14 +19,14 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [x] 1.4 Fingerprint capture and comparison
   - Create `test/vm/fingerprint`, `tools/fpdiff.py` with the Allowlist, and `test/unit/fpdiff.bats`
   - _Requirements: 10.1, 13.3_
-- [ ] 1.5 24.04 image and image variants
+- [x] 1.5 24.04 image and image variants
   - Extend `test/vm/image` for `noble` and for the variants `gnome-snaps`, `kde`, `multiuser` (provisioning scripts in `test/vm/variants/`)
   - _Requirements: 13.2, 14.3_
 - [x] 1.6 `test/run-all`, lint and unit-test runner
   - Create `test/run-all` (`--release noble` switch), `.shellcheckrc`, `test/unit/run` using `bats-core` vendored under `test/bats/`
   - _Requirements: 13.1, 14.5_
 
-- [ ] 2. Checkpoint — run `test/run-all`, confirm a 26.04 and a 24.04 VM boot and tear down, stop for questions
+- [x] 2. Checkpoint — run `test/run-all`, confirm a 26.04 and a 24.04 VM boot and tear down, stop for questions
   - _Requirements: 14.1, 14.2, 14.3_
 
 - [ ] 3. Feasibility spikes (each runs in a test VM and writes its result into `design.md`)
@@ -40,14 +40,14 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [x] 3.3 S2: Upstream call inventory
   - Create `tools/inventory` producing `compat/inventory/<pin>.tsv`; record hardcoded paths, `sudo` and Arch-tool calls, `systemctl --user enable` calls, Shared_File writes and `uwsm` use; decide on shipping `uwsm`; list required overrides
   - _Requirements: 6.5, 7.8, 7.10_
-- [ ] 3.4 S4: release upgrade behaviour
+- [x] 3.4 S4: release upgrade behaviour
   - In a 24.04 VM with placeholder `/opt` packages and a third-party source, run `do-release-upgrade` to 26.04 and record what happens to both
   - _Requirements: 11.1_
-- [ ] 3.5 S5: display managers
+- [x] 3.5 S5: display managers
   - In 24.04 and 26.04 `gnome-snaps` VMs and a `kde` VM, install a placeholder session entry with `DesktopNames=Motanka;Hyprland`; confirm listing and `XDG_CURRENT_DESKTOP`
   - _Requirements: 2.7, 5.1_
 
-- [ ] 4. Checkpoint — review spike results; stop for the owner's decision if S1 found no approach that keeps the rules
+- [x] 4. Checkpoint — review spike results; stop for the owner's decision if S1 found no approach that keeps the rules
   - _Requirements: 1.1, 8.1_
 
 - [ ] 5. Packaging foundations

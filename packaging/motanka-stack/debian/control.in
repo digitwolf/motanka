@@ -1,0 +1,152 @@
+Source: motanka-stack
+Section: x11
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               gcc-16,
+               g++-16,
+               cmake,
+               meson,
+               ninja-build,
+               pkgconf,
+               python3,
+               binutils,
+               hwdata,
+               glslang-dev,
+               glslang-tools,
+               libabsl-dev,
+               libcairo2-dev,
+               libcanberra-dev,
+               libdrm-dev,
+               libegl-dev,
+               libffi-dev,
+               libgbm-dev,
+               libgl-dev,
+               libgles-dev,
+               libglib2.0-dev,
+               libiniparser-dev,
+               libjpeg-dev,
+               libjxl-dev,
+               liblcms2-dev,
+               libmagic-dev,
+               libmuparser-dev,
+               libopengl-dev,
+               libpam0g-dev,
+               libpango1.0-dev,
+               libpixman-1-dev,
+               libpng-dev,
+               libpugixml-dev,
+               libre2-dev,
+               libreadline-dev,
+               librsvg2-dev,
+               libseat-dev,
+               libsystemd-dev,
+               libtomlplusplus-dev,
+               libudev-dev,
+               libwebp-dev,
+               libx11-dev,
+               libxcb-composite0-dev,
+               libxcb-icccm4-dev,
+               libxcb-render0-dev,
+               libxcb-res0-dev,
+               libxcb-xfixes0-dev,
+               libxcb1-dev,
+               libxcursor-dev,
+               libzip-dev,
+               uuid-dev,
+#if noble
+               bison,
+               libevdev-dev,
+               libexpat1-dev,
+               libmtdev-dev,
+               libxcb-util-dev,
+               libxcb-xkb-dev,
+               libxml2-dev,
+               python3-attr,
+               python3-jinja2,
+               xcb-proto,
+#endif
+#if resolute
+               libdisplay-info-dev,
+               libei-dev,
+               libinput-dev,
+               liblua5.5-dev,
+               libpipewire-0.3-dev,
+               libsdbus-c++-dev,
+               libspa-0.2-dev,
+               libwayland-dev,
+               libxcb-errors-dev,
+               libxkbcommon-dev,
+#endif
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-stack-libs
+Architecture: amd64
+Depends: ${shlibs:Depends},
+#if resolute
+         libstdc++6 (>= 16-20260322),
+#endif
+         ${misc:Depends},
+Description: Hyprland stack for Motanka - libraries
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
+ the Hyprland compositor with its companion programs and libraries at the
+ versions upstream Omarchy expects, installed under /opt/motanka.
+ .
+ This package holds the Stack libraries in /opt/motanka/lib: the Hypr*
+ libraries and, on Ubuntu 24.04, newer builds of the Wayland, input and
+ C++ runtime libraries. Programs find them through RUNPATH; nothing outside
+ /opt/motanka sees them.
+
+Package: motanka-stack-hyprland
+Architecture: amd64
+Depends: motanka-stack-libs (= ${binary:Version}),
+         xkb-data,
+         xwayland,
+         ${shlibs:Depends},
+         ${misc:Depends},
+Recommends: libgl1-mesa-dri,
+Description: Hyprland stack for Motanka - compositor
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
+ the Hyprland compositor with its companion programs and libraries at the
+ versions upstream Omarchy expects, installed under /opt/motanka.
+ .
+ This package holds Hyprland, start-hyprland, hyprctl, the Hyprland GUI
+ utilities and, where the release allows it, the desktop portal backend.
+ It does not replace or change Ubuntu's own hyprland package.
+
+Package: motanka-stack-tools
+Architecture: amd64
+Depends: motanka-stack-libs (= ${binary:Version}),
+         python3,
+         python3-dbus,
+         python3-xdg,
+         util-linux-extra,
+         ${shlibs:Depends},
+         ${misc:Depends},
+Recommends: whiptail,
+Description: Hyprland stack for Motanka - companion programs
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
+ the Hyprland compositor with its companion programs and libraries at the
+ versions upstream Omarchy expects, installed under /opt/motanka.
+ .
+ This package holds hyprlock, hypridle, hyprpicker, hyprsunset,
+ hyprcursor-util and uwsm, the session manager upstream Omarchy uses.
+
+Package: motanka-stack
+Architecture: amd64
+Section: metapackages
+Depends: motanka-stack-hyprland (= ${binary:Version}),
+         motanka-stack-libs (= ${binary:Version}),
+         motanka-stack-tools (= ${binary:Version}),
+         ${misc:Depends},
+Description: Hyprland stack for Motanka (metapackage)
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
+ the Hyprland compositor with its companion programs and libraries at the
+ versions upstream Omarchy expects, installed under /opt/motanka.
+ .
+ This metapackage depends on the Stack libraries, the compositor and the
+ companion programs.

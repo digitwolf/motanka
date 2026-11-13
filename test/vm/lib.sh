@@ -297,7 +297,7 @@ mv_ssh_args() {
     -o IdentityAgent=none
     -o BatchMode=yes
     -o StrictHostKeyChecking=no
-    -o "UserKnownHostsFile=$dir/known_hosts"
+    -o UserKnownHostsFile=/dev/null
     -o GlobalKnownHostsFile=/dev/null
     -o LogLevel=ERROR
     -o ConnectTimeout=10
@@ -346,6 +346,12 @@ write_files:
     content: |
       APT::Periodic::Update-Package-Lists "0";
       APT::Periodic::Unattended-Upgrade "0";
+  # needrestart would restart ssh.service during an apt run over SSH and
+  # drop the session (seen on 24.04): list only, never restart.
+  - path: /etc/needrestart/conf.d/99harness-list-only.conf
+    permissions: "0644"
+    content: |
+      $nrconf{restart} = 'l';
 EOF
 }
 
@@ -529,7 +535,9 @@ mv_boot() {
   mv_log "booting $name from $(basename "$backing")"
   mv_start_qemu "$name" "$MV_HTTP_PORT"
   mv_wait_ready "$name"
-  mv_stop_http "$dir"
+  # The seed server keeps running until mv_destroy: a reboot inside the VM
+  # fetches the same seed (same instance-id), so cloud-init does not treat
+  # the VM as new and regenerate its SSH host keys.
   MV_BOOTED=$name
 }
 

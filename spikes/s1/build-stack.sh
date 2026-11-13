@@ -38,16 +38,21 @@ setup() {
     libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev libseat-dev libudev-dev
     libevdev-dev libmtdev-dev libsystemd-dev libffi-dev libexpat1-dev libxml2-dev
     libzip-dev librsvg2-dev libjpeg-dev libwebp-dev libjxl-dev libspng-dev libmagic-dev
-    libtomlplusplus-dev libre2-dev libmuparser-dev glslang-dev glslang-tools libei-dev
+    libtomlplusplus-dev libre2-dev libmuparser-dev glslang-dev glslang-tools
     liblcms2-dev libcanberra-dev libreadline-dev uuid-dev libx11-dev libxcb1-dev
     libxcb-composite0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-render0-dev
     libxcb-res0-dev libxcb-errors-dev libxcb-ewmh-dev libxcb-util-dev libxcb-image0-dev
     libxcb-keysyms1-dev libxcb-render-util0-dev libxcursor-dev libxcomposite-dev
     libxfixes-dev libxrender-dev xcb-proto libxcb-xkb-dev libxkbcommon-dev
     xkb-data xwayland libinih-dev libiniparser-dev
-    libwayland-dev wayland-protocols libinput-dev libdisplay-info-dev liblua5.5-dev
-    libsdbus-c++-dev libeis-dev libxcb-errors-dev
   )
+  # Archive -dev packages of libraries that noble must bundle are installed on
+  # resolute only: on noble, CMake would link against the old system library
+  # instead of the newer one in /opt/motanka (seen with libinput and aquamarine).
+  if [[ $VERSION_CODENAME != noble ]]; then
+    pkgs+=(libwayland-dev wayland-protocols libinput-dev libdisplay-info-dev liblua5.5-dev
+      libsdbus-c++-dev libeis-dev libxcb-errors-dev)
+  fi
   local avail=() p
   for p in "${pkgs[@]}"; do
     if apt-cache show "$p" >/dev/null 2>&1; then avail+=("$p"); else log "not in archive: $p"; fi

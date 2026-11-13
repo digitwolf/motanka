@@ -9,15 +9,32 @@
 #   --vm      reuse a running VM instead of booting one; it is never torn down
 #   --keep    keep the booted VM afterwards (also after a failure)
 #
-# Steps: boot a resolute fresh VM (MOTANKA_BUILD_VM_CPUS, default host CPUs
-# up to 10; MOTANKA_BUILD_VM_RAM, default 10G), push the repository,
-# provision it with test/vm/build-provision.sh (idempotent), run
-# packaging/build.sh once per suite, copy the results back, tear the VM down.
+# Steps: boot a resolute fresh VM, push the repository, provision it with
+# test/vm/build-provision.sh (idempotent), run packaging/build.sh once per
+# suite, copy the results back, tear the VM down.
+#
+# Build VM size: MOTANKA_BUILD_VM_CPUS (default host CPUs up to 10),
+# MOTANKA_BUILD_VM_RAM (default 10G), MOTANKA_VM_DISK (default 40G). When
+# packaging/motanka-stack is among the packages, the defaults are host CPUs
+# up to 16, half the host memory up to 16G (at least 10G) and an 80G disk;
+# the Stack compiles about 3,000 C++ files, and debian/rules runs one job
+# per 2 GiB of guest memory.
+#
+# The Stack's upstream tarballs come from stack/fetch-sources, which runs on
+# the host (it only downloads and verifies) and caches them in
+# ~/.cache/motanka-vm/stack-src-tarballs/, so a rebuild downloads nothing.
+# Unpinned checksums in stack/components.tsv stop the build; pin them with
+# stack/fetch-sources --update-checksums after review.
+#
+# Each suite's build runs detached inside the VM, so a dropped SSH
+# connection does not kill it; the host polls its log every 15 s.
+# MOTANKA_BUILD_TIMEOUT (seconds, default 28800) bounds one suite's build;
+# on expiry the build is killed and the suite counts as failed.
 #
 # SOURCE_DATE_EPOCH is the date of the last git commit (or the value already
 # in the environment). Results on the host:
-#   ~/.cache/motanka-vm/debs/<suite>/      .deb, .changes, .buildinfo, .dsc,
-#                                          source tarballs
+#   ~/.cache/motanka-vm/debs/<suite>/      .deb, .ddeb, .changes, .buildinfo,
+#                                          .dsc, source tarballs
 #   <results>/build-<suite>/               sbuild, lintian and debcheck logs
 # where <results> is MOTANKA_VM_RESULTS if set, otherwise
 # ~/.cache/motanka-vm/results/<run-id>/. Prints the host path of every built
@@ -28,6 +45,9 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 MV_USAGE="test/vm/build [--keep] [--vm <name>] [--suite noble|resolute|all] <package-dir>..."
 mv_init
+
+STACK_TARBALLS=$MV_STATE/stack-src-tarballs
+POLL=15
 
 keep_vm=false
 vm=""
@@ -65,9 +85,14 @@ esac
 if ((${#pkgs[@]} == 0)); then
   mv_usage "no package folder given"
 fi
+timeout_s=${MOTANKA_BUILD_TIMEOUT:-28800}
+if [[ ! $timeout_s =~ ^[1-9][0-9]*$ ]]; then
+  mv_usage "MOTANKA_BUILD_TIMEOUT must be a positive number of seconds, got '$timeout_s'"
+fi
 mv_need ssh ssh-keygen tar git
 
 guest_pkgs=()
+stack=false
 for p in "${pkgs[@]}"; do
   if [[ ! -d $p ]]; then
     mv_die "no such folder: $p"
@@ -76,8 +101,11 @@ for p in "${pkgs[@]}"; do
   if [[ $abs != "$MV_REPO"/* ]]; then
     mv_die "$p is not inside the repository $MV_REPO"
   fi
-  if [[ ! -f $abs/debian/control ]]; then
-    mv_die "$p has no debian/control"
+  if [[ ! -f $abs/debian/control && ! -f $abs/debian/control.in ]]; then
+    mv_die "$p has no debian/control or debian/control.in"
+  fi
+  if [[ $abs == "$MV_REPO/packaging/motanka-stack" ]]; then
+    stack=true
   fi
   guest_pkgs+=("$MV_GUEST_REPO/${abs#"$MV_REPO"/}")
 done
@@ -99,12 +127,38 @@ results=${MOTANKA_VM_RESULTS:-$MV_RESULTS/$run_id}
 mkdir -p "$results"
 export MOTANKA_VM_RESULTS="$results"
 
+# The Stack's sources, verified on the host before any VM boots.
+orig_host=""
+if $stack; then
+  mv_need python3
+  mv_log "fetching and verifying the Stack sources into $STACK_TARBALLS"
+  if ! python3 "$MV_REPO/stack/fetch-sources" --out "$STACK_TARBALLS" \
+    >"$results/fetch-sources.out" 2> >(tee "$results/fetch-sources.log" >&2); then
+    mv_die "stack/fetch-sources failed; log: $results/fetch-sources.log"
+  fi
+  orig_host=$(tail -n 1 "$results/fetch-sources.out")
+  if [[ $orig_host != "$STACK_TARBALLS"/* || ! -d $orig_host ]]; then
+    mv_die "stack/fetch-sources printed an unexpected folder '$orig_host'"
+  fi
+fi
+
 if [[ -n $vm ]]; then
   mv_require_running "$vm"
   booted=false
 else
   mv_check_kvm
   mv_need qemu-system-x86_64 qemu-img python3 setsid timeout
+  if $stack; then
+    host_cpus=$(nproc 2>/dev/null || echo 4)
+    ((host_cpus <= 16)) || host_cpus=16
+    host_mem_g=$(awk '$1 == "MemTotal:" { print int($2 / 1048576) }' /proc/meminfo 2>/dev/null || echo 20)
+    stack_ram=$((host_mem_g / 2))
+    ((stack_ram <= 16)) || stack_ram=16
+    ((stack_ram >= 10)) || stack_ram=10
+    export MOTANKA_BUILD_VM_CPUS=${MOTANKA_BUILD_VM_CPUS:-$host_cpus}
+    export MOTANKA_BUILD_VM_RAM=${MOTANKA_BUILD_VM_RAM:-${stack_ram}G}
+    export MOTANKA_VM_DISK=${MOTANKA_VM_DISK:-80G}
+  fi
   mv_up_build_vm
   vm=$MV_BOOTED
   booted=true
@@ -121,14 +175,87 @@ if ! run bash "$MV_GUEST_REPO/test/vm/build-provision.sh" "${suites[@]}" 2>&1 |
   mv_die "provisioning $vm failed; log: $results/build-provision.log"
 fi
 
+guest_base="/home/$MV_GUEST_USER/motanka-build/$run_id"
+orig_args=()
+if [[ -n $orig_host ]]; then
+  mv_log "copying the Stack sources into $vm"
+  mv_copy_to_vm "$vm" "$orig_host" "$guest_base/origs"
+  orig_args=(--orig-dir "$guest_base/origs")
+fi
+
+# build_suite <suite> <guest-out>: runs packaging/build.sh detached in the VM
+# and streams its log into <results>/build-<suite>.log. Returns its exit code.
+build_suite() {
+  local suite=$1 guest_out=$2 hostlog=$results/build-$1.log
+  local glog="$guest_base/$1.log" grc="$guest_base/$1.rc" pgid size rc fails=0 deadline q_log q_rc
+  printf -v q_log '%q' "$glog"
+  printf -v q_rc '%q' "$grc"
+  : >"$hostlog"
+  pgid=$("$MV_LIB_DIR/run" "$vm" -- bash -s -- "$glog" "$grc" "$sde" \
+    "$MV_GUEST_REPO/packaging/build.sh" --suite "$suite" --out "$guest_out" \
+    "${orig_args[@]}" "${guest_pkgs[@]}" <<'EOS'
+set -euo pipefail
+log=$1 rcf=$2 sde=$3
+shift 3
+mkdir -p "$(dirname "$log")"
+rm -f -- "$rcf" "$rcf.tmp"
+: >"$log"
+# setsid in a non-interactive shell's background job does not fork, so $!
+# is the new session's (and process group's) leader.
+nohup setsid bash -c '
+  log=$1 rcf=$2
+  shift 2
+  rc=0
+  bash "$@" >>"$log" 2>&1 || rc=$?
+  echo "$rc" >"$rcf.tmp"
+  mv -f "$rcf.tmp" "$rcf"
+' launcher "$log" "$rcf" env SOURCE_DATE_EPOCH="$sde" bash "$@" </dev/null >/dev/null 2>&1 &
+echo "$!"
+EOS
+  )
+  if [[ ! $pgid =~ ^[0-9]+$ ]]; then
+    mv_log "could not start the $suite build in $vm"
+    return 1
+  fi
+  mv_log "$suite build started in $vm (process group $pgid, timeout ${timeout_s} s)"
+  deadline=$((SECONDS + timeout_s))
+  while :; do
+    sleep "$POLL"
+    size=$(stat -c %s "$hostlog")
+    if "$MV_LIB_DIR/run" "$vm" -- "tail -c +$((size + 1)) -- $q_log" </dev/null 2>/dev/null |
+      tee -a "$hostlog" >&2; then
+      fails=0
+    else
+      fails=$((fails + 1))
+      if ((fails >= 20)); then
+        mv_log "lost contact with $vm for $((fails * POLL)) s"
+        return 1
+      fi
+      continue
+    fi
+    if run "test -s $q_rc" 2>/dev/null; then
+      size=$(stat -c %s "$hostlog")
+      "$MV_LIB_DIR/run" "$vm" -- "tail -c +$((size + 1)) -- $q_log" </dev/null 2>/dev/null |
+        tee -a "$hostlog" >&2 || true
+      rc=$(run "cat $q_rc" 2>/dev/null || echo 1)
+      [[ $rc =~ ^[0-9]+$ ]] || rc=1
+      return "$rc"
+    fi
+    if ((SECONDS >= deadline)); then
+      mv_log "the $suite build exceeded MOTANKA_BUILD_TIMEOUT=${timeout_s} s; killing it"
+      run "kill -TERM -- -$pgid; sleep 10; kill -KILL -- -$pgid" >/dev/null 2>&1 || true
+      return 124
+    fi
+  done
+}
+
 failed=()
 for suite in "${suites[@]}"; do
-  guest_out="/home/$MV_GUEST_USER/motanka-build/$run_id/$suite"
+  guest_out="$guest_base/$suite"
   rc=0
-  run env SOURCE_DATE_EPOCH="$sde" bash "$MV_GUEST_REPO/packaging/build.sh" \
-    --suite "$suite" --out "$guest_out" "${guest_pkgs[@]}" 2>&1 |
-    tee "$results/build-$suite.log" >&2 || rc=$?
+  build_suite "$suite" "$guest_out" || rc=$?
   if ((rc != 0)); then
+    mv_log "$suite build failed (exit $rc)"
     failed+=("$suite")
   fi
 
@@ -145,7 +272,7 @@ for suite in "${suites[@]}"; do
   fi
   mkdir -p "$MV_DEBS/$suite"
   shopt -s nullglob
-  for f in "$tmp"/*.deb "$tmp"/*.dsc "$tmp"/*.changes "$tmp"/*.buildinfo "$tmp"/*.tar.*; do
+  for f in "$tmp"/*.deb "$tmp"/*.ddeb "$tmp"/*.dsc "$tmp"/*.changes "$tmp"/*.buildinfo "$tmp"/*.tar.*; do
     chmod 0644 "$f"
     mv -f "$f" "$MV_DEBS/$suite/"
     if [[ $f == *.deb ]]; then
