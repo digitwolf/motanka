@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-provision-owner: Motanka override of Upstream
+# bin/omarchy-provision-owner: unsupported (compat/overrides.tsv). Prints why,
+# writes a journal entry and exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-provision-owner \
+  "it is a step of Upstream's Arch installer (disk encryption re-key, pacman and Limine configuration); Motanka's packages and per-user setup replace the installer" "$@"

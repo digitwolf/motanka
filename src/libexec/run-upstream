@@ -1,0 +1,95 @@
+#!/bin/bash
+# run-upstream: runs one Upstream command inside the Wrapper scope (design.md,
+# "Wrappers, shims and the Helper"). Installed as
+# /opt/motanka/libexec/motanka/run-upstream; every Wrapper in /opt/motanka/bin
+# (tools/genwrappers) runs "run-upstream <name> "$@"".
+#
+# usage: run-upstream <name> [arguments...]
+#
+# Sets, for the command and everything it starts:
+#   OMARCHY_PATH          /usr/share/omarchy (package-owned symlink to the vendored
+#                         Upstream in /opt/motanka/share/omarchy; Upstream treats any
+#                         other path as a development checkout)
+#   PATH                  <overrides>:<shims>:<compat-bin>:<Upstream bin>:$PATH,
+#                         with earlier copies of these four folders removed
+#                         from $PATH, so nested calls do not grow it
+#   MOTANKA_UPSTREAM_CMD  <name>, the fallback the sudo dispatcher uses to
+#                         find its caller
+# and then runs overrides/<name> if it exists, otherwise Upstream's
+# bin/<name>, unchanged. The shims are therefore on PATH only below a
+# Wrapper; the session PATH has only /opt/motanka/bin (5.9, 7.14).
+#
+# Folders, next to this file when installed (/opt/motanka/libexec/motanka/)
+# or one level up in a source tree (src/): overrides/, shims/, compat-bin/
+# (bat runs batcat, fd runs fdfind: Ubuntu renames both commands).
+#
+# Test hook: MOTANKA_OMARCHY_PATH replaces /opt/motanka/share/omarchy.
+#
+# Exit codes: the command's own; 2 usage; 126 not executable; 127 no such
+# Upstream command.
+set -euo pipefail
+
+readonly OMARCHY_DEFAULT=/usr/share/omarchy
+
+die() {
+  local code=$1
+  shift
+  printf 'motanka run-upstream: %s\n' "$*" >&2
+  exit "$code"
+}
+
+self=$(readlink -f -- "${BASH_SOURCE[0]}")
+here=${self%/*}
+if [[ -d $here/shims ]]; then
+  base=$here
+else
+  base=${here%/*}
+fi
+
+(($# >= 1)) || die 2 "usage: run-upstream <name> [arguments...]"
+name=$1
+shift
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || die 2 "invalid command name '$name'"
+
+omarchy=${MOTANKA_OMARCHY_PATH:-$OMARCHY_DEFAULT}
+omarchy=${omarchy%/}
+overrides=$base/overrides
+shims=$base/shims
+compat=$base/compat-bin
+upstream_bin=$omarchy/bin
+
+# path_without <dir>...: $PATH without the entries equal to any argument.
+path_without() {
+  local entry d keep
+  local -a parts=() out=()
+  IFS=: read -r -a parts <<<"${PATH:-}"
+  for entry in "${parts[@]}"; do
+    keep=1
+    for d in "$@"; do
+      if [[ $entry == "$d" || $entry == "$d/" ]]; then
+        keep=0
+        break
+      fi
+    done
+    if ((keep)) && [[ -n $entry ]]; then
+      out+=("$entry")
+    fi
+  done
+  local IFS=:
+  printf '%s\n' "${out[*]}"
+}
+
+rest=$(path_without "$overrides" "$shims" "$compat" "$upstream_bin")
+export PATH="$overrides:$shims:$compat:$upstream_bin${rest:+:$rest}"
+export OMARCHY_PATH=$omarchy
+export MOTANKA_UPSTREAM_CMD=$name
+
+if [[ -f $overrides/$name ]]; then
+  [[ -x $overrides/$name ]] || die 126 "the override $overrides/$name is not executable"
+  exec "$overrides/$name" "$@"
+fi
+if [[ -f $upstream_bin/$name ]]; then
+  [[ -x $upstream_bin/$name ]] || die 126 "the Upstream command $upstream_bin/$name is not executable"
+  exec "$upstream_bin/$name" "$@"
+fi
+die 127 "no Upstream command '$name' in $upstream_bin"

@@ -1,0 +1,18 @@
+#!/bin/bash
+# omarchy-pkg-aur-install: Motanka override of Upstream
+# bin/omarchy-pkg-aur-install: unsupported (compat/overrides.tsv).
+#
+# Upstream shows a fuzzy finder over the AUR. Ubuntu has no AUR, so this
+# prints why, writes a journal entry and exits 64.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+mk_oc_unsupported omarchy-pkg-aur-install \
+  "Ubuntu has no AUR; omarchy-pkg-install offers the packages Motanka maps" "$@"

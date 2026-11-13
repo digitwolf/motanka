@@ -1,0 +1,3 @@
+#!/bin/bash
+# notify-send stub: appends its arguments to $LOGS/notify-send.
+printf '%s\n' "$*" >>"$LOGS/notify-send"

@@ -1,0 +1,175 @@
+#!/bin/bash
+# tools/vendor: fetch the Upstream tarball at a Channel's Upstream_Pin,
+# verify its SHA-256 and unpack it, unmodified, into a new folder (7.1).
+#
+# usage: tools/vendor [--pin FILE] [--tarball FILE] <stable|edge> <dest>
+#
+# The pin comes from upstream.pin at the repository root (--pin FILE to
+# read another file): <channel> TAB <commit> TAB <tag-or--> TAB <sha256>.
+# Without --tarball the tarball is downloaded from
+# https://github.com/basecamp/omarchy/archive/<commit>.tar.gz. With
+# --tarball FILE (offline package builds) that file is copied and the copy
+# is checked; FILE itself is never changed or deleted.
+#
+# The package build uses this to fill /opt/motanka/share/omarchy.
+#
+#   - A tarball whose SHA-256 differs from the pin is refused: the download
+#     or copy is deleted and <dest> is not created (exit 6).
+#   - Every member must sit below the single top folder omarchy-<commit>/
+#     that GitHub archives have, with no absolute path and no ".." part.
+#   - The tree is unpacked with the archive's file modes and times and
+#     without changing any file; nothing is added to it. It is unpacked
+#     next to <dest> and renamed into place, so <dest> appears whole or not
+#     at all. <dest> must not exist; its parent folder must.
+#
+# Exit codes: 0 unpacked, 1 error (download, unpack, destination), 2 usage,
+# 6 checksum mismatch.
+set -euo pipefail
+
+readonly URL_BASE=https://github.com/basecamp/omarchy/archive
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=${here%/*}
+
+die() {
+  local code=$1
+  shift
+  printf 'tools/vendor: %s\n' "$*" >&2
+  exit "$code"
+}
+
+usage() {
+  printf 'usage: tools/vendor [--pin FILE] [--tarball FILE] <stable|edge> <dest>\n'
+}
+
+usage_error() {
+  usage >&2
+  die 2 "$*"
+}
+
+pin_file=$repo/upstream.pin
+tarball=""
+positional=()
+while (($# > 0)); do
+  case $1 in
+    --pin)
+      (($# >= 2)) || usage_error "--pin needs a file"
+      pin_file=$2
+      shift 2
+      ;;
+    --pin=*)
+      pin_file=${1#--pin=}
+      shift
+      ;;
+    --tarball)
+      (($# >= 2)) || usage_error "--tarball needs a file"
+      tarball=$2
+      shift 2
+      ;;
+    --tarball=*)
+      tarball=${1#--tarball=}
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      usage_error "unknown option '$1'"
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+((${#positional[@]} == 2)) || usage_error "a channel and a destination are required"
+channel=${positional[0]}
+dest=${positional[1]}
+
+case $channel in
+  stable | edge) ;;
+  *) usage_error "unknown channel '$channel' (expected stable or edge)" ;;
+esac
+
+# --- the pin --------------------------------------------------------------
+
+[[ -r $pin_file ]] || die 1 "cannot read the pin file $pin_file"
+mapfile -t pin_lines < <(awk -F'\t' -v c="$channel" '$1 == c' "$pin_file")
+((${#pin_lines[@]} == 1)) || die 1 "$pin_file must have exactly one line for $channel, found ${#pin_lines[@]}"
+IFS=$'\t' read -r _ commit tag sha extra <<<"${pin_lines[0]}"
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || die 1 "$pin_file: invalid commit '$commit' for $channel"
+[[ $sha =~ ^[0-9a-f]{64}$ ]] || die 1 "$pin_file: invalid SHA-256 '$sha' for $channel"
+[[ -n $tag && -z ${extra:-} ]] || die 1 "$pin_file: the $channel line needs exactly 4 tab-separated fields"
+
+# --- the destination ------------------------------------------------------
+
+dest=${dest%/}
+[[ -n $dest ]] || usage_error "invalid destination"
+if [[ -e $dest || -L $dest ]]; then
+  die 1 "$dest already exists; vendor into a new folder"
+fi
+parent=$(dirname -- "$dest")
+[[ -d $parent ]] || die 1 "the parent folder $parent does not exist"
+
+work=$(mktemp -d "$parent/.vendor.XXXXXX") || die 1 "cannot create a work folder in $parent"
+trap 'rm -rf -- "$work"' EXIT
+file=$work/upstream.tar.gz
+
+# --- fetch and verify -----------------------------------------------------
+
+if [[ -n $tarball ]]; then
+  [[ -f $tarball && -r $tarball ]] || die 1 "cannot read the tarball $tarball"
+  cp -- "$tarball" "$file" || die 1 "cannot copy $tarball"
+  source_name=$tarball
+else
+  url=$URL_BASE/$commit.tar.gz
+  printf 'tools/vendor: downloading %s\n' "$url" >&2
+  if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$file" "$url"; then
+    rm -f -- "$file"
+    die 1 "cannot download $url"
+  fi
+  source_name=$url
+fi
+
+actual=$(sha256sum <"$file")
+actual=${actual:0:64}
+if [[ $actual != "$sha" ]]; then
+  rm -f -- "$file"
+  die 6 "SHA-256 mismatch for $source_name: the $channel pin expects $sha, the tarball is $actual; nothing was unpacked"
+fi
+
+# --- check the member names -----------------------------------------------
+
+top=omarchy-$commit
+if ! members=$(tar -tzf "$file"); then
+  die 1 "cannot list the tarball $source_name"
+fi
+bad=$(printf '%s\n' "$members" | awk -v top="$top" '
+  $0 == "" { next }
+  {
+    name = $0
+    sub(/\/$/, "", name)
+    if (name != top && index(name, top "/") != 1) { print; next }
+    if (name ~ /(^|\/)\.\.(\/|$)/) { print; next }
+  }' | head -n 5) || true
+if [[ -n $bad ]]; then
+  die 1 "the tarball has members outside $top/ or with '..': $(printf '%s ' "$bad")"
+fi
+
+# --- unpack and move into place --------------------------------------------
+
+mkdir -- "$work/tree"
+if ! tar -xzf "$file" -C "$work/tree" --strip-components=1 \
+  --no-same-owner --preserve-permissions --no-overwrite-dir; then
+  die 1 "cannot unpack $source_name"
+fi
+[[ -d $work/tree/bin ]] || die 1 "the unpacked tree has no bin/ folder"
+rm -f -- "$file"
+mv -T -- "$work/tree" "$dest" || die 1 "cannot move the tree to $dest"
+printf 'tools/vendor: %s %s (%s) unpacked into %s\n' "$channel" "$commit" "$tag" "$dest" >&2

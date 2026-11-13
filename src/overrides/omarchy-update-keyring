@@ -1,0 +1,35 @@
+#!/bin/bash
+# omarchy-update-keyring: Motanka override of Upstream
+# bin/omarchy-update-keyring.
+#
+# usage (as Upstream): omarchy-update-keyring
+#
+# Upstream imports and signs keys in pacman's keyring and refreshes the
+# keyring packages. Motanka's signing key comes with the
+# motanka-archive-keyring package, which apt updates like any package, and
+# Ubuntu's own keys stay the host's. This checks that the package is
+# installed and its key file is there: "Keys are correct" and exit 0, or an
+# error naming the fix and exit 1, so Upstream's updater stops as it would
+# on a broken keyring.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+keyring=$(mk_path /usr/share/keyrings/motanka-archive-keyring.gpg)
+
+echo -e "\e[32m\nUpdate signing keys\e[0m"
+if ! mk_oc_deb_installed motanka-archive-keyring; then
+  echo "motanka-archive-keyring is not installed; run 'sudo motanka doctor' to see what is missing" >&2
+  exit 1
+fi
+if [[ ! -s $keyring ]]; then
+  echo "$keyring is missing; reinstall motanka-archive-keyring with 'sudo apt-get install --reinstall motanka-archive-keyring'" >&2
+  exit 1
+fi
+echo "Keys are correct"

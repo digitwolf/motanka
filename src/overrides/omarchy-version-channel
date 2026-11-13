@@ -1,0 +1,30 @@
+#!/bin/bash
+# omarchy-version-channel: Motanka override of Upstream
+# bin/omarchy-version-channel.
+#
+# usage (as Upstream): omarchy-version-channel
+#
+# Upstream reads its channel from pacman's mirror list and repositories.
+# Motanka's channel is the suite of its apt source,
+# /etc/apt/sources.list.d/motanka.sources (owned by motanka-source-<suite>):
+# "<release>" is stable and "<release>-edge" is edge. Prints stable, edge, or
+# unknown (no source, or no Suites line), and exits 0, as Upstream does.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+sources=$(mk_path /etc/apt/sources.list.d/motanka.sources)
+suite=""
+if [[ -r $sources ]]; then
+  suite=$(awk -F':[ \t]*' 'tolower($1) == "suites" { split($2, s, /[ \t]+/); print s[1]; exit }' "$sources")
+fi
+
+case $suite in
+  noble-edge | resolute-edge) echo edge ;;
+  noble | resolute) echo stable ;;
+  *) echo unknown ;;
+esac

@@ -1,0 +1,5 @@
+#!/bin/bash
+# systemd-detect-virt stub: prints $FAKE_VIRT (default kvm).
+virt=${FAKE_VIRT:-kvm}
+echo "$virt"
+[[ $virt != none ]]

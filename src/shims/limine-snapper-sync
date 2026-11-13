@@ -1,0 +1,6 @@
+#!/bin/bash
+# limine-snapper-sync: logs the call and exits 64 through
+# src/shims/mkinitcpio, the one script for Arch's boot and snapshot tools.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+MK_SHIM_NAME=limine-snapper-sync exec "${_self%/*}/mkinitcpio" "$@"

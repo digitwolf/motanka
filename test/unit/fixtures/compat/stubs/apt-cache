@@ -1,0 +1,22 @@
+#!/bin/bash
+# apt-cache stub. "policy <package...>" prints Installed and Candidate from
+# the lines "<package> <installed> <candidate>" of $FAKE_POLICY; "show"
+# prints a short record. Logs every call to $LOGS/apt-cache.
+printf '%s\n' "$*" >>"$LOGS/apt-cache"
+case ${1:-} in
+  policy)
+    shift
+    for p in "$@"; do
+      line=$(awk -v p="$p" '$1 == p { print; exit }' "${FAKE_POLICY:-/dev/null}")
+      [[ -n $line ]] || continue
+      read -r _ inst cand <<<"$line"
+      printf '%s:\n  Installed: %s\n  Candidate: %s\n' "$p" "$inst" "$cand"
+    done
+    ;;
+  show)
+    printf 'Package: %s\nDescription: test package\n' "${!#}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac

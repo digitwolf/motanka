@@ -1,0 +1,48 @@
+#!/bin/bash
+# omarchy-hibernation-available: Motanka override of Upstream
+# bin/omarchy-hibernation-available.
+#
+# usage (as Upstream): omarchy-hibernation-available
+#
+# Exit 0 if this Ubuntu installation can hibernate, 1 otherwise. Upstream
+# also requires its own resume drop-in, /etc/mkinitcpio.conf.d/
+# omarchy_resume.conf, which an Ubuntu host never has. Motanka does not set
+# hibernation up (omarchy-hibernation-setup is not available), so this
+# checks what the host configured itself:
+#   - the kernel offers the "disk" sleep state (no lockdown, nohibernate);
+#   - swap outside zram is larger than the hibernation image;
+#   - the kernel knows a resume device (/sys/power/resume is not 0:0), so a
+#     hibernated system comes back.
+# OMARCHY_SYS_POWER_PATH and OMARCHY_SWAPS_PATH replace /sys/power and
+# /proc/swaps, as in Upstream (tests).
+set -euo pipefail
+
+SYS_POWER_PATH=${OMARCHY_SYS_POWER_PATH:-/sys/power}
+SWAPS_PATH=${OMARCHY_SWAPS_PATH:-/proc/swaps}
+
+if [[ ! -r $SYS_POWER_PATH/state || ! -r $SYS_POWER_PATH/image_size || ! -r $SWAPS_PATH ]]; then
+  exit 1
+fi
+
+sleep_states=" $(<"$SYS_POWER_PATH/state") "
+if [[ $sleep_states != *" disk "* ]]; then
+  exit 1
+fi
+
+swap_kb=$(awk '!/Filename|zram/ { sum += $3 } END { print sum + 0 }' "$SWAPS_PATH")
+image_size=$(<"$SYS_POWER_PATH/image_size")
+if [[ ! $swap_kb =~ ^[0-9]+$ || ! $image_size =~ ^[0-9]+$ ]]; then
+  exit 1
+fi
+if ((1024 * swap_kb <= image_size)); then
+  exit 1
+fi
+
+resume=""
+if [[ -r $SYS_POWER_PATH/resume ]]; then
+  resume=$(<"$SYS_POWER_PATH/resume")
+fi
+if [[ -z $resume || $resume == 0:0 ]]; then
+  exit 1
+fi
+exit 0

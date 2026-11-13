@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-dev-pkg-test: Motanka override of Upstream bin/omarchy-dev-pkg-test:
+# unsupported (compat/overrides.tsv). Prints why, writes a journal entry and
+# exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-dev-pkg-test \
+  "it builds Arch packages with makepkg and installs them with pacman -U" "$@"

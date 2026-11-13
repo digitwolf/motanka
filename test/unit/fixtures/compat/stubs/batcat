@@ -1,0 +1,3 @@
+#!/bin/bash
+# batcat stub: prints its name and arguments.
+echo "batcat $*"

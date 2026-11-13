@@ -1,0 +1,11 @@
+# upstream.pin: the Upstream_Pin of each Channel (design.md, Data Models).
+#
+# One line per Channel, fields separated by tabs:
+#   <channel>  <commit>  <tag-or-->  <tarball-sha256>
+# The tarball is https://github.com/basecamp/omarchy/archive/<commit>.tar.gz.
+# tools/vendor fetches it and unpacks it only if its SHA-256 matches.
+#
+# stable follows Upstream release tags. edge follows Upstream's default
+# branch, quattro; it stays at the stable commit until the first edge bump.
+stable	ac2690cd7be4f47e4a255f5e2e78d904d436b068	v4.5.0	9e50de71792bff128070905a48258171e5a482c540f515e96ced30a50f88ddc6
+edge	ac2690cd7be4f47e4a255f5e2e78d904d436b068	-	9e50de71792bff128070905a48258171e5a482c540f515e96ced30a50f88ddc6

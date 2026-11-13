@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-hibernation-remove: Motanka override of Upstream
+# bin/omarchy-hibernation-remove: unsupported (compat/overrides.tsv). Prints
+# why, writes a journal entry and exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-hibernation-remove \
+  "it deletes a btrfs swap file and edits /etc/fstab and the initramfs, which Motanka leaves to the host" "$@"

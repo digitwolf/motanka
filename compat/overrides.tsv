@@ -1,0 +1,45 @@
+# overrides.tsv: every Motanka override in src/overrides/ (installed in
+# /opt/motanka/libexec/motanka/overrides/) and what it does instead of the
+# Upstream file of the same name.
+#
+# Fields, separated by tabs:
+#   <upstream-file>  <implemented|unsupported>  <what the override does, or why the feature is not available>
+# implemented  an Ubuntu implementation with Upstream's interface
+# unsupported  prints "not available in Motanka: <reason>", writes an
+#              "unsupported call" journal entry and exits 64 (some keep a
+#              read-only query working, as noted)
+#
+# tools/checkoverrides fails when an override has no line here, a line names
+# no override, or an Upstream file with pacman, Limine or mkinitcpio paths
+# has no override.
+bin/omarchy-dev-pkg-test	unsupported	builds Arch packages with makepkg and installs them with pacman -U
+bin/omarchy-hibernation-available	implemented	true when the kernel offers disk sleep, swap outside zram is larger than the hibernation image and the kernel has a resume device; Motanka does not set hibernation up itself
+bin/omarchy-hibernation-remove	unsupported	deletes a btrfs swap file and edits /etc/fstab and the initramfs
+bin/omarchy-hibernation-setup	unsupported	creates a btrfs swap file and changes /etc/fstab, the initramfs and the Limine command line
+bin/omarchy-kernel	unsupported	chooses the kernel Limine boots; the bootloader stays the host's
+bin/omarchy-lifecycle-dispatch	implemented	no platform package registers lifecycle operations on Ubuntu amd64, so every known operation is a no-op (exit 0), as Upstream does on x86
+bin/omarchy-migrate	unsupported	migrations run during 'sudo motanka update' through Motanka's runner (task 21.3 replaces this file); --pending reports nothing pending
+bin/omarchy-pkg-add	implemented	installs each name's Package_Map outcome through the Helper; skip outcomes print their reason
+bin/omarchy-pkg-aur-accessible	implemented	always false: Ubuntu has no AUR
+bin/omarchy-pkg-aur-add	implemented	same as omarchy-pkg-add: AUR names go through the Package_Map
+bin/omarchy-pkg-aur-install	unsupported	a fuzzy finder over the AUR, which Ubuntu does not have
+bin/omarchy-pkg-defaults	implemented	prints Upstream's base package list for x86; aarch64 platforms are refused (Motanka runs on amd64 only)
+bin/omarchy-pkg-drop	implemented	removes the named outcomes that Motanka installed through the Helper; keeps the rest
+bin/omarchy-pkg-install	implemented	a fuzzy finder over the Package_Map; installs through the Helper
+bin/omarchy-pkg-missing	implemented	checks each name's Package_Map outcome
+bin/omarchy-pkg-present	implemented	checks each name's Package_Map outcome
+bin/omarchy-pkg-remove	implemented	a fuzzy finder over the packages this user installed from Motanka menus; removes through the Helper
+bin/omarchy-plymouth-set	unsupported	changes the Plymouth boot splash and rebuilds the initramfs
+bin/omarchy-provision-hardware	unsupported	a step of Upstream's Arch installer: pacman keyring, mkinitcpio and Limine setup
+bin/omarchy-provision-owner	unsupported	a step of Upstream's Arch installer: disk encryption re-key, pacman and Limine configuration
+bin/omarchy-refresh-limine	unsupported	rewrites /boot/limine.conf
+bin/omarchy-refresh-pacman	unsupported	rewrites /etc/pacman.conf and the mirror list; 'sudo motanka doctor --fix' switches Motanka's apt suite
+bin/omarchy-snapshot	implemented	create exits 127, Upstream's code for "no snapshot tool", because 'sudo motanka update' takes Motanka's snapshot; restore is not available (use 'sudo motanka rollback') and exits 64
+bin/omarchy-sudo-passwordless	unsupported	writes sudoers files, which Motanka never ships; --active reports inactive (exit 1) and --disable reports already disabled
+bin/omarchy-system-factory-reset	unsupported	reinstalls the system with Upstream's Arch installer
+bin/omarchy-update-available	implemented	lists installed Motanka packages whose apt candidate is newer; "Motanka is up to date" and exit 1 otherwise
+bin/omarchy-update-keyring	implemented	checks that motanka-archive-keyring and its key file are installed; apt keeps the key current
+bin/omarchy-update-pkg-prune	implemented	no change: apt manages its own package cache on Ubuntu
+bin/omarchy-upgrade-to-quattro	unsupported	migrates an Arch installation to a new Upstream major version
+bin/omarchy-version-channel	implemented	prints stable or edge from the suite of /etc/apt/sources.list.d/motanka.sources, or unknown
+bin/omarchy-webapp-install	implemented	runs Upstream's script with a staging home, adds OnlyShowIn=Motanka; to its desktop entry and writes the entry and icon through the User_Ledger

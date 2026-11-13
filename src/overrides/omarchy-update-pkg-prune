@@ -1,0 +1,15 @@
+#!/bin/bash
+# omarchy-update-pkg-prune: Motanka override of Upstream
+# bin/omarchy-update-pkg-prune.
+#
+# usage (as Upstream): omarchy-update-pkg-prune
+#
+# Upstream prunes pacman's package cache with paccache. On Ubuntu apt keeps
+# its own cache (/var/cache/apt/archives) and its periodic jobs clean it;
+# Motanka leaves the host's cache to apt, so this prints the same heading
+# and changes nothing. Exit 0.
+set -euo pipefail
+
+echo -e "\e[32m\nPrune package cache\e[0m"
+echo "apt manages its own package cache on Ubuntu; nothing to prune."
+echo

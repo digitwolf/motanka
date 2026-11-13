@@ -1,0 +1,4 @@
+#!/bin/bash
+# systemd-cat stub: appends "<arguments> :: <message>" to $LOGS/journal.
+msg=$(cat)
+printf '%s :: %s\n' "$*" "$msg" >>"$LOGS/journal"

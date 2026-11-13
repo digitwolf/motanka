@@ -1,0 +1,496 @@
+#!/bin/bash
+# helper: Motanka's one privileged program (design.md, "Wrappers, shims and
+# the Helper"; DESIGN.md, "Linux practices: Privilege"). Installed as
+# /opt/motanka/libexec/motanka/helper. The polkit action
+# org.motanka.packages (packaging/motanka-core/org.motanka.policy,
+# auth_admin_keep) authorises it.
+#
+# usage:
+#   helper install <package...>              install Ubuntu or Motanka packages
+#   helper remove <package...>               remove packages Motanka installed
+#   helper install-binary <arch-name> <file> install a downloaded binary outcome
+#   helper remove-binary <arch-name>         delete a binary outcome
+#
+# Callers (the shims and overrides, through src/lib/outcomes.sh) run it as
+# themselves. It checks the request, then runs
+#   pkexec /opt/motanka/libexec/motanka/helper <operation> <arguments...>
+# and exits with that run's code. The run as root checks the request again
+# against root-owned files only, takes the system lock
+# (/run/lock/motanka.lock) and acts.
+#
+# Accepted requests (7.12); anything else is refused with exit 2 before
+# pkexec or apt-get runs:
+#   install         package names that are apt or motanka outcomes in
+#                   package-map.tsv for the running release, names in the
+#                   System_Ledger, and flatpak when the map has a Flatpak
+#                   outcome (7.15)
+#   remove          names in the System_Ledger only, never motanka or
+#                   motanka-*. A mapped package may have been on the Host
+#                   before Motanka, and rule 1 forbids removing it.
+#   install-binary  an Arch name whose outcome is binary with a destination
+#                   under /opt/motanka/, and a regular file. The file is
+#                   copied into a root-owned temporary file next to the
+#                   destination and that copy is checked against the map's
+#                   SHA-256 (exit 6 and deleted on a mismatch, 4.9).
+#   remove-binary   an Arch name recorded as a binary menu install
+#
+# install simulates "apt-get install --no-remove --no-install-recommends"
+# first and refuses with exit 5 when an installed package Motanka does not
+# own would change version or be removed. Recommends are not installed: a
+# menu install then adds the fewest packages Motanka does not own, and a
+# recommended package can still be installed by its own name. Every
+# package the simulation installs is written to the System_Ledger before
+# apt-get runs (write-ahead, 3.9): the requested ones as
+# "menu-install <uid> <name> apt", with the uid of the user who asked
+# (PKEXEC_UID), and dependencies as "pkg-installed <name> <version> auto"
+# (7.7). Packages that were already installed are not recorded.
+#
+# remove simulates "apt-get remove" and refuses with exit 5 when it would
+# install or upgrade anything, or remove a package that is neither
+# requested nor in the System_Ledger. It never runs autoremove.
+#
+# Like the commands that change the system, the Helper runs the guards
+# first: a Protected_Host, or a Dev_Build outside a virtual machine, is
+# refused with exit 7.
+#
+# Exit codes: 0 done, 1 error, 2 usage or refused request, 5 a package
+# Motanka does not own would change, 6 checksum mismatch, 7 guard refused,
+# 9 lock held, 10 the Package_Map is for another release, 11 authorisation
+# denied (pkexec returned 126 or 127; nothing was changed, 7.13).
+#
+# Test hooks, honoured only when not running as root: MOTANKA_ROOT and
+# MOTANKA_PACKAGE_MAP (outcomes.sh), and MOTANKA_HELPER_TEST=1, which makes
+# the pkexec run use this file instead of the installed path and lets a run
+# that has PKEXEC_UID set act without root. PATH is kept, so tests put stubs
+# of apt-get, dpkg-query and pkexec first. As root PATH is
+# /usr/sbin:/usr/bin:/sbin:/bin and the hooks are removed.
+set -euo pipefail
+
+readonly MK_HELPER_INSTALLED=/opt/motanka/libexec/motanka/helper
+readonly MK_HELPER_LIBEXEC=/opt/motanka/libexec/motanka
+
+if ((EUID == 0)); then
+  # pkexec already starts with a clean environment; sudo or a root shell
+  # may not.
+  unset MOTANKA_ROOT MOTANKA_PACKAGE_MAP MOTANKA_HELPER MOTANKA_HELPER_TEST
+  export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  umask 022
+  _h_base=$MK_HELPER_LIBEXEC
+  _h_self=$MK_HELPER_INSTALLED
+  _h_test=0
+else
+  _h_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+  _h_base=${_h_self%/*}
+  if [[ ! -r $_h_base/lib/common.sh ]]; then
+    _h_base=${_h_base%/*}
+  fi
+  _h_test=0
+  if [[ ${MOTANKA_HELPER_TEST:-} == 1 ]]; then
+    _h_test=1
+  fi
+fi
+
+MK_CMD=helper
+# shellcheck source=../lib/common.sh
+source "$_h_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_h_base/lib/sysledger.sh"
+# shellcheck source=../lib/guard.sh
+source "$_h_base/lib/guard.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_h_base/lib/outcomes.sh"
+
+declare -A _H_MAPPED=() _H_LEDGERED=() _H_BINARY_LEDGERED=()
+_H_HAS_FLATPAK=0
+_H_NEW=() _H_NEW_VER=() _H_CHANGED=() _H_REMOVED=()
+
+_h_usage() {
+  cat <<'EOF'
+usage: helper install <package...>
+       helper remove <package...>
+       helper install-binary <arch-name> <file>
+       helper remove-binary <arch-name>
+
+Motanka's privileged package operations. It asks for authorisation through
+polkit (pkexec) and accepts only packages in the Package_Map or the
+System_Ledger.
+EOF
+}
+
+_h_usage_error() {
+  _h_usage >&2
+  mk_die "$MK_EXIT_USAGE" "$*"
+}
+
+# _h_refuse <message>: the request is not accepted: error, journal, exit 2.
+_h_refuse() {
+  mk_error "refused: $*"
+  exit "$MK_EXIT_USAGE"
+}
+
+# _h_uid: the uid of the user who asked (PKEXEC_UID, SUDO_UID, or ours).
+_h_uid() {
+  local u
+  for u in "${PKEXEC_UID:-}" "${SUDO_UID:-}"; do
+    if [[ $u =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$u"
+      return 0
+    fi
+  done
+  id -u
+}
+
+# _h_quote <words...>: the words shell-quoted on one line, for messages.
+_h_quote() {
+  local out
+  out=$(printf '%q ' "$@")
+  printf '%s\n' "${out% }"
+}
+
+# _h_load: reads what the Helper accepts from the map and the System_Ledger.
+_h_load() {
+  local file name kind targets t k
+  local -a ts=()
+  file=$(mk_oc_map_file)
+  while IFS=$'\t' read -r name kind targets _; do
+    case $name in
+      '' | '#'*) continue ;;
+    esac
+    case $kind in
+      apt | motanka)
+        IFS=, read -r -a ts <<<"$targets"
+        for t in "${ts[@]}"; do
+          if [[ -n $t ]]; then
+            _H_MAPPED[$t]=1
+          fi
+        done
+        ;;
+      flatpak)
+        _H_HAS_FLATPAK=1
+        ;;
+    esac
+  done <"$file"
+  while IFS= read -r name; do
+    if [[ -n $name ]]; then
+      _H_LEDGERED[$name]=1
+    fi
+  done < <(mk_sysledger_packages)
+  while IFS=$'\t' read -r _ name k; do
+    [[ -n $name ]] || continue
+    case $k in
+      apt) _H_LEDGERED[$name]=1 ;;
+      binary) _H_BINARY_LEDGERED[$name]=1 ;;
+    esac
+  done < <(mk_sysledger_menu_installs)
+}
+
+# _h_check_names <install|remove> <name...>: exits 2 unless every name is
+# accepted for the operation.
+_h_check_names() {
+  local op=$1 name release
+  local -a refused=()
+  shift
+  for name in "$@"; do
+    if mk_oc_deb_name_ok "$name"; then
+      case $op in
+        install)
+          if [[ -n ${_H_MAPPED[$name]:-} || -n ${_H_LEDGERED[$name]:-} ]]; then
+            continue
+          fi
+          if [[ $name == flatpak ]] && ((_H_HAS_FLATPAK)); then
+            continue
+          fi
+          ;;
+        remove)
+          if [[ -n ${_H_LEDGERED[$name]:-} ]] && ! mk_oc_motanka_package "$name"; then
+            continue
+          fi
+          ;;
+      esac
+    fi
+    refused+=("$name")
+  done
+  if ((${#refused[@]} > 0)); then
+    release=$(mk_oc_release 2>/dev/null) || release="this release"
+    if [[ $op == install ]]; then
+      _h_refuse "$(_h_quote "${refused[@]}"): not an outcome in the Package_Map for $release and not in the System_Ledger"
+    fi
+    _h_refuse "$(_h_quote "${refused[@]}"): Motanka did not install it (not in the System_Ledger), so it is not removed"
+  fi
+}
+
+# _h_binary_entry <arch-name>: exits 2 unless the name is a binary outcome
+# with a destination under /opt/motanka/. Leaves the entry in MK_OC_*.
+_h_binary_entry() {
+  local name=$1
+  if ! mk_oc_lookup "$name" || [[ $MK_OC_KIND != binary ]]; then
+    _h_refuse "$(_h_quote "$name") is not a binary outcome in the Package_Map"
+  fi
+  if [[ $MK_OC_F5 != /opt/motanka/?* || /$MK_OC_F5/ == */../* || /$MK_OC_F5/ == */./* || $MK_OC_F5 == */ ]]; then
+    _h_refuse "the destination of $name is not a file under /opt/motanka/"
+  fi
+  if [[ ! $MK_OC_F4 =~ $MK_OC_SHA_RE ]]; then
+    _h_refuse "the Package_Map entry of $name has no valid SHA-256"
+  fi
+}
+
+# _h_check_binary <install-binary|remove-binary> <arguments...>
+_h_check_binary() {
+  local op=$1 name=$2 file=${3:-}
+  _h_binary_entry "$name"
+  if [[ $op == install-binary ]]; then
+    if [[ $file != /* || -L $file || ! -f $file ]]; then
+      _h_refuse "$(_h_quote "$file") is not a regular file given by its absolute path"
+    fi
+  elif [[ -z ${_H_BINARY_LEDGERED[$name]:-} ]]; then
+    _h_refuse "$(_h_quote "$name"): Motanka did not install this binary (not in the System_Ledger)"
+  fi
+}
+
+# _h_simulate <apt-get arguments...>: runs apt-get -s and fills _H_NEW and
+# _H_NEW_VER (packages it would install), _H_CHANGED (installed packages
+# that would change version: "<name> TAB <old> TAB <new>") and _H_REMOVED.
+_h_simulate() {
+  local out rc=0 line
+  local re_change='^Inst ([^ ]+) \[([^]]*)\] \(([^ ]+)'
+  local re_new='^Inst ([^ ]+) \(([^ ]+)'
+  local re_remove='^Remv ([^ ]+)'
+  _H_NEW=() _H_NEW_VER=() _H_CHANGED=() _H_REMOVED=()
+  out=$(LC_ALL=C apt-get -s -q "$@" 2>&1) || rc=$?
+  if ((rc != 0)); then
+    printf '%s\n' "$out" >&2
+    mk_error "apt-get could not plan this change (exit $rc); nothing was changed"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ $line =~ $re_change ]]; then
+      _H_CHANGED+=("${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}"$'\t'"${BASH_REMATCH[3]}")
+    elif [[ $line =~ $re_new ]]; then
+      _H_NEW+=("${BASH_REMATCH[1]}")
+      _H_NEW_VER+=("${BASH_REMATCH[2]}")
+    elif [[ $line =~ $re_remove ]]; then
+      _H_REMOVED+=("${BASH_REMATCH[1]}")
+    fi
+  done <<<"$out"
+}
+
+# _h_report_foreign <operation> <changes...>: the error for exit code 5.
+_h_report_foreign() {
+  local op=$1
+  shift
+  mk_error "refused: this $op would change packages Motanka does not own: $*"
+  printf '  %s\n' "$@" >&2
+}
+
+# _h_apt_get <arguments...>: the real apt-get run, without the lock's file
+# descriptor, so no process it leaves running keeps the lock.
+_h_apt_get() {
+  DEBIAN_FRONTEND=noninteractive apt-get -y -q \
+    -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+    "$@" {MK_LOCK_FD}>&-
+}
+
+# _h_install <package...>
+_h_install() {
+  local name entry old new uid i
+  local -a bad=()
+  local -A requested=()
+  for name in "$@"; do
+    requested[$name]=1
+  done
+  _h_simulate install --no-remove --no-install-recommends "$@" || return 1
+  for entry in "${_H_CHANGED[@]}"; do
+    IFS=$'\t' read -r name old new <<<"$entry"
+    if ! mk_oc_motanka_package "${name%%:*}"; then
+      bad+=("$name $old -> $new")
+    fi
+  done
+  for name in "${_H_REMOVED[@]}"; do
+    bad+=("$name (removed)")
+  done
+  if ((${#bad[@]} > 0)); then
+    _h_report_foreign install "${bad[@]}"
+    return "$MK_EXIT_FOREIGN"
+  fi
+  if ((${#_H_NEW[@]} == 0)); then
+    mk_info "motanka: nothing to install: $* already installed"
+    return 0
+  fi
+  uid=$(_h_uid)
+  for ((i = 0; i < ${#_H_NEW[@]}; i++)); do
+    name=${_H_NEW[i]%%:*}
+    if [[ -n ${requested[$name]:-} ]]; then
+      mk_sysledger_menu_install "$uid" "$name" apt || return 1
+    else
+      mk_sysledger_pkg_installed "$name" "${_H_NEW_VER[i]}" auto || return 1
+    fi
+  done
+  mk_log info "apt-get install --no-remove --no-install-recommends $* (for uid $uid)"
+  if ! _h_apt_get install --no-remove --no-install-recommends "$@"; then
+    mk_error "apt-get install failed; the System_Ledger lists the packages it planned"
+    return 1
+  fi
+}
+
+# _h_remove <package...>
+_h_remove() {
+  local name entry
+  local -a bad=() installed=()
+  local -A requested=()
+  for name in "$@"; do
+    requested[$name]=1
+    if mk_oc_deb_installed "$name"; then
+      installed+=("$name")
+    fi
+  done
+  if ((${#installed[@]} == 0)); then
+    mk_info "motanka: nothing to remove: $* not installed"
+    return 0
+  fi
+  _h_simulate remove "${installed[@]}" || return 1
+  for entry in "${_H_CHANGED[@]}"; do
+    bad+=("${entry%%$'\t'*} (changed)")
+  done
+  for name in "${_H_NEW[@]}"; do
+    bad+=("$name (installed)")
+  done
+  for name in "${_H_REMOVED[@]}"; do
+    name=${name%%:*}
+    if [[ -n ${requested[$name]:-} ]]; then
+      continue
+    fi
+    if [[ -n ${_H_LEDGERED[$name]:-} ]] && ! mk_oc_motanka_package "$name"; then
+      continue
+    fi
+    bad+=("$name (removed)")
+  done
+  if ((${#bad[@]} > 0)); then
+    _h_report_foreign remove "${bad[@]}"
+    return "$MK_EXIT_FOREIGN"
+  fi
+  mk_log info "apt-get remove ${installed[*]} (for uid $(_h_uid))"
+  if ! _h_apt_get remove "${installed[@]}"; then
+    mk_error "apt-get remove failed"
+    return 1
+  fi
+}
+
+# _h_install_binary <arch-name> <file>
+_h_install_binary() {
+  local name=$1 file=$2 dest path dir tmp actual uid
+  _h_binary_entry "$name"
+  dest=$MK_OC_F5
+  if dpkg-query -S "$dest" >/dev/null 2>&1; then
+    mk_error "refused: $dest belongs to a package; a binary outcome must not replace it"
+    return 1
+  fi
+  path=$(mk_path "$dest")
+  dir=${path%/*}
+  mkdir -p -m 0755 -- "$dir" || return 1
+  tmp=$(mktemp "$dir/.motanka-binary.XXXXXX") || return 1
+  if ! cat -- "$file" >"$tmp"; then
+    rm -f -- "$tmp"
+    mk_error "cannot read $file"
+    return 1
+  fi
+  actual=$(sha256sum <"$tmp") || actual=""
+  actual=${actual:0:64}
+  if [[ $actual != "$MK_OC_F4" ]]; then
+    rm -f -- "$tmp"
+    mk_error "SHA-256 mismatch for $name: the Package_Map expects $MK_OC_F4, the file is ${actual:-unreadable}; nothing was installed"
+    return "$MK_EXIT_VERIFY"
+  fi
+  uid=$(_h_uid)
+  if ! mk_sysledger_menu_install "$uid" "$name" binary; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  if ! chmod 0755 -- "$tmp" || ! mv -fT -- "$tmp" "$path"; then
+    rm -f -- "$tmp"
+    mk_error "cannot install $dest"
+    return 1
+  fi
+  mk_fsync "$dir" || true
+  mk_log info "installed the binary outcome of $name as $dest (for uid $uid)"
+}
+
+# _h_remove_binary <arch-name>
+_h_remove_binary() {
+  local name=$1 path
+  _h_binary_entry "$name"
+  path=$(mk_path "$MK_OC_F5")
+  if [[ -e $path || -L $path ]]; then
+    rm -f -- "$path"
+    mk_log info "deleted the binary outcome of $name, $MK_OC_F5 (for uid $(_h_uid))"
+  fi
+}
+
+# _h_elevate <operation> <arguments...>: runs the Helper through pkexec and
+# exits with its code; 126 and 127 (dismissed, not authorised, no agent)
+# become 11.
+_h_elevate() {
+  local prog=$MK_HELPER_INSTALLED rc=0
+  if ((_h_test)); then
+    prog=$_h_self
+  fi
+  if ! command -v pkexec >/dev/null 2>&1; then
+    mk_error "pkexec is not installed, so Motanka cannot ask for authorisation; no package was changed"
+    exit "$MK_EXIT_AUTH"
+  fi
+  pkexec "$prog" "$@" || rc=$?
+  case $rc in
+    126 | 127)
+      mk_error "authorisation was denied or could not be asked for (pkexec exit $rc); no package was changed"
+      exit "$MK_EXIT_AUTH"
+      ;;
+  esac
+  exit "$rc"
+}
+
+_h_main() {
+  local op=${1:-} rc=0
+  case $op in
+    -h | --help)
+      _h_usage
+      exit 0
+      ;;
+    install | remove)
+      (($# >= 2)) || _h_usage_error "$op needs at least one package name"
+      ;;
+    install-binary)
+      (($# == 3)) || _h_usage_error "install-binary needs an Arch name and a file"
+      ;;
+    remove-binary)
+      (($# == 2)) || _h_usage_error "remove-binary needs an Arch name"
+      ;;
+    '')
+      _h_usage_error "an operation is required"
+      ;;
+    *)
+      _h_usage_error "unknown operation '$op'"
+      ;;
+  esac
+  shift
+  mk_guards
+  mk_oc_map_check || exit $?
+  _h_load
+  case $op in
+    install | remove) _h_check_names "$op" "$@" ;;
+    *) _h_check_binary "$op" "$@" ;;
+  esac
+  if ((EUID != 0)); then
+    if ((_h_test == 0)) || [[ -z ${PKEXEC_UID:-} ]]; then
+      _h_elevate "$op" "$@"
+    fi
+  fi
+  mk_lock_system
+  case $op in
+    install) _h_install "$@" || rc=$? ;;
+    remove) _h_remove "$@" || rc=$? ;;
+    install-binary) _h_install_binary "$@" || rc=$? ;;
+    remove-binary) _h_remove_binary "$@" || rc=$? ;;
+  esac
+  exit "$rc"
+}
+
+_h_main "$@"

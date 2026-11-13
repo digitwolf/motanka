@@ -1,0 +1,43 @@
+#!/bin/bash
+# omarchy-lifecycle-dispatch: Motanka override of Upstream
+# bin/omarchy-lifecycle-dispatch.
+#
+# usage (as Upstream): omarchy-lifecycle-dispatch [--resolve] <operation> [arguments...]
+#
+# Upstream runs a platform package's root-owned entrypoint for a fixed set
+# of lifecycle operations, found through pacman's package records
+# (/var/lib/pacman/local). On x86 no platform package registers any, so
+# every operation is a no-op there and the caller keeps its generic path.
+# Motanka runs on Ubuntu amd64, where no such package exists either, so
+# this keeps Upstream's x86 behaviour without root and without pacman:
+#   a known operation   exit 0 (--resolve prints nothing: no entrypoint)
+#   anything else       usage on stderr, exit 2
+set -euo pipefail
+
+operations=(
+  provision-prepare provision-commit provision-verify
+  reset-prepare reset-verify reset-commit reset-rollback
+  update-verify update-takeover
+  luks-slots
+  setup-boot setup-system setup-user
+  post-install pre-remove
+  enable-fingerprint disable-fingerprint
+)
+
+usage() {
+  echo "Usage: omarchy-lifecycle-dispatch [--resolve] <operation> [arguments...]" >&2
+  echo "Operations: ${operations[*]}" >&2
+  exit 2
+}
+
+if [[ ${1:-} == --resolve ]]; then
+  shift
+fi
+operation=${1:-}
+[[ -n $operation ]] || usage
+for known in "${operations[@]}"; do
+  if [[ $known == "$operation" ]]; then
+    exit 0
+  fi
+done
+usage

@@ -1,0 +1,61 @@
+#!/bin/bash
+# omarchy-pkg-remove: Motanka override of Upstream bin/omarchy-pkg-remove.
+#
+# usage (as Upstream): omarchy-pkg-remove
+#
+# A fuzzy finder for picking packages to remove, like Upstream's. Upstream
+# lists every explicitly installed package; this lists the Ubuntu packages
+# that this user installed from Motanka menus (menu-install lines in the
+# System_Ledger) and that are still installed, because Motanka removes only
+# packages it installed (rule 1). The chosen ones are removed through the
+# Helper; omarchy-show-done reports the result, as Upstream does.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_base/lib/sysledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+uid=$(id -u)
+candidates=()
+declare -A seen=()
+while IFS=$'\t' read -r who name kind; do
+  if [[ $who != "$uid" || $kind != apt || -n ${seen[$name]:-} ]]; then
+    continue
+  fi
+  seen[$name]=1
+  if mk_oc_deb_installed "$name"; then
+    candidates+=("$name")
+  fi
+done < <(mk_sysledger_menu_installs 2>/dev/null)
+
+if ((${#candidates[@]} == 0)); then
+  echo "No packages installed from Motanka menus to remove."
+  exit 0
+fi
+
+fzf_args=(
+  --multi
+  --preview 'dpkg-query -s {1} 2>/dev/null'
+  --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --color 'pointer:red,marker:red'
+)
+
+pkg_names=$(printf '%s\n' "${candidates[@]}" | fzf "${fzf_args[@]}") || true
+
+if [[ -n $pkg_names ]]; then
+  mapfile -t chosen <<<"$pkg_names"
+  rc=0
+  mk_oc_helper remove "${chosen[@]}" || rc=$?
+  omarchy-show-done "$rc"
+fi

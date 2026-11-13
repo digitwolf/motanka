@@ -1,0 +1,10 @@
+#!/bin/bash
+# fd: Ubuntu's fd-find package installs the command as fdfind; Upstream
+# calls fd. This runs fdfind. It is on PATH only inside the Wrapper scope
+# (run-upstream), so nothing outside Upstream's commands sees it.
+set -euo pipefail
+if ! command -v fdfind >/dev/null 2>&1; then
+  printf 'fd: fdfind is not installed (Ubuntu package fd-find)\n' >&2
+  exit 127
+fi
+exec fdfind "$@"

@@ -1,0 +1,24 @@
+#!/bin/bash
+# Helper stub (MOTANKA_HELPER) for tests of the shims, outcomes and
+# overrides. Appends "<operation> <arguments>" to $LOGS/helper and exits
+# $FAKE_HELPER_RC (default 0). With code 0, "install <package...>" adds the
+# packages to $FAKE_DPKG; installing flatpak also puts the flatpak stub
+# ($FLATPAK_STUB) next to this file, as if Flatpak had been installed.
+printf '%s\n' "$*" >>"$LOGS/helper"
+rc=${FAKE_HELPER_RC:-0}
+if ((rc != 0)); then
+  exit "$rc"
+fi
+op=${1:-}
+shift
+if [[ $op == install ]]; then
+  for n in "$@"; do
+    printf '%s\t1.0\n' "$n" >>"$FAKE_DPKG"
+    if [[ $n == flatpak && -n ${FLATPAK_STUB:-} ]]; then
+      here=$(dirname -- "$0")
+      cp -- "$FLATPAK_STUB" "$here/flatpak"
+      chmod +x "$here/flatpak"
+    fi
+  done
+fi
+exit 0

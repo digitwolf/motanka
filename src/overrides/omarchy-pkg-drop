@@ -1,0 +1,29 @@
+#!/bin/bash
+# omarchy-pkg-drop: Motanka override of Upstream bin/omarchy-pkg-drop.
+#
+# usage (as Upstream): omarchy-pkg-drop <packages...>
+#
+# Removes the installed outcome of every named Arch package that Motanka
+# installed, through the Helper; names that are not installed are ignored,
+# as Upstream does. Packages that Motanka did not install (absent from the
+# System_Ledger, or Flatpak apps without a User_Ledger entry) are kept with
+# a message, because Motanka never removes a package it does not own.
+# Exit codes: 0 done, 1 or the Helper's code when a removal failed.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_base/lib/sysledger.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+(($# > 0)) || exit 0
+rc=0
+mk_oc_remove "$@" || rc=$?
+exit "$rc"

@@ -1,0 +1,47 @@
+#!/bin/bash
+# omarchy-pkg-add: Motanka override of Upstream bin/omarchy-pkg-add.
+#
+# usage (as Upstream): omarchy-pkg-add <packages...>
+#
+# Installs the Package_Map outcome of every named Arch package that is not
+# installed yet, through the Helper (7.3, 7.11), then checks that each one
+# is installed. A skip outcome prints its reason and counts as done (7.6).
+# Exit codes as Upstream: 0 all installed, 1 otherwise (including an
+# unmapped name, a refused or failed install, or denied authorisation).
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_base/lib/sysledger.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+missing=()
+for pkg in "$@"; do
+  if ! mk_oc_present "$pkg"; then
+    missing+=("$pkg")
+  fi
+done
+
+if ((${#missing[@]} > 0)); then
+  mk_oc_install "${missing[@]}" || exit 1
+fi
+
+for pkg in "$@"; do
+  # Secondary check, as Upstream does, for installs that reported success.
+  if mk_oc_lookup "$pkg" && [[ $MK_OC_KIND == skip ]]; then
+    continue
+  fi
+  if ! mk_oc_present "$pkg"; then
+    echo -e "\033[31mError: Package '$pkg' did not install\033[0m" >&2
+    exit 1
+  fi
+done
+
+exit 0

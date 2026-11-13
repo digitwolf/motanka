@@ -1,0 +1,36 @@
+#!/bin/bash
+# omarchy-migrate: Motanka override of Upstream bin/omarchy-migrate:
+# unsupported for now (compat/overrides.tsv).
+#
+# usage (as Upstream): omarchy-migrate [--pending]
+#
+# Upstream's runner waits on pacman's lock (/var/lib/pacman/db.lck) and runs
+# every pending migration unclassified. Motanka runs Upstream's migrations
+# from "sudo motanka update", through its own runner and migrations.tsv
+# (design.md, "Updater, snapshots and rollback"), which replaces this file.
+# Until then:
+#   --pending, --check  nothing is pending for this runner: exit 1, silently,
+#                       as Upstream does when nothing is pending
+#   -h, --help          usage, exit 0
+#   no option           not available: message, journal entry, exit 64
+set -euo pipefail
+
+case ${1:-} in
+  --pending | --check)
+    exit 1
+    ;;
+  -h | --help)
+    echo "Usage: omarchy-migrate [--pending]"
+    exit 0
+    ;;
+esac
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-migrate \
+  "Upstream's migrations run during 'sudo motanka update', which classifies each one for Ubuntu first" "$@"

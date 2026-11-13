@@ -1,0 +1,36 @@
+#!/bin/bash
+# omarchy-snapshot: Motanka override of Upstream bin/omarchy-snapshot.
+#
+# usage (as Upstream): omarchy-snapshot <create|restore>
+#
+# Upstream takes snapper snapshots of every snapper config and restores them
+# from the Limine menu. Motanka takes its own snapshot during
+# "sudo motanka update" (and a snapper pre and post pair when the host has
+# snapper set up for /), and restores it with "sudo motanka rollback".
+#   create   exit 127, which Upstream's updater reads as "no snapshot tool
+#            here" and goes on without a snapshot
+#   restore  not available: message, journal entry, exit 64
+#   other    usage, exit 1, as Upstream
+set -euo pipefail
+
+case ${1:-} in
+  create)
+    echo "Motanka records its own snapshot during 'sudo motanka update'; no snapshot was taken here." >&2
+    exit 127
+    ;;
+  restore)
+    _self=$(readlink -f -- "${BASH_SOURCE[0]}")
+    _base=${_self%/*/*}
+    MK_CMD=override
+    # shellcheck source=../lib/common.sh
+    source "$_base/lib/common.sh"
+    # shellcheck source=../lib/outcomes.sh
+    source "$_base/lib/outcomes.sh"
+    mk_oc_unsupported omarchy-snapshot \
+      "snapshots are restored with 'sudo motanka rollback', not from the bootloader" "$@"
+    ;;
+  *)
+    echo "Usage: omarchy-snapshot <create|restore>" >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,90 @@
+# privileged.tsv: what the sudo dispatcher (src/shims/sudo) does with each
+# privileged call of an Upstream command. Installed as
+# /opt/motanka/share/motanka/privileged.tsv.
+#
+# One line per Upstream bin/ command that has privileged findings in the
+# Call_Inventory (compat/inventory/<pin>.tsv), fields separated by tabs:
+#   <command>  <pattern>  <allow|override|unsupported>  <reason>
+# <pattern> is a bash extended glob matched against the command sudo would
+# run and its arguments, joined by single spaces. The first matching line of
+# the calling command wins; a call that matches no line is unsupported.
+#   allow        runs /usr/bin/sudo with the original arguments. Only for
+#                calls that change no persistent state.
+#   override     the command is replaced by a Motanka override, which goes
+#                through the Helper or reports that it is not available.
+#   unsupported  exit 64, journal entry, notification "<command> is not
+#                available in Motanka".
+# Calls of pacman, yay, mkinitcpio, limine-* and snapper never reach this
+# table: the dispatcher runs those shims, and any override, unprivileged.
+omarchy-apply-lock	*	unsupported	writes PAM files in /etc/pam.d and systemd drop-ins; Motanka changes /etc only through its packages
+omarchy-brightness-display-apple	*	unsupported	asdcontrol is not packaged for Ubuntu (Package_Map: skip)
+omarchy-channel-set	*	unsupported	its only privileged call is pacman, which goes to the pacman shim; the Motanka channel is chosen with 'motanka install --channel'
+omarchy-debug	dmesg	allow	reads the kernel log and changes nothing
+omarchy-dev-install-ydoo	*	unsupported	adds the user to the input group and writes udev rules under /etc
+omarchy-dev-link	*	unsupported	writes /etc/omarchy.conf and a sudoers file; Motanka ships no sudoers files
+omarchy-dev-pkg-test	*	override	builds Arch packages with makepkg; the override reports it as not available
+omarchy-dev-status	*	unsupported	inspects a development checkout installed through Arch packages
+omarchy-dev-unlink	*	unsupported	writes /etc/omarchy.conf and deletes a sudoers file
+omarchy-dns	*	unsupported	rewrites the host's resolver configuration under /etc
+omarchy-drive-password	*	unsupported	changes disk encryption key slots; disk encryption is out of scope
+omarchy-hibernation-remove	*	override	edits /etc/fstab, swap and the initramfs; the override reports it as not available
+omarchy-hibernation-setup	*	override	creates a btrfs swap file and changes /etc/fstab, the initramfs and the bootloader; the override reports it as not available
+omarchy-install-browser	*	unsupported	links a DRM module into a browser folder owned by a package
+omarchy-install-chromium-claude	*	unsupported	writes browser extension policy files under /etc and /usr
+omarchy-install-docker-dbs	*	unsupported	starts root Docker containers that restart at every boot
+omarchy-install-gaming-lutris	*	unsupported	edits /usr/bin/lutris, a file of a package Motanka does not own
+omarchy-install-gaming-xbox-controllers	*	unsupported	blacklists a kernel module, adds the user to a group and reboots
+omarchy-install-service-1password	*	unsupported	writes browser integration files outside the home folder
+omarchy-install-service-nordvpn	*	unsupported	enables a system service and adds the user to a group
+omarchy-install-service-once	*	unsupported	enables a system service
+omarchy-install-service-sunshine	*	unsupported	changes the ufw firewall
+omarchy-install-service-tailscale	*	unsupported	enables a system service and changes its configuration
+omarchy-kernel	*	override	chooses the kernel Limine boots; the override reports it as not available
+omarchy-language	*	unsupported	generates locales and changes the system locale under /etc
+omarchy-launch-docker-tui	*	unsupported	runs lazydocker as root
+omarchy-menu-timezone	*	unsupported	changes the host's time zone (/etc/localtime) for every session
+omarchy-pkg-add	*	override	the override installs Package_Map outcomes through the Helper
+omarchy-pkg-aur-install	*	override	the AUR is not available on Ubuntu; the override reports it as not available
+omarchy-pkg-drop	*	override	the override removes what Motanka installed through the Helper
+omarchy-pkg-install	*	override	the override installs Package_Map outcomes through the Helper
+omarchy-pkg-remove	*	override	the override removes what Motanka installed through the Helper
+omarchy-plymouth-set	*	override	changes the boot splash and rebuilds the initramfs; the override reports it as not available
+omarchy-refresh-limine	*	override	rewrites /boot/limine.conf; the override reports it as not available
+omarchy-refresh-pacman	*	override	rewrites /etc/pacman.conf and the mirror list; the override reports it as not available
+omarchy-remove-ai-ollama	*	unsupported	disables a system service and deletes /var/lib/ollama
+omarchy-remove-browser	*	unsupported	deletes browser policy files under /etc
+omarchy-remove-dev-env	*	unsupported	deletes /usr/local/bin/opam
+omarchy-remove-gaming-xbox-controllers	*	unsupported	deletes kernel module configuration under /etc
+omarchy-remove-launcher-entry	*	unsupported	its only privileged call is pacman, which goes to the pacman shim
+omarchy-remove-security-fido2	*	unsupported	edits PAM files in /etc/pam.d
+omarchy-remove-security-fingerprint	*	unsupported	edits PAM files in /etc/pam.d and deletes fingerprint data
+omarchy-remove-security-sshd	*	unsupported	disables sshd and changes the ufw firewall
+omarchy-remove-security-sudoless-docker	*	unsupported	removes the user from the docker group
+omarchy-remove-service-1password	*	unsupported	deletes browser integration files outside the home folder
+omarchy-remove-service-sunshine	*	unsupported	changes the ufw firewall
+omarchy-remove-service-tailscale	*	unsupported	disables a system service
+omarchy-restart-audio	usbreset [0-9][0-9][0-9]/[0-9][0-9][0-9]	allow	resets one USB audio device and changes no persistent state
+omarchy-restart-trackpad	*	unsupported	rebinds a kernel driver and reloads a kernel module
+omarchy-setup-direct-boot	*	unsupported	changes UEFI boot entries; the bootloader is out of scope
+omarchy-setup-security-fido2	*	unsupported	edits PAM files in /etc/pam.d
+omarchy-setup-security-fingerprint	*	unsupported	edits PAM files in /etc/pam.d
+omarchy-setup-security-sshd	*	unsupported	enables sshd, writes its configuration and changes the ufw firewall
+omarchy-setup-security-sudoless-docker	*	unsupported	adds the user to the docker group
+omarchy-snapshot	*	override	takes snapper snapshots; the override leaves snapshots to 'motanka update'
+omarchy-sudo-keepalive	*	unsupported	keeps a sudo credential alive; Motanka asks polkit for each package operation, and sudo -v succeeds without a prompt
+omarchy-sudo-passwordless	*	override	writes sudoers files, which Motanka never ships; the override reports it as not available
+omarchy-system-factory-reset	*	override	reinstalls the system from Upstream's Arch installer; the override reports it as not available
+omarchy-theme-set-browser-policy	*	unsupported	writes browser policy files under /etc
+omarchy-toggle-hybrid-gpu	*	unsupported	changes the GPU mode, /etc/supergfxd.conf and system services
+omarchy-update	*	unsupported	runs Upstream's Arch update; Motanka is updated with 'sudo motanka update'
+omarchy-update-boot	*	unsupported	verifies Limine and initramfs boot files, which Motanka does not use
+omarchy-update-firmware	*	unsupported	writes to the EFI system partition and flashes firmware
+omarchy-update-keyring	*	override	changes pacman's keyring; the override checks Motanka's apt keyring
+omarchy-update-pacman	*	unsupported	its only privileged call is pacman, which goes to the pacman shim
+omarchy-update-pkg-prune	*	override	prunes pacman's cache; the override leaves apt's cache to apt
+omarchy-update-stay-awake	*	unsupported	holds a root sleep inhibitor for Upstream's update
+omarchy-update-system-pkgs-when-conflicted	*	unsupported	moves files owned by packages aside
+omarchy-update-time	systemctl restart systemd-timesyncd	allow	restarts the time synchronisation service and changes no persistent state
+omarchy-upgrade-to-quattro	*	override	migrates an Arch installation to a new Upstream major version; the override reports it as not available
+omarchy-windows-key	@(cat|strings) /sys/firmware/acpi/tables/MSDM	allow	reads the firmware licence table and changes nothing
+omarchy-windows-vm	*	unsupported	manages a Windows VM with root privileges for KVM, Docker and the network

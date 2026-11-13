@@ -1,0 +1,12 @@
+#!/bin/bash
+# pkexec stub. Logs the call to $LOGS/pkexec. With $FAKE_PKEXEC_RC set it
+# exits with that code (126: dialog dismissed, 127: not authorised).
+# Otherwise it runs the program with PKEXEC_UID set, as an authorised pkexec
+# run would, but as the calling user and with the same environment.
+printf '%s\n' "$*" >>"$LOGS/pkexec"
+if [[ -n ${FAKE_PKEXEC_RC:-} ]]; then
+  exit "$FAKE_PKEXEC_RC"
+fi
+PKEXEC_UID=$(id -u)
+export PKEXEC_UID
+exec "$@"

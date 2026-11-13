@@ -1,0 +1,23 @@
+#!/bin/bash
+# omarchy-pkg-present: Motanka override of Upstream bin/omarchy-pkg-present.
+#
+# usage (as Upstream): omarchy-pkg-present <packages...>
+#
+# Exits 0 if the Package_Map outcome of every named Arch package is
+# installed, 1 if any is missing. Unmapped names and skip outcomes count as
+# missing.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+for pkg in "$@"; do
+  mk_oc_present "$pkg" || exit 1
+done
+
+exit 0

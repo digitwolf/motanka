@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-refresh-pacman: Motanka override of Upstream
+# bin/omarchy-refresh-pacman: unsupported (compat/overrides.tsv). Prints why,
+# writes a journal entry and exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-refresh-pacman \
+  "it rewrites pacman's configuration and mirror list; Motanka's apt source comes from its packages, and 'sudo motanka doctor --fix' switches its suite" "$@"

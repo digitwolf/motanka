@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Installed as /usr/share/polkit-1/actions/org.motanka.policy by motanka-core.
+  The one polkit action of Motanka: running its Helper through pkexec, for the
+  package operations of Upstream menus (design.md, "Wrappers, shims and the
+  Helper"). Administrator authentication is asked for once and kept for a few
+  minutes (auth_admin_keep). The Helper accepts only packages in the
+  Package_Map or the System_Ledger.
+-->
+<policyconfig>
+  <vendor>Motanka</vendor>
+  <icon_name>system-software-install</icon_name>
+
+  <action id="org.motanka.packages">
+    <description>Install or remove packages for the Motanka session</description>
+    <message>Authentication is required to install or remove packages for the Motanka session</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/motanka/libexec/motanka/helper</annotate>
+  </action>
+</policyconfig>

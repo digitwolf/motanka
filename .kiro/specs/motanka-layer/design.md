@@ -232,7 +232,7 @@ motanka rollback [--dry-run] [--yes]
 motanka doctor   [--json] [--fix]
 ```
 
-`--i-know-this-is-not-a-vm` is accepted by `install`, `remove`, `update` and `rollback` on a Dev_Build only. `NO_COLOR` is honoured. The first install uses `install.sh` from a GitHub release, which is the same Installer code; its checksum is published next to it.
+`--i-know-this-is-not-a-vm` is accepted by `install`, `remove`, `update` and `rollback` on a Dev_Build only. `NO_COLOR` is honoured. The first install uses `install.sh`, published at the root of the Motanka_Repo together with `motanka-cli.tar.gz`, `SHA256SUMS` and `SHA256SUMS.gpg` (signed with the archive key, which the bootstrap embeds). It verifies the CLI tarball and then runs the same Installer code. `--dry-run` also needs root because it uses `/run/motanka`. A Host with no display manager installed gets a warning, not a failure (2.7 applies to a display manager that is present but cannot start Wayland sessions).
 
 | Exit code | Meaning |
 |---|---|
@@ -397,7 +397,7 @@ limine:
 |---|---|---|
 | 1.4 | `/etc/os-release` `ID` and `VERSION_ID` | Exit 3, print detected release. |
 | 1.5 | `dpkg --print-architecture` | Exit 3. |
-| 1.6 | `apt-cache policy` shows no `universe` | Exit 3, print `sudo add-apt-repository universe`. |
+| 1.6 | The apt sources files (one-line and deb822) enable no `universe` component for the running suite; parsed directly because fresh cloud images have no apt lists yet | Exit 3, print `sudo add-apt-repository universe`. |
 | 2.4 | `dpkg --audit`, `apt-get check` | Exit 4, print the affected packages. |
 | 2.5 | `df --output=avail /` under 4 GB | Exit 4. |
 | 2.6 | Simulation lists `Inst`/`Remv` for a Foreign_Package already installed | Exit 5, list them. |

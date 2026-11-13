@@ -1,0 +1,35 @@
+#!/bin/bash
+# flatpak stub. Logs every call to $LOGS/flatpak. User installs are listed in
+# $LOGS/flatpak-installed and remotes in $LOGS/flatpak-remotes. install
+# exports a desktop entry the way Flatpak does, under
+# ${XDG_DATA_HOME:-~/.local/share}/flatpak/exports/share/applications/.
+printf '%s\n' "$*" >>"$LOGS/flatpak"
+inst=$LOGS/flatpak-installed
+remotes=$LOGS/flatpak-remotes
+touch "$inst" "$remotes"
+data=${XDG_DATA_HOME:-$HOME/.local/share}
+last=${!#}
+case ${1:-} in
+  info)
+    grep -qxF -- "$last" "$inst"
+    ;;
+  remote-list)
+    cat "$remotes"
+    ;;
+  remote-add)
+    grep -qx flathub "$remotes" || echo flathub >>"$remotes"
+    ;;
+  install)
+    echo "$last" >>"$inst"
+    mkdir -p "$data/flatpak/exports/share/applications"
+    printf '[Desktop Entry]\nName=Test App\nExec=/usr/bin/flatpak run %s\nNotShowIn=KDE;\nX-Flatpak=%s\n\n[Desktop Action new-window]\nName=New Window\nOnlyShowIn=GNOME;\n' \
+      "$last" "$last" >"$data/flatpak/exports/share/applications/$last.desktop"
+    ;;
+  uninstall)
+    grep -vxF -- "$last" "$inst" >"$inst.new" || true
+    mv "$inst.new" "$inst"
+    ;;
+  *)
+    exit 1
+    ;;
+esac

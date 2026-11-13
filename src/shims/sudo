@@ -1,0 +1,239 @@
+#!/bin/bash
+# sudo: the default-deny sudo dispatcher of the Wrapper scope (DESIGN.md,
+# "Linux practices: Privilege"; design.md, spike S2). Installed in the shims
+# folder, so only Upstream commands started by a Wrapper find it before
+# /usr/bin/sudo. It runs unprivileged and grants nothing.
+#
+# 1. sudo's own options are skipped. Without a command, -v, -k and -K do
+#    nothing and exit 0: Motanka asks polkit for each package operation, so
+#    there is no sudo credential to keep. -h, -V and -l run the real sudo,
+#    which changes nothing. A root shell (-s, -i) and sudoedit (-e) are
+#    refused.
+# 2. A command that is a shim (pacman, yay, mkinitcpio, limine-*, snapper)
+#    or an override runs unprivileged: shims and overrides use the Helper
+#    for privileged work.
+# 3. Otherwise the calling Upstream command and the command line are looked
+#    up in privileged.tsv (/opt/motanka/share/motanka/privileged.tsv; in
+#    the repository compat/privileged.tsv), tab-separated:
+#      <command>  <pattern>  <allow|override|unsupported>  <reason>
+#    The calling command is the nearest ancestor process that runs a file in
+#    Upstream's bin/ or an override; MOTANKA_UPSTREAM_CMD, which
+#    run-upstream exports, is the fallback. The pattern is a bash extended
+#    glob matched against the command and its arguments joined by single
+#    spaces; the first matching line of that command wins.
+#      allow        runs /usr/bin/sudo with the original arguments
+#      override     does not happen while the override is in place, since
+#                   it replaces the command: refused, and logged as an error
+#      unsupported  refused
+#      no line      refused: unlisted calls are unsupported
+#
+# A refusal prints the reason, writes an "unsupported call" journal entry
+# (SYSLOG_IDENTIFIER=motanka), shows the desktop notification "<command> is
+# not available in Motanka" through notify-send when it is installed (not
+# for sudo -n, whose callers expect a quiet failure), and exits 64.
+#
+# Test hooks: MOTANKA_REAL_SUDO (the sudo that allow runs) and
+# MOTANKA_PRIVILEGED_TSV (the table).
+set -euo pipefail
+shopt -s extglob
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=shim
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+real_sudo=${MOTANKA_REAL_SUDO:-/usr/bin/sudo}
+table=${MOTANKA_PRIVILEGED_TSV:-/opt/motanka/share/motanka/privileged.tsv}
+
+orig=("$@")
+args=("$@")
+noninteractive=0
+no_command_ok=0
+passthrough=0
+shell=0
+edit=0
+caller=""
+cmd=""
+line=""
+
+deny() {
+  local reason=$1 who
+  who=${caller:-${cmd:-sudo}}
+  printf 'motanka: %s: sudo %s is not available in Motanka: %s\n' "$who" "$line" "$reason" >&2
+  mk_log warning "unsupported call: sudo $line (from ${caller:-unknown}): $reason"
+  if ((noninteractive == 0)); then
+    mk_oc_notify "$who is not available in Motanka" "$reason"
+  fi
+  exit "$MK_OC_EXIT_UNSUPPORTED"
+}
+
+# find_caller: the Upstream command that called sudo.
+find_caller() {
+  local pid=$PPID depth=0 j arg name next omarchy
+  local -a argv=()
+  omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+  omarchy=${omarchy%/}
+  while [[ $pid =~ ^[0-9]+$ ]] && ((pid > 1 && depth < 32)); do
+    argv=()
+    if [[ -r /proc/$pid/cmdline ]]; then
+      mapfile -d '' -t argv 2>/dev/null <"/proc/$pid/cmdline" || argv=()
+    fi
+    for ((j = 0; j < ${#argv[@]} && j < 4; j++)); do
+      arg=${argv[j]}
+      case $arg in
+        "$omarchy"/bin/?* | /usr/share/omarchy/bin/?* | /opt/motanka/share/omarchy/bin/?* | "$_base"/overrides/?*)
+          name=${arg##*/}
+          if [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            printf '%s\n' "$name"
+            return 0
+          fi
+          ;;
+      esac
+    done
+    next=""
+    if [[ -r /proc/$pid/status ]]; then
+      next=$(awk '$1 == "PPid:" { print $2; exit }' "/proc/$pid/status" 2>/dev/null) || next=""
+    fi
+    pid=$next
+    depth=$((depth + 1))
+  done
+  printf '%s\n' "${MOTANKA_UPSTREAM_CMD:-}"
+}
+
+# lookup: sets ACTION and REASON from the first line of the table that
+# names the caller and whose pattern matches the command line.
+ACTION=""
+REASON=""
+lookup() {
+  local c p a r
+  ACTION=""
+  REASON=""
+  [[ -n $caller && -r $table ]] || return 1
+  while IFS=$'\t' read -r c p a r || [[ -n $c ]]; do
+    if [[ -z $c || $c == '#'* || $c != "$caller" ]]; then
+      continue
+    fi
+    # shellcheck disable=SC2053 # the pattern is a glob on purpose
+    if [[ $line == $p ]]; then
+      ACTION=$a
+      REASON=${r:-no reason recorded}
+      return 0
+    fi
+  done <"$table"
+  return 1
+}
+
+# --- sudo's options -------------------------------------------------------
+
+n=${#args[@]}
+i=0
+while ((i < n)); do
+  a=${args[i]}
+  case $a in
+    --)
+      i=$((i + 1))
+      break
+      ;;
+    --user=* | --group=* | --close-from=* | --chdir=* | --prompt=* | --role=* | --type=* | \
+      --command-timeout=* | --other-user=* | --chroot=* | --host=* | --preserve-env=*) ;;
+    --user | --group | --close-from | --chdir | --prompt | --role | --type | \
+      --command-timeout | --other-user | --chroot | --host)
+      i=$((i + 1))
+      ;;
+    --non-interactive) noninteractive=1 ;;
+    --validate | --reset-timestamp | --remove-timestamp) no_command_ok=1 ;;
+    --help | --version | --list) passthrough=1 ;;
+    --login | --shell) shell=1 ;;
+    --edit) edit=1 ;;
+    --askpass | --bell | --background | --preserve-env | --set-home | --preserve-groups | --stdin) ;;
+    --*)
+      line="$a"
+      deny "the sudo option $a is not supported"
+      ;;
+    -?*)
+      cluster=${a#-}
+      for ((k = 0; k < ${#cluster}; k++)); do
+        c=${cluster:k:1}
+        case $c in
+          [ugCDprtTUR])
+            # The value is the rest of this word, or the next word.
+            if ((k + 1 == ${#cluster})); then
+              i=$((i + 1))
+            fi
+            break
+            ;;
+          n) noninteractive=1 ;;
+          v | k | K) no_command_ok=1 ;;
+          h | V | l) passthrough=1 ;;
+          i | s) shell=1 ;;
+          e) edit=1 ;;
+          A | B | b | E | H | P | S) ;;
+          *)
+            line="$a"
+            deny "the sudo option -$c is not supported"
+            ;;
+        esac
+      done
+      ;;
+    *)
+      break
+      ;;
+  esac
+  i=$((i + 1))
+done
+
+cmd_args=()
+if ((i < n)); then
+  cmd_args=("${args[@]:i}")
+fi
+
+if ((passthrough)); then
+  exec "$real_sudo" "${orig[@]}"
+fi
+if ((${#cmd_args[@]} == 0)); then
+  if ((no_command_ok && shell == 0 && edit == 0)); then
+    exit 0
+  fi
+  line="${orig[*]}"
+  caller=$(find_caller)
+  deny "sudo without a command would start a root shell"
+fi
+
+cmd=${cmd_args[0]}
+line="${cmd_args[*]}"
+caller=$(find_caller)
+if ((edit)); then
+  deny "sudoedit changes files as root outside dpkg"
+fi
+
+# --- shims and overrides run unprivileged ---------------------------------
+
+if [[ $cmd != */* ]]; then
+  for dir in "$_base/shims" "$_base/overrides"; do
+    if [[ -f $dir/$cmd && -x $dir/$cmd ]]; then
+      exec "$dir/$cmd" "${cmd_args[@]:1}"
+    fi
+  done
+fi
+
+# --- the table ------------------------------------------------------------
+
+if lookup; then
+  case $ACTION in
+    allow)
+      mk_log info "allowed: sudo $line (from $caller)"
+      exec "$real_sudo" "${orig[@]}"
+      ;;
+    override)
+      mk_log err "Upstream's $caller ran instead of its Motanka override and called sudo $line"
+      deny "$REASON"
+      ;;
+    *)
+      deny "$REASON"
+      ;;
+  esac
+fi
+deny "no rule in privileged.tsv allows this call"

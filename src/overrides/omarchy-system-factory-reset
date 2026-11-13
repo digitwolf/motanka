@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-system-factory-reset: Motanka override of Upstream
+# bin/omarchy-system-factory-reset: unsupported (compat/overrides.tsv).
+# Prints why, writes a journal entry and exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-system-factory-reset \
+  "it reinstalls the system with Upstream's Arch installer; to take Motanka off this Ubuntu installation, run 'sudo motanka remove'" "$@"

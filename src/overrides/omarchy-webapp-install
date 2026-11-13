@@ -1,0 +1,84 @@
+#!/bin/bash
+# omarchy-webapp-install: Motanka override of Upstream
+# bin/omarchy-webapp-install.
+#
+# usage (as Upstream): omarchy-webapp-install [name url icon-url-or-name [custom-exec] [mime-types]]
+#
+# Runs Upstream's unmodified script, with the same arguments, prompts and
+# exit code, but with HOME set to an empty staging folder outside the home
+# folder (XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME and XDG_CACHE_HOME
+# keep pointing at the real ones, so language and other settings still
+# apply). Upstream writes the desktop entry to
+# $HOME/.local/share/applications/<name>.desktop and an icon to
+# $HOME/.local/share/icons/hicolor/256x256/apps/; after it succeeds, this:
+#   - adds OnlyShowIn=Motanka; to the [Desktop Entry] group of every desktop
+#     entry it wrote (5.13), so other sessions do not list the web app;
+#   - writes the icons, then the entries, into the real home folder through
+#     the User_Ledger as menu-desktop entries (7.7): ledgered and backed up
+#     before the write, written by temporary file and rename.
+# Upstream also refreshes the icon cache; this does not, because GTK finds
+# icons in ~/.local/share/icons without a cache and the cache file would be
+# an unledgered write. Anything else the script leaves in the staging
+# folder is discarded with it.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+upstream=${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-webapp-install
+if [[ ! -x $upstream ]]; then
+  mk_error "Upstream's omarchy-webapp-install is missing at $upstream"
+  exit 1
+fi
+
+home=$(mk_oc_home)
+if [[ $home != /* || ! -d $home ]]; then
+  mk_error "the home folder '${home:-unset}' does not exist"
+  exit 1
+fi
+
+stage=$(mktemp -d "${TMPDIR:-/tmp}/motanka-webapp.XXXXXX")
+trap 'rm -rf -- "$stage"' EXIT
+
+rc=0
+HOME=$stage \
+  XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$home/.config} \
+  XDG_DATA_HOME=${XDG_DATA_HOME:-$home/.local/share} \
+  XDG_STATE_HOME=${XDG_STATE_HOME:-$home/.local/state} \
+  XDG_CACHE_HOME=${XDG_CACHE_HOME:-$home/.cache} \
+  "$upstream" "$@" || rc=$?
+if ((rc != 0)); then
+  exit "$rc"
+fi
+
+icons_rel=.local/share/icons/hicolor/256x256/apps
+apps_rel=.local/share/applications
+shopt -s nullglob
+
+for f in "$stage/$icons_rel"/*; do
+  if [[ -f $f && ! -L $f ]]; then
+    mk_userledger_menu_desktop "$icons_rel/${f##*/}" "$f" || exit 1
+  fi
+done
+
+for f in "$stage/$apps_rel"/*.desktop; do
+  if [[ ! -f $f || -L $f ]]; then
+    continue
+  fi
+  limited=$stage/.motanka-entry
+  if ! mk_oc_desktop_only_show_in "$f" "$limited"; then
+    mk_error "the desktop entry ${f##*/} has no [Desktop Entry] group; it was not installed"
+    exit 1
+  fi
+  chmod --reference="$f" -- "$limited"
+  mk_userledger_menu_desktop "$apps_rel/${f##*/}" "$limited" || exit 1
+  rm -f -- "$limited"
+  mk_log info "web app desktop entry $apps_rel/${f##*/} limited to the Motanka session"
+done

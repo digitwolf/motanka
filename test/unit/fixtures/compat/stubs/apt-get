@@ -1,0 +1,79 @@
+#!/bin/bash
+# apt-get stub. Logs every call to $LOGS/apt-get and changes only $FAKE_DPKG.
+#   -s  prints $FAKE_SIM when it is set; otherwise "Inst <name> (1.0 test
+#       [amd64])" for each requested package $FAKE_DPKG does not list
+#       (install) or "Remv <name> [<version>]" for each one it lists (remove)
+#   otherwise, install adds the requested packages and the Inst lines of
+#   $FAKE_SIM to $FAKE_DPKG, remove deletes the requested ones
+# Exits $FAKE_APT_RC (default 0); a real run exits $FAKE_APT_REAL_RC when it
+# is set. A non-zero code changes nothing.
+printf '%s\n' "$*" >>"$LOGS/apt-get"
+sim=0
+op=""
+names=()
+while (($# > 0)); do
+  case $1 in
+    -s | --simulate | --dry-run) sim=1 ;;
+    -o) shift ;;
+    -*) ;;
+    *)
+      if [[ -z $op ]]; then
+        op=$1
+      else
+        names+=("$1")
+      fi
+      ;;
+  esac
+  shift
+done
+
+installed() {
+  awk -F'\t' -v n="$1" '$1 == n { f = 1 } END { exit !f }' "$FAKE_DPKG"
+}
+
+version_of() {
+  awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$FAKE_DPKG"
+}
+
+rc=${FAKE_APT_RC:-0}
+if ((sim)); then
+  if [[ -n ${FAKE_SIM:-} ]]; then
+    cat "$FAKE_SIM"
+    exit "$rc"
+  fi
+  echo "NOTE: This is only a simulation!"
+  for n in "${names[@]}"; do
+    if [[ $op == install ]] && ! installed "$n"; then
+      printf 'Inst %s (1.0 test [amd64])\n' "$n"
+    elif [[ $op == remove ]] && installed "$n"; then
+      printf 'Remv %s [%s]\n' "$n" "$(version_of "$n")"
+    fi
+  done
+  exit "$rc"
+fi
+
+rc=${FAKE_APT_REAL_RC:-$rc}
+if ((rc != 0)); then
+  exit "$rc"
+fi
+case $op in
+  install)
+    for n in "${names[@]}"; do
+      installed "$n" || printf '%s\t1.0\n' "$n" >>"$FAKE_DPKG"
+    done
+    if [[ -n ${FAKE_SIM:-} ]]; then
+      while read -r word n v _; do
+        if [[ $word == Inst && $v == \(* ]] && ! installed "$n"; then
+          printf '%s\t%s\n' "$n" "${v#\(}" >>"$FAKE_DPKG"
+        fi
+      done <"$FAKE_SIM"
+    fi
+    ;;
+  remove)
+    for n in "${names[@]}"; do
+      awk -F'\t' -v n="$n" '$1 != n' "$FAKE_DPKG" >"$FAKE_DPKG.new"
+      mv "$FAKE_DPKG.new" "$FAKE_DPKG"
+    done
+    ;;
+esac
+exit 0

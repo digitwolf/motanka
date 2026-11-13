@@ -1,0 +1,78 @@
+#!/bin/bash
+# omarchy-pkg-install: Motanka override of Upstream bin/omarchy-pkg-install.
+#
+# usage (as Upstream): omarchy-pkg-install
+#
+# A fuzzy finder for picking packages to install, like Upstream's, over the
+# Arch names of the Package_Map for the running release that have an
+# outcome (skip outcomes are left out), because the Helper installs only
+# those (7.12). The chosen names are installed through the Helper (7.3,
+# 7.11); omarchy-show-done reports the result, as Upstream does.
+#
+# "omarchy-pkg-install --preview <name>" prints the preview pane for one name.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_base/lib/sysledger.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+preview() {
+  local name=$1 first
+  if ! mk_oc_lookup "$name"; then
+    printf '%s is not in the Package_Map\n' "$name"
+    return 0
+  fi
+  printf 'Name     : %s\nOutcome  : %s %s\n' "$name" "$MK_OC_KIND" "$MK_OC_TARGET"
+  if [[ $MK_OC_F4 != - && $MK_OC_KIND != binary ]]; then
+    printf 'Note     : %s\n' "$MK_OC_F4"
+  fi
+  if mk_oc_present "$name"; then
+    printf 'Status   : installed\n'
+  else
+    printf 'Status   : not installed\n'
+  fi
+  case $MK_OC_KIND in
+    apt | motanka)
+      first=${MK_OC_TARGET%%,*}
+      printf '\n'
+      apt-cache show --no-all-versions "$first" 2>/dev/null || printf 'apt has no details for %s\n' "$first"
+      ;;
+  esac
+}
+
+if [[ ${1:-} == --preview ]]; then
+  preview "${2:-}"
+  exit 0
+fi
+
+mk_oc_map_check || exit 1
+map=$(mk_oc_map_file)
+
+fzf_args=(
+  --multi
+  --preview "$(printf '%q' "$_self") --preview {1}"
+  --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --color 'pointer:green,marker:green'
+)
+
+pkg_names=$(awk -F'\t' '$1 !~ /^#/ && $2 != "skip" && $2 != "" { print $1 }' "$map" | fzf "${fzf_args[@]}") || true
+
+if [[ -n $pkg_names ]]; then
+  mapfile -t chosen <<<"$pkg_names"
+  rc=0
+  mk_oc_install "${chosen[@]}" || rc=$?
+  omarchy-show-done "$rc"
+fi

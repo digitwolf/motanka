@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stand-in for /usr/bin/sudo (MOTANKA_REAL_SUDO): appends its arguments to
+# $LOGS/real-sudo and runs nothing.
+printf '%s\n' "$*" >>"$LOGS/real-sudo"

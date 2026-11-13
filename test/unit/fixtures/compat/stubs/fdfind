@@ -1,0 +1,3 @@
+#!/bin/bash
+# fdfind stub: prints its name and arguments.
+echo "fdfind $*"

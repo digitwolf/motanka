@@ -1,0 +1,11 @@
+#!/bin/bash
+# omarchy-pkg-aur-add: Motanka override of Upstream bin/omarchy-pkg-aur-add.
+#
+# usage (as Upstream): omarchy-pkg-aur-add <packages...>
+#
+# Ubuntu has no AUR. AUR names go through the Package_Map like any other,
+# so this runs the omarchy-pkg-add override next to it, with the same
+# interface and exit codes: 0 all installed, 1 otherwise.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+exec "${_self%/*}/omarchy-pkg-add" "$@"

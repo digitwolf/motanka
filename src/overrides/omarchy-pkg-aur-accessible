@@ -1,0 +1,11 @@
+#!/bin/bash
+# omarchy-pkg-aur-accessible: Motanka override of Upstream
+# bin/omarchy-pkg-aur-accessible.
+#
+# usage (as Upstream): omarchy-pkg-aur-accessible
+#
+# Upstream returns true when the AUR is up. Ubuntu has no AUR, so the AUR
+# is never accessible: exit 1, without a network request. Callers such as
+# Upstream's AUR update step then skip the AUR.
+set -euo pipefail
+exit 1

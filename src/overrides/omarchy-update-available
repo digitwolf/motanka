@@ -1,0 +1,40 @@
+#!/bin/bash
+# omarchy-update-available: Motanka override of Upstream
+# bin/omarchy-update-available.
+#
+# usage (as Upstream): omarchy-update-available
+#
+# Upstream compares its installed package with checkupdates. Motanka's
+# Upstream files come with its packages, so this lists every installed
+# Motanka_Package (motanka, motanka-*) whose apt candidate is newer than the
+# installed version, one "<package> <installed> -> <candidate>" line each,
+# and exits 0; with none it prints "Motanka is up to date" and exits 1, as
+# Upstream does. It reads apt's package lists as they are (Ubuntu's apt
+# timers refresh them) and does not download anything.
+set -euo pipefail
+
+updates=()
+# shellcheck disable=SC2016 # a dpkg-query format, not a shell expansion
+mapfile -t installed < <(
+  dpkg-query -W --showformat='${db:Status-Abbrev}\t${Package}\n' 'motanka' 'motanka-*' 2>/dev/null |
+    awk -F'\t' '$1 ~ /^ii/ { print $2 }' | sort -u
+)
+
+for pkg in "${installed[@]}"; do
+  policy=$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null) || continue
+  current=$(awk '$1 == "Installed:" { print $2; exit }' <<<"$policy")
+  candidate=$(awk '$1 == "Candidate:" { print $2; exit }' <<<"$policy")
+  if [[ -z $current || -z $candidate || $current == "(none)" || $candidate == "(none)" ]]; then
+    continue
+  fi
+  if dpkg --compare-versions "$candidate" gt "$current"; then
+    updates+=("$pkg $current -> $candidate")
+  fi
+done
+
+if ((${#updates[@]} > 0)); then
+  printf '%s\n' "${updates[@]}"
+  exit 0
+fi
+echo "Motanka is up to date"
+exit 1

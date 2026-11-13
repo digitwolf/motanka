@@ -72,13 +72,13 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - _Requirements: 13.1_
 
 - [ ] 7. Stack packages (approach from S1)
-- [ ] 7.1 `motanka-stack-libs`
+- [x] 7.1 `motanka-stack-libs`
   - Create `packaging/motanka-stack-libs/` and `stack/versions.tsv`; build for both releases in the build VM; RUNPATH only
   - _Requirements: 3.4, 3.5, 8.1, 8.2_
-- [ ] 7.2 `motanka-stack-hyprland`
+- [x] 7.2 `motanka-stack-hyprland`
   - Create `packaging/motanka-stack-hyprland/`; install in a 26.04 VM that also has Ubuntu's `hyprland` and check that package is unchanged
   - _Requirements: 8.1, 8.4_
-- [ ] 7.3 `motanka-stack-tools`, AppArmor profiles and `motanka-stack`
+- [x] 7.3 `motanka-stack-tools`, AppArmor profiles and `motanka-stack`
   - Create `packaging/motanka-stack-tools/`, `packaging/motanka-stack/`, profiles under `packaging/*/apparmor/`
   - _Requirements: 8.7, 8.8_
 - [ ] 7.4 Stack test on both releases

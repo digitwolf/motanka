@@ -1,0 +1,14 @@
+#!/bin/bash
+# omarchy-refresh-limine: Motanka override of Upstream
+# bin/omarchy-refresh-limine: unsupported (compat/overrides.tsv). Prints why,
+# writes a journal entry and exits 64.
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+mk_oc_unsupported omarchy-refresh-limine \
+  "it rewrites /boot/limine.conf; the host's bootloader stays as it is" "$@"

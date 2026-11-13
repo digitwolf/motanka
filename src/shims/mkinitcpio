@@ -1,0 +1,40 @@
+#!/bin/bash
+# mkinitcpio: the Compat_Layer's shim for Arch's boot and snapshot tools
+# (design.md, "Wrappers, shims and the Helper"). One script answers for
+# mkinitcpio, limine, limine-* and snapper: the other names in this folder
+# run it with MK_SHIM_NAME set, and a symbolic link to it works the same way
+# (the name then comes from $0).
+#
+# Motanka does not change the initramfs, the bootloader or system snapshots
+# (requirements, Introduction: out of scope), so every call prints why,
+# writes an "unsupported call" journal entry (SYSLOG_IDENTIFIER=motanka)
+# and exits 64 (7.5). Scripts that need these tools have overrides (7.8).
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=shim
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+name=${MK_SHIM_NAME:-${0##*/}}
+unset MK_SHIM_NAME
+case $name in
+  mkinitcpio)
+    reason="Motanka does not rebuild the initramfs; the host's initramfs-tools stays in charge"
+    ;;
+  limine | limine-*)
+    reason="Motanka does not change the bootloader; the host's boot configuration stays as it is"
+    ;;
+  snapper)
+    reason="Upstream's system snapshots are not taken in Motanka; 'sudo motanka update' records Motanka's own snapshot"
+    ;;
+  *)
+    name=mkinitcpio
+    reason="Motanka does not change the initramfs or the bootloader"
+    ;;
+esac
+
+printf '%s: not available in Motanka: %s\n' "$name" "$reason" >&2
+mk_log warning "unsupported call: $name${*:+ $*} (from ${MOTANKA_UPSTREAM_CMD:-unknown})"
+exit 64

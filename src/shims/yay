@@ -1,0 +1,8 @@
+#!/bin/bash
+# yay: the Compat_Layer's yay. Runs the pacman shim next to it with the name
+# yay, so it has the same translation table (see src/shims/pacman); AUR names
+# go through the Package_Map like any other, and "yay" alone means yay -Syu,
+# which changes nothing (updates belong to "motanka update").
+set -euo pipefail
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+MK_SHIM_NAME=yay exec "${_self%/*}/pacman" "$@"

@@ -1,0 +1,25 @@
+#!/bin/bash
+# omarchy-pkg-missing: Motanka override of Upstream bin/omarchy-pkg-missing.
+#
+# usage (as Upstream): omarchy-pkg-missing <packages...>
+#
+# Exits 0 if the Package_Map outcome of any named Arch package is missing,
+# 1 if all are installed. Unmapped names and skip outcomes count as
+# missing.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+for pkg in "$@"; do
+  if ! mk_oc_present "$pkg"; then
+    exit 0
+  fi
+done
+
+exit 1

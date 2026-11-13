@@ -1,0 +1,72 @@
+#!/bin/bash
+# dpkg-query stub. The installed packages are the lines
+# "<name> TAB <version>" of $FAKE_DPKG. Supports -W/--show with
+# --showformat (or -f) and glob patterns, -s/--status, and -S/--search
+# (which never finds an owner). Logs every call to $LOGS/dpkg-query.
+printf '%s\n' "$*" >>"$LOGS/dpkg-query"
+# shellcheck disable=SC2016 # dpkg-query field names, not shell expansions
+fmt='${binary:Package}\t${Version}\n'
+mode=W
+names=()
+while (($# > 0)); do
+  case $1 in
+    -W | --show) mode=W ;;
+    -s | --status) mode=s ;;
+    -S | --search) mode=S ;;
+    --showformat=*) fmt=${1#--showformat=} ;;
+    -f)
+      fmt=$2
+      shift
+      ;;
+    -*) ;;
+    *) names+=("$1") ;;
+  esac
+  shift
+done
+if [[ $mode == S ]]; then
+  exit 1
+fi
+
+# shellcheck disable=SC2016 # dpkg-query field names, not shell expansions
+render() {
+  local out=$fmt
+  out=${out//'${db:Status-Abbrev}'/'ii '}
+  out=${out//'${binary:Package}'/$1}
+  out=${out//'${Package}'/$1}
+  out=${out//'${Version}'/$2}
+  out=${out//'${binary:Summary}'/summary of $1}
+  out=${out//'\t'/$'\t'}
+  out=${out//'\n'/$'\n'}
+  printf '%s' "$out"
+}
+
+if ((${#names[@]} == 0)); then
+  while IFS=$'\t' read -r n v; do
+    if [[ -n $n ]]; then
+      render "$n" "$v"
+    fi
+  done <"$FAKE_DPKG"
+  exit 0
+fi
+
+rc=0
+for want in "${names[@]}"; do
+  found=0
+  while IFS=$'\t' read -r n v; do
+    [[ -n $n ]] || continue
+    # shellcheck disable=SC2053 # names may be glob patterns
+    if [[ $n == $want ]]; then
+      found=1
+      if [[ $mode == s ]]; then
+        printf 'Package: %s\nStatus: install ok installed\nVersion: %s\n\n' "$n" "$v"
+      else
+        render "$n" "$v"
+      fi
+    fi
+  done <"$FAKE_DPKG"
+  if ((found == 0)); then
+    echo "dpkg-query: no packages found matching $want" >&2
+    rc=1
+  fi
+done
+exit "$rc"

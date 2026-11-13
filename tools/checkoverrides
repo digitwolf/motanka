@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Gate an Upstream_Pin bump on Motanka's overrides (7.8, 7.10).
+
+usage: tools/checkoverrides --old DIR --new DIR --pin COMMIT
+                            [--inventory FILE] [--overrides DIR]
+                            [--overrides-list FILE] [--reviewed DIR]
+
+--old and --new are the Upstream trees at the current pin and at the new
+pin COMMIT. Defaults, relative to this repository:
+  --inventory       compat/inventory/<COMMIT>.tsv (tools/inventory output for
+                    the new tree)
+  --overrides       src/overrides
+  --overrides-list  compat/overrides.tsv
+  --reviewed        compat/reviewed
+
+Checks, one output line per problem:
+
+  review    Every watched file that changed, appeared or disappeared between
+            the two trees needs a line in <reviewed>/<COMMIT>. Watched files
+            are the Upstream files that have an override (src/overrides/<name>
+            replaces bin/<name>; src/overrides/<folder>/<file> replaces
+            <folder>/<file>) and the files with arch-tool or arch-path
+            findings in the new pin's Call_Inventory. A change is a different
+            content, a different executable bit or a different link target.
+  coverage  Every bin/ file with an arch-path finding (it reads or writes
+            pacman, Limine or mkinitcpio configuration) has an override.
+  list      Every override has a line in compat/overrides.tsv, and every line
+            there names an existing override.
+
+<reviewed>/<COMMIT> has one line per reviewed file, fields separated by tabs:
+  <path> [<sha256 of the file at the new pin, or "deleted">] [<note>]
+Lines starting with '#' are comments. When the second field is given it must
+match the file at the new pin, so a review covers exactly what was read.
+
+Exit codes: 0 no problems, 1 problems found, 2 usage or input error.
+Python 3 standard library only.
+"""
+
+import argparse
+import hashlib
+import os
+import re
+import stat
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+PIN_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+CHOICES = ("implemented", "unsupported")
+
+
+class InputError(Exception):
+    pass
+
+
+def content_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def file_state(root, rel):
+    """(kind, sha256, executable) of root/rel, or None when it is absent."""
+    path = os.path.join(root, rel)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise InputError(f"cannot read {path}: {e}")
+    if stat.S_ISLNK(st.st_mode):
+        target = os.readlink(path)
+        return ("link", hashlib.sha256(target.encode()).hexdigest(), False)
+    if stat.S_ISREG(st.st_mode):
+        try:
+            return ("file", content_sha(path), bool(st.st_mode & 0o111))
+        except OSError as e:
+            raise InputError(f"cannot read {path}: {e}")
+    return ("other", "", False)
+
+
+def override_targets(overrides_dir):
+    """{Upstream path: override path relative to overrides_dir}."""
+    if not os.path.isdir(overrides_dir):
+        raise InputError(f"{overrides_dir} is not a folder")
+    result = {}
+    for dirpath, dirnames, filenames in os.walk(overrides_dir):
+        dirnames.sort()
+        for name in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, name), overrides_dir)
+            rel = rel.replace(os.sep, "/")
+            upstream = rel if "/" in rel else "bin/" + rel
+            result[upstream] = rel
+    return result
+
+
+def read_inventory(path):
+    """(files with arch-tool or arch-path findings, bin/ files with arch-path findings)."""
+    watched, arch_path_bin = set(), set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f, 1):
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 4:
+                    raise InputError(f"{path}:{n}: expected 4 tab-separated fields")
+                rel, cls = parts[0], parts[2]
+                if cls in ("arch-tool", "arch-path"):
+                    watched.add(rel)
+                if cls == "arch-path" and rel.startswith("bin/") and "/" not in rel[4:]:
+                    arch_path_bin.add(rel)
+    except (OSError, UnicodeDecodeError) as e:
+        raise InputError(f"cannot read the Call_Inventory {path}: {e}")
+    return watched, arch_path_bin
+
+
+def read_reviewed(path):
+    """{path: sha256 | "deleted" | None} from the review file, or {}."""
+    entries = {}
+    if not os.path.exists(path):
+        return entries
+    try:
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f, 1):
+                line = line.rstrip("\n")
+                if not line.strip() or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                rel = parts[0].strip()
+                sha = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+                if sha is not None and sha != "deleted" and not SHA_RE.match(sha):
+                    raise InputError(f"{path}:{n}: the second field must be a SHA-256 or 'deleted'")
+                entries[rel] = sha
+    except (OSError, UnicodeDecodeError) as e:
+        raise InputError(f"cannot read {path}: {e}")
+    return entries
+
+
+def read_overrides_list(path):
+    """{Upstream path: choice} from compat/overrides.tsv."""
+    rows = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f, 1):
+                line = line.rstrip("\n")
+                if not line.strip() or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) != 3 or not all(p.strip() for p in parts):
+                    raise InputError(f"{path}:{n}: expected 3 non-empty tab-separated fields")
+                if parts[1] not in CHOICES:
+                    raise InputError(f"{path}:{n}: the choice must be implemented or unsupported")
+                if parts[0] in rows:
+                    raise InputError(f"{path}:{n}: {parts[0]} is listed twice")
+                rows[parts[0]] = parts[1]
+    except (OSError, UnicodeDecodeError) as e:
+        raise InputError(f"cannot read {path}: {e}")
+    return rows
+
+
+def check(args):
+    for tree in (args.old, args.new):
+        if not os.path.isdir(os.path.join(tree, "bin")):
+            raise InputError(f"{tree} is not an Upstream tree (no bin/ folder)")
+    inventory = args.inventory or os.path.join(REPO, "compat", "inventory", args.pin + ".tsv")
+    reviewed_dir = args.reviewed or os.path.join(REPO, "compat", "reviewed")
+    overrides_dir = args.overrides or os.path.join(REPO, "src", "overrides")
+    overrides_list = args.overrides_list or os.path.join(REPO, "compat", "overrides.tsv")
+    review_file = os.path.join(reviewed_dir, args.pin)
+
+    overrides = override_targets(overrides_dir)
+    watched_findings, arch_path_bin = read_inventory(inventory)
+    reviewed = read_reviewed(review_file)
+    listed = read_overrides_list(overrides_list)
+    problems = []
+
+    for rel in sorted(set(overrides) | watched_findings):
+        old = file_state(args.old, rel)
+        new = file_state(args.new, rel)
+        if old == new:
+            continue
+        if old is None:
+            what = "appeared"
+        elif new is None:
+            what = "disappeared"
+        else:
+            what = "changed"
+        why = "it has an override" if rel in overrides else "it has arch-tool or arch-path findings"
+        if rel not in reviewed:
+            problems.append(f"review: {rel} {what} and {why}; review it and add it to {review_file}")
+            continue
+        recorded = reviewed[rel]
+        actual = "deleted" if new is None else new[1]
+        if recorded is not None and recorded != actual:
+            problems.append(f"review: {rel}: {review_file} records {recorded}, but the file at the new pin is {actual}")
+
+    for rel in sorted(arch_path_bin):
+        if rel not in overrides:
+            problems.append(f"coverage: {rel} reads or writes pacman, Limine or mkinitcpio configuration but has no override in {overrides_dir}")
+
+    for rel in sorted(overrides):
+        if rel not in listed:
+            problems.append(f"list: the override {overrides[rel]} ({rel}) has no line in {overrides_list}")
+    for rel in sorted(listed):
+        if rel not in overrides:
+            problems.append(f"list: {overrides_list} names {rel}, which has no override in {overrides_dir}")
+
+    for p in problems:
+        print(p)
+    if problems:
+        print(f"checkoverrides: {len(problems)} problem(s) for pin {args.pin}", file=sys.stderr)
+        return 1
+    print(f"checkoverrides: {len(overrides)} overrides, {len(watched_findings)} files with Arch findings, no problems",
+          file=sys.stderr)
+    return 0
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"checkoverrides: {message}", file=sys.stderr)
+        sys.exit(2)
+
+
+def main(argv):
+    p = Parser(prog="tools/checkoverrides",
+               description="Fail an Upstream_Pin bump that changes overridden or Arch-specific files without a review.")
+    p.add_argument("--old", required=True, help="Upstream tree at the current pin")
+    p.add_argument("--new", required=True, help="Upstream tree at the new pin")
+    p.add_argument("--pin", required=True, help="the new pin's commit")
+    p.add_argument("--inventory", help="Call_Inventory TSV of the new pin")
+    p.add_argument("--overrides", help="folder of overrides (default src/overrides)")
+    p.add_argument("--overrides-list", help="compat/overrides.tsv")
+    p.add_argument("--reviewed", help="folder of review files (default compat/reviewed)")
+    args = p.parse_args(argv)
+    if not PIN_RE.match(args.pin):
+        p.error(f"invalid pin '{args.pin}' (expected a 40-character commit)")
+    try:
+        return check(args)
+    except InputError as e:
+        print(f"checkoverrides: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

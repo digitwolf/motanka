@@ -1,0 +1,248 @@
+#!/bin/bash
+# pacman: the Compat_Layer's pacman (design.md, "Wrappers, shims and the
+# Helper"). Installed in /opt/motanka/libexec/motanka/shims/, which only
+# run-upstream puts on PATH: only Upstream commands started by a Wrapper find
+# it (5.9, 7.14). src/shims/yay runs this file as yay.
+#
+# Arch package names go through package-map.tsv for the running release
+# (/opt/motanka/share/motanka/package-map.tsv). Package changes go through
+# the Helper (src/lib/outcomes.sh).
+#
+#   -S [--needed] [--noconfirm] <pkgs>  install each name's outcome; a skip
+#                                       outcome prints its reason (7.3, 7.6)
+#   -Sy, -Syu, -Su, -Syyuu, no names    no package change, exit 0: updates
+#                                       belong to "motanka update"
+#   -Sy... <pkgs>                       the refresh and upgrade are left
+#                                       out; the packages are installed
+#   -R, -Rs, -Rn, -Rns, -Rdd <pkgs>     Helper remove for the packages that
+#                                       the System_Ledger records Motanka
+#                                       installing; the others are kept, with
+#                                       a message and a journal entry
+#   -Q, -Qq                             installed Ubuntu packages
+#   -Q, -Qq <pkgs>                      "<name> <version>" (or the name) of
+#                                       each installed outcome; exit 1 if
+#                                       one is absent
+#   -Qi <pkgs>                          details of each installed outcome
+#   yay without arguments               like yay -Syu: exit 0
+#   anything else                       an "unsupported call" journal entry
+#                                       (SYSLOG_IDENTIFIER=motanka), exit 64
+#
+# Ignored options: --noconfirm, --needed, --confirm, --quiet,
+# --noprogressbar, --overwrite <glob>, --ask <n>, --ignore <pkg>,
+# --color <when>; for yay also --cleanafter, --nocolor and -a. Repository
+# prefixes such as aur/ and extra/ are dropped from names.
+#
+# Exit codes: 0 done, 1 unknown name or failed operation, 64 unsupported
+# call, and the Helper's codes (2, 5, 6, 9, 10, 11) passed through.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=shim
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+# shellcheck source=../lib/sysledger.sh
+source "$_base/lib/sysledger.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_base/lib/userledger.sh"
+# shellcheck source=../lib/outcomes.sh
+source "$_base/lib/outcomes.sh"
+
+shim=${MK_SHIM_NAME:-pacman}
+unset MK_SHIM_NAME
+if [[ $shim != yay ]]; then
+  shim=pacman
+fi
+
+orig=("$@")
+op=""
+flags=""
+targets=()
+
+unsupported() {
+  printf '%s: this call is not available in Motanka: %s %s\n' "$shim" "$shim" "${orig[*]}" >&2
+  mk_log warning "unsupported call: $shim ${orig[*]} (from ${MOTANKA_UPSTREAM_CMD:-unknown})"
+  exit "$MK_OC_EXIT_UNSUPPORTED"
+}
+
+set_op() {
+  if [[ -n $op && $op != "$1" ]]; then
+    unsupported
+  fi
+  op=$1
+}
+
+# only_flags <letters>: the call is unsupported if it has another flag.
+only_flags() {
+  local rest=$flags
+  if [[ -n $1 ]]; then
+    rest=${rest//[$1]/}
+  fi
+  if [[ -n $rest ]]; then
+    unsupported
+  fi
+}
+
+# names: the targets without repository prefixes.
+names() {
+  local t
+  for t in "${targets[@]}"; do
+    printf '%s\n' "${t##*/}"
+  done
+}
+
+no_targets() {
+  printf 'error: no targets specified (use -h for help)\n' >&2
+  exit 1
+}
+
+op_sync() {
+  local allowed=yu rc=0
+  local -a list=()
+  if [[ $shim == yay ]]; then
+    allowed=yua
+  fi
+  only_flags "$allowed"
+  if ((${#targets[@]} == 0)); then
+    if [[ $flags == *[yu]* ]]; then
+      mk_info "$shim: no package change: Motanka updates packages with 'sudo motanka update'"
+      mk_log info "$shim ${orig[*]}: refresh and upgrade are left to motanka update"
+      exit 0
+    fi
+    no_targets
+  fi
+  mapfile -t list < <(names)
+  mk_oc_install "${list[@]}" || rc=$?
+  exit "$rc"
+}
+
+op_remove() {
+  local rc=0
+  local -a list=()
+  only_flags nsdu
+  if ((${#targets[@]} == 0)); then
+    no_targets
+  fi
+  mapfile -t list < <(names)
+  mk_oc_remove "${list[@]}" || rc=$?
+  exit "$rc"
+}
+
+# version_of_entry: the installed version of the entry in MK_OC_*.
+version_of_entry() {
+  case $MK_OC_KIND in
+    apt | motanka) mk_oc_deb_version "${MK_OC_TARGET%%,*}" || printf 'unknown\n' ;;
+    flatpak) printf 'flatpak\n' ;;
+    *) printf 'binary\n' ;;
+  esac
+}
+
+summary_of_entry() {
+  case $MK_OC_KIND in
+    apt | motanka) mk_oc_deb_summary "${MK_OC_TARGET%%,*}" || printf '%s\n' '-' ;;
+    flatpak) printf 'Flatpak app %s\n' "$MK_OC_TARGET" ;;
+    *) printf 'binary from %s\n' "$MK_OC_TARGET" ;;
+  esac
+}
+
+op_query() {
+  local quiet=0 info=0 rc=0 name version summary
+  local -a list=()
+  only_flags qi
+  if [[ $flags == *q* ]]; then
+    quiet=1
+  fi
+  if [[ $flags == *i* ]]; then
+    info=1
+  fi
+  if ((${#targets[@]} == 0)); then
+    if ((info)); then
+      unsupported
+    fi
+    # shellcheck disable=SC2016 # a dpkg-query format, not a shell expansion
+    dpkg-query -W --showformat='${db:Status-Abbrev}\t${Package}\t${Version}\n' 2>/dev/null |
+      awk -F'\t' -v q="$quiet" '$1 ~ /^ii/ { if (q) print $2; else print $2 " " $3 }'
+    exit 0
+  fi
+  mapfile -t list < <(names)
+  for name in "${list[@]}"; do
+    if ! mk_oc_present "$name"; then
+      printf "error: package '%s' was not found\n" "$name" >&2
+      rc=1
+      continue
+    fi
+    version=$(version_of_entry)
+    if ((info)); then
+      summary=$(summary_of_entry)
+      printf 'Name            : %s\nVersion         : %s\nDescription     : %s\nInstalled As    : %s %s\n\n' \
+        "$name" "$version" "$summary" "$MK_OC_KIND" "$MK_OC_TARGET"
+    elif ((quiet)); then
+      printf '%s\n' "$name"
+    else
+      printf '%s %s\n' "$name" "$version"
+    fi
+  done
+  exit "$rc"
+}
+
+end=0
+while (($# > 0)); do
+  a=$1
+  shift
+  if ((end)); then
+    targets+=("$a")
+    continue
+  fi
+  case $a in
+    --)
+      end=1
+      ;;
+    --noconfirm | --needed | --confirm | --quiet | --noprogressbar | --cleanafter | --nocolor) ;;
+    --overwrite=* | --ask=* | --ignore=* | --color=*) ;;
+    --overwrite | --ask | --ignore | --color)
+      if (($# == 0)); then
+        unsupported
+      fi
+      shift
+      ;;
+    --sync) set_op S ;;
+    --remove) set_op R ;;
+    --query) set_op Q ;;
+    --refresh) flags+=y ;;
+    --sysupgrade) flags+=u ;;
+    --info) flags+=i ;;
+    --nosave) flags+=n ;;
+    --recursive) flags+=s ;;
+    --nodeps) flags+=d ;;
+    --*) unsupported ;;
+    -?*)
+      cluster=${a#-}
+      for ((k = 0; k < ${#cluster}; k++)); do
+        c=${cluster:k:1}
+        case $c in
+          [SRQUDTFVPGh]) set_op "$c" ;;
+          *) flags+=$c ;;
+        esac
+      done
+      ;;
+    *)
+      targets+=("$a")
+      ;;
+  esac
+done
+
+case $op in
+  S) op_sync ;;
+  R) op_remove ;;
+  Q) op_query ;;
+  '')
+    if [[ $shim == yay && ${#orig[@]} -eq 0 ]]; then
+      mk_info "yay: no package change: Motanka updates packages with 'sudo motanka update'"
+      exit 0
+    fi
+    unsupported
+    ;;
+  *)
+    unsupported
+    ;;
+esac
