@@ -130,7 +130,11 @@
 #     ~/.local/share/user-session-migration/** (user-session-migration),
 #     ~/.local/state/wireplumber/** (WirePlumber), ~/.config/pulse/**
 #     (PulseAudio clients), ~/.local/share/gvfs-metadata/** (GVfs),
-#     ~/.local/share/recently-used.xbel (GTK), ~/.local/share/sddm/** (SDDM)
+#     ~/.local/share/recently-used.xbel (GTK), ~/.local/share/sddm/** (SDDM),
+#     ~/.config/update-notifier (update-notifier, from /etc/xdg/autostart),
+#     ~/.config/evolution/**, ~/.local/share/evolution/** and
+#     ~/.config/goa-1.0 (evolution-alarm-notify, from /etc/xdg/autostart,
+#     starts evolution-data-server, which uses GNOME Online Accounts)
 #                                                desktop
 # omarchy-provision-user also sets the XDG user folders, GTK bookmarks and
 # default applications (~/.config/mimeapps.list), all Shared_Files; its
@@ -285,6 +289,17 @@ Videos	desktop
 .local/share/sddm/**	desktop
 .local/state/wireplumber	desktop
 .local/state/wireplumber/**	desktop
+# Started by /etc/xdg/autostart in every session but KDE (update-notifier)
+# or in every session (evolution-alarm-notify, which starts
+# evolution-data-server, which uses GNOME Online Accounts).
+.config/evolution	desktop
+.config/evolution/**	desktop
+.local/share/evolution	desktop
+.local/share/evolution/**	desktop
+.config/goa-1.0	desktop
+.config/goa-1.0/**	desktop
+.config/update-notifier	desktop
+.config/update-notifier/**	desktop
 
 # --- shared: Shared_Files and other files every session reads
 .bashrc	shared

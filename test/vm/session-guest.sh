@@ -369,7 +369,7 @@ session_round1() {
     fail "no uwsm compositor unit from the Stack (unit '${unit:-none}', file '$frag')"
     echo "    ExecStart: $execstart"
   fi
-  if grep -q "${unit:-wayland-wm@}" "/proc/$pid/cgroup" 2>/dev/null; then
+  if grep -qF -- "${unit:-wayland-wm@}" "/proc/$pid/cgroup" 2>/dev/null; then
     pass "Hyprland is in the cgroup of $unit"
   else
     fail "Hyprland is not in the cgroup of the uwsm unit: $(cat "/proc/$pid/cgroup" 2>/dev/null)"

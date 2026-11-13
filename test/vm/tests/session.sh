@@ -12,10 +12,10 @@
 #   MOTANKA_VM_RESULTS     log folder
 #   MOTANKA_STACK_REBUILD  1 to rebuild the Stack even if .debs of the
 #                          current version are in ~/.cache/motanka-vm/debs/
-#   MOTANKA_CORE_REUSE     1 to reuse a cached motanka-core .deb of the
-#                          current version instead of building it (default:
-#                          build it, a few minutes, so the test sees the
-#                          working tree)
+#   MOTANKA_CORE_REUSE     1 to reuse cached motanka-core and motanka-fonts
+#                          .debs of the current version instead of building
+#                          them (default: build them, a few minutes, so the
+#                          test sees the working tree)
 #
 # The guest half is test/vm/session-guest.sh; its header lists every check.
 # In short (requirements 3.11, 3.13, 5.1, 5.2, 5.4, 5.6, 5.9, 5.11, 5.14,
@@ -111,16 +111,22 @@ if ! have_stack; then
   fail "no motanka-stack .debs of version $ver in $MV_DEBS/$release/"
   finish
 fi
-if [[ ${MOTANKA_CORE_REUSE:-0} != 1 ]] || ! deb_of motanka-core >/dev/null; then
-  mv_log "building packaging/motanka-core for $release"
-  if ! "$MV_LIB_DIR/build" --suite "$release" "$MV_REPO/packaging/motanka-core" \
+# motanka-core depends on motanka-fonts (through the Package_Map), so both
+# are built from the working tree.
+if [[ ${MOTANKA_CORE_REUSE:-0} != 1 ]] || ! deb_of motanka-core >/dev/null || ! deb_of motanka-fonts >/dev/null; then
+  mv_log "building packaging/motanka-fonts and packaging/motanka-core for $release"
+  if ! "$MV_LIB_DIR/build" --suite "$release" "$MV_REPO/packaging/motanka-fonts" "$MV_REPO/packaging/motanka-core" \
     >"$results/core-debs.txt"; then
-    fail "test/vm/build failed for motanka-core on $release (logs in $results/build-$release*)"
+    fail "test/vm/build failed for motanka-fonts or motanka-core on $release (logs in $results/build-$release*)"
     finish
   fi
 fi
 if ! core_deb=$(deb_of motanka-core); then
   fail "no motanka-core .deb of version $ver in $MV_DEBS/$release/"
+  finish
+fi
+if ! fonts_deb=$(deb_of motanka-fonts); then
+  fail "no motanka-fonts .deb of version $ver in $MV_DEBS/$release/"
   finish
 fi
 
@@ -135,7 +141,7 @@ for p in "${OPTIONAL_PKGS[@]}"; do
     cp -f "$f" "$stage/debs/"
   fi
 done
-cp -f "$core_deb" "$stage/debs/"
+cp -f "$core_deb" "$fonts_deb" "$stage/debs/"
 cp -f "$MV_REPO/tools/debcheck" "$stage/debcheck"
 cp -f "$MV_LIB_DIR/session-guest.sh" "$stage/session-guest.sh"
 pass ".debs $ver for $release: $(cd "$stage/debs" && echo *.deb)"

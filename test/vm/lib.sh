@@ -383,6 +383,11 @@ write_files:
     permissions: "0644"
     content: |
       $nrconf{restart} = 'l';
+# fwupd sets its configuration to mode 0640 when it runs (the package ships
+# 0644; seen on 26.04 with fwupd 2.1), and whether it first runs during a
+# test depends on its timer: the VM starts with the mode fwupd sets.
+runcmd:
+  - [sh, -c, "if [ -f /etc/fwupd/fwupd.conf ]; then chmod 0640 /etc/fwupd/fwupd.conf; fi"]
 EOF
 }
 

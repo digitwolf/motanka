@@ -59,6 +59,10 @@ export MOTANKA_VM_RESULTS="$results"
 GUEST_T=/tmp/motanka-install-test
 REPO_URI=http://127.0.0.1:8765/repo
 STACK_PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
+# Built separately (several hours: test/vm/build --suite <release>
+# packaging/motanka-qt6 packaging/motanka-stack-shell) and needed by the real
+# motanka-core, which depends on motanka-stack-shell.
+SHELL_PKGS=(motanka-qt6 motanka-stack-shell)
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 failures=0
@@ -117,7 +121,15 @@ if [[ ${MOTANKA_INSTALL_PLACEHOLDER_CORE:-0} != 1 ]] &&
 fi
 pkgs=("$MV_REPO/packaging/motanka-archive-keyring" "$MV_REPO/packaging/motanka-source" "$MV_REPO/packaging/motanka")
 if ((placeholder == 0)); then
-  pkgs+=("$core_dir")
+  pkgs+=("$MV_REPO/packaging/motanka-fonts" "$core_dir")
+  for p in "${SHELL_PKGS[@]}"; do
+    if [[ ! -f $MV_DEBS/$release/${p}_${ver}_amd64.deb ]]; then
+      fail "no $p .deb of version $ver in $MV_DEBS/$release/ (motanka-core depends on it); build it with test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
+    fi
+  done
+  if ((failures > 0)); then
+    finish
+  fi
 fi
 
 mv_up_build_vm
@@ -146,6 +158,14 @@ done <"$results/debs.txt"
 for p in "${STACK_PKGS[@]}"; do
   cp -f "$MV_DEBS/$release/${p}_${ver}_amd64.deb" "$stage/in/"
 done
+if ((placeholder == 0)); then
+  for p in "${SHELL_PKGS[@]}"; do
+    cp -f "$MV_DEBS/$release/${p}_${ver}_amd64.deb" "$stage/in/"
+  done
+  if [[ ! -f $stage/in/motanka-fonts_${ver}_all.deb ]]; then
+    fail "test/vm/build did not produce motanka-fonts_${ver}_all.deb"
+  fi
+fi
 for p in motanka-archive-keyring "motanka-source-$release" motanka; do
   if [[ ! -f $stage/in/${p}_${ver}_all.deb ]]; then
     fail "test/vm/build did not produce ${p}_${ver}_all.deb"

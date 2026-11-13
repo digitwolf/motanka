@@ -16,9 +16,12 @@
 #   - the Stack .debs of the current version in ~/.cache/motanka-vm/debs/
 #     <release>/; when they are missing, test/vm/build builds
 #     packaging/motanka-stack first (more than an hour). motanka-qt6 and
-#     motanka-stack-shell are added when that folder has them.
-#   - one build VM builds motanka-archive-keyring, motanka-source, motanka
-#     and motanka-core; the motanka-source .debs are repacked with
+#     motanka-stack-shell come from that folder too; motanka-core depends
+#     on motanka-stack-shell, so lr_repo fails when they are missing
+#     (test/vm/build --suite <release> packaging/motanka-qt6
+#     packaging/motanka-stack-shell builds them, several hours).
+#   - one build VM builds motanka-archive-keyring, motanka-source, motanka,
+#     motanka-fonts and motanka-core; the motanka-source .debs are repacked with
 #     URIs: http://127.0.0.1:8765/repo, where each test VM serves the
 #     repository, and chumak/build-repo signs it with the TEST key.
 #
@@ -38,6 +41,8 @@
 
 LR_STACK_PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
 LR_OPTIONAL_PKGS=(motanka-qt6 motanka-stack-shell)
+# Built in the build VM from the working tree, every time the cache misses.
+LR_BUILD_PKGS=(motanka-archive-keyring motanka-source motanka motanka-fonts motanka-core)
 LR_URI=http://127.0.0.1:8765/repo
 LR_REPO=""
 LR_VER=""
@@ -69,6 +74,8 @@ _lr_key() {
   local release=$1 p f
   {
     printf 'release %s version %s uri %s\n' "$release" "$LR_VER" "$LR_URI"
+    printf 'packages %s / %s / %s\n' "${LR_BUILD_PKGS[*]}" "${LR_STACK_PKGS[*]}" "${LR_OPTIONAL_PKGS[*]}"
+    sha256sum "$MV_LIB_DIR/local-repo.sh" | cut -c1-64
     (
       cd "$MV_REPO" &&
         find packaging src chumak tools compat packages.yaml upstream.pin install.sh \
@@ -126,8 +133,17 @@ lr_repo() {
   rm -rf -- "$stage"
   mkdir -p "$stage/in"
   MV_CLEANUP_PATHS+=("$stage")
-  pkgs=("$MV_REPO/packaging/motanka-archive-keyring" "$MV_REPO/packaging/motanka-source"
-    "$MV_REPO/packaging/motanka" "$MV_REPO/packaging/motanka-core")
+  for p in motanka-qt6 motanka-stack-shell; do
+    if ! _lr_deb "$release" "$p" >/dev/null; then
+      mv_log "FAIL: no $p .deb of version $LR_VER in $MV_DEBS/$release/ (motanka-core depends on it);"
+      mv_log "FAIL: build it with test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
+      return 1
+    fi
+  done
+  pkgs=()
+  for p in "${LR_BUILD_PKGS[@]}"; do
+    pkgs+=("$MV_REPO/packaging/$p")
+  done
   mv_up_build_vm
   bvm=$MV_BOOTED
   mv_log "building ${pkgs[*]##*/} for $release in $bvm"
@@ -153,7 +169,7 @@ lr_repo() {
       cp -f -- "$f" "$stage/in/"
     fi
   done
-  for p in motanka-archive-keyring "motanka-source-$release" motanka; do
+  for p in motanka-archive-keyring "motanka-source-$release" motanka motanka-fonts; do
     if [[ ! -f $stage/in/${p}_${LR_VER}_all.deb ]]; then
       mv_log "FAIL: test/vm/build did not produce ${p}_${LR_VER}_all.deb"
       rc=1

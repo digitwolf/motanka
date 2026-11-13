@@ -229,7 +229,9 @@ snapshot() {
   dpkg-query -W -f='${Package}\t${Version}\t${db:Status-Status}\n' |
     awk -F'\t' '$3 != "not-installed" { print $1 "\t" $2 "\t" $3 }' | sort -u >"$S/$1.pkgs"
   apt-mark showmanual | sort -u >"$S/$1.manual"
-  find /usr/share/wayland-sessions /usr/share/xsessions -maxdepth 1 -name '*.desktop' 2>/dev/null |
+  # A server image has neither folder; find then exits 1, which pipefail
+  # would turn into a silent failure of the whole phase.
+  { find /usr/share/wayland-sessions /usr/share/xsessions -maxdepth 1 -name '*.desktop' 2>/dev/null || true; } |
     sort >"$S/$1.sessions"
 }
 
