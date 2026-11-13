@@ -64,10 +64,20 @@ motanka() {
   assert_output --partial "motanka: unknown command 'frobnicate'"
 }
 
-@test "valid options parse and the subcommands exit 2 'not implemented yet'" {
+@test "install parses its options, then refuses to run without root with exit 11" {
+  if [[ $(id -u) -eq 0 ]]; then
+    skip "the tests run as root"
+  fi
+  motanka install --dry-run --yes --channel edge
+  assert_failure 11
+  assert_output --partial 'must run as root'
+  motanka install --channel=stable -y
+  assert_failure 11
+  [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
+}
+
+@test "valid options parse and the unfinished subcommands exit 2 'not implemented yet'" {
   local -a cmds=(
-    'install --dry-run --yes --channel edge'
-    'install --channel=stable -y'
     'remove --purge --dry-run --yes'
     'update --system --dry-run -y'
     'rollback --dry-run --yes'
@@ -252,8 +262,8 @@ c"; mk_log bogus "$(printf "x%.0s" {1..3000})"' _ "$COMMON"
   # exec sleep: the process that holds the lock is the one that is killed.
   bash -c 'source "$1"; mk_lock_system; echo ready >"$2"; exec sleep 30' _ "$COMMON" "$BATS_TEST_TMPDIR/ready" \
     </dev/null >/dev/null 2>&1 3>&- &
-  local pid=$! i
-  for i in $(seq 1 50); do
+  local pid=$!
+  for _ in $(seq 1 50); do
     [[ -s $BATS_TEST_TMPDIR/ready ]] && break
     sleep 0.1
   done

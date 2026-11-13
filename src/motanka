@@ -84,6 +84,10 @@ mk_main() {
   esac
   case $cmd in
     install)
+      # shellcheck source=lib/sysledger.sh
+      source "$MK_LIBEXEC/lib/sysledger.sh"
+      # shellcheck source=lib/aptsim.sh
+      source "$MK_LIBEXEC/lib/aptsim.sh"
       # shellcheck source=cmd/install.sh
       source "$MK_LIBEXEC/cmd/install.sh"
       mk_cmd_install "$@"

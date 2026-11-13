@@ -84,7 +84,9 @@ mk_sysledger_append() {
   file=$(mk_sysledger_file)
   dir=${file%/*}
   if [[ ! -d $dir ]]; then
-    if ! mkdir -p -m 0755 -- "$dir"; then
+    # Only the ledger folder itself is Motanka's; its parents keep the
+    # mode mkdir gives them.
+    if ! mkdir -p -- "$dir" || ! chmod 0755 -- "$dir"; then
       mk_error "cannot create $dir"
       return 1
     fi

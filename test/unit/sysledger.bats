@@ -16,7 +16,11 @@ setup() {
   STUBS="$BATS_TEST_TMPDIR/stubs"
   mkdir -p "$STUBS"
   export SYNCLOG="$BATS_TEST_TMPDIR/sync.log"
-  printf '#!/bin/sh\necho "$*" >>"$SYNCLOG"\nexec /usr/bin/sync "$@"\n' >"$STUBS/sync"
+  cat >"$STUBS/sync" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$SYNCLOG"
+exec /usr/bin/sync "$@"
+EOF
   printf '#!/bin/sh\ncat >/dev/null\n' >"$STUBS/systemd-cat"
   chmod +x "$STUBS/sync" "$STUBS/systemd-cat"
   export PATH="$STUBS:$PATH"
@@ -95,7 +99,7 @@ write_run() {
   assert_failure
   run mk_sysledger_menu_install 1001 foo flatpak
   assert_failure
-  run mk_sysledger_end done
+  run mk_sysledger_end 'done'
   assert_failure
   run mk_sysledger_plan "$(printf 'Inst a\tb')"
   assert_failure

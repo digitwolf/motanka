@@ -174,6 +174,7 @@ EOF
 
 @test "a block is added to a new file, appended after a final newline, and replaced in place" {
   local body1 body2
+  # shellcheck disable=SC2016 # the block body is literal shell text, not expanded here
   body1=$(src b1 'eval "$(motanka-shell)"\n')
   body2=$(src b2 'source /opt/motanka/share/motanka/shell.bash\n')
   mk_userledger_block shared .bashrc "$body1"
@@ -301,6 +302,7 @@ EOF
   assert_success
   assert_line "$(printf 'kept\t.local/share/applications/app.desktop')"
   [[ -f $H/.local/share/applications/app.desktop ]]
+  # shellcheck disable=SC2030 # bats runs each test in its own subshell; the new home is meant for this test only
   MK_HOME="$BATS_TEST_TMPDIR/home2"
   run mk_userledger_revert --purge
   assert_success
@@ -432,6 +434,7 @@ apply_action() {
   class=${CLASSES[R]}
   rnd 3
   kind=$R
+  # shellcheck disable=SC2031 # MK_HOME is set by the calling test in the same subshell
   abs=$MK_HOME/$p
   if [[ -d $abs && ! -L $abs ]]; then
     ACTIONS+=("$i skip $p")
@@ -491,6 +494,7 @@ tear_last_line() {
   local run n k mode i before after
   RANDOM=$seed
   for ((run = 0; run < runs; run++)); do
+    # shellcheck disable=SC2030 # bats runs each test in its own subshell; the home is meant for this test only
     MK_HOME="$BATS_TEST_TMPDIR/prop-home"
     L="$MK_HOME/.local/state/motanka/ledger"
     rm -rf "$MK_HOME"
@@ -519,6 +523,7 @@ tear_last_line() {
         fail "run $run (seed $seed): staging failed: ${ACTIONS[*]: -1}"
       fi
     fi
+    # shellcheck disable=SC2119 # the optional --purge is deliberately not passed
     if ! mk_userledger_revert >/dev/null 2>"$BATS_TEST_TMPDIR/revert.err"; then
       fail "run $run (seed $seed): revert failed: $(cat "$BATS_TEST_TMPDIR/revert.err"); actions: ${ACTIONS[*]}"
     fi

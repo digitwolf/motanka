@@ -304,7 +304,10 @@ mk_userledger_record_unplanned() {
 # prints its ID.
 _mk_ul_new_backup() {
   local id i
-  mkdir -p -m 0700 -- "$1/backups" || return 1
+  if [[ ! -d $1/backups ]]; then
+    mkdir -- "$1/backups" || return 1
+  fi
+  chmod 0700 -- "$1/backups" || return 1
   for i in 1 2 3 4 5 6 7 8; do
     id="$(date -u +%Y%m%dT%H%M%SZ)-$(mk_hex 4)"
     if mkdir -m 0700 -- "$1/backups/$id" 2>/dev/null; then
@@ -314,6 +317,25 @@ _mk_ul_new_backup() {
   done
   mk_error "cannot create a backup folder in $1/backups"
   return 1
+}
+
+# _mk_ul_mkdir_private <base> <relative-folder>: creates each missing
+# folder of <relative-folder> below the existing <base>, each with mode
+# 0700.
+_mk_ul_mkdir_private() {
+  local dir=$1 rest=$2 part
+  while [[ -n $rest ]]; do
+    part=${rest%%/*}
+    if [[ $rest == */* ]]; then
+      rest=${rest#*/}
+    else
+      rest=""
+    fi
+    dir=$dir/$part
+    if [[ ! -d $dir ]]; then
+      mkdir -m 0700 -- "$dir" || return 1
+    fi
+  done
 }
 
 # _mk_ul_ensure_parents <class> <path>: creates missing parent folders of
@@ -370,7 +392,9 @@ _mk_ul_stage() {
   if [[ $before != - ]]; then
     backup=$(_mk_ul_new_backup "$state") || return 1
     copy=$state/backups/$backup/$rel
-    mkdir -p -m 0700 -- "${copy%/*}" || return 1
+    if [[ $rel == */* ]]; then
+      _mk_ul_mkdir_private "$state/backups/$backup" "${rel%/*}" || return 1
+    fi
     cp -P --preserve=mode,timestamps -- "$abs" "$copy" || return 1
     if [[ $(_mk_ul_state "$copy") != "$before" ]]; then
       mk_error "$abs changed while it was backed up; not changed"
