@@ -126,8 +126,6 @@ set_env() {
   export PATH=$TOOLS/bin:$STAGE$PREFIX/bin:$PATH
   export LD_LIBRARY_PATH=$STAGE$PREFIX/lib
   export PYTHONDONTWRITEBYTECODE=1
-  # CMake: never look at a user package registry (HOME is not writable).
-  export CMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
 }
 
 # --- build systems ----------------------------------------------------------
@@ -157,6 +155,7 @@ build_cmake() {
     -DCMAKE_PREFIX_PATH="$STAGE$PREFIX" \
     -DPKG_CONFIG_USE_CMAKE_PREFIX_PATH=OFF \
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF \
+    -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
     -DBUILD_TESTING=OFF \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
@@ -194,7 +193,7 @@ build_lua() {
   local name=$1 src=$2 version=$3 d mm
   d=$DEST/$name$PREFIX
   mm=${version%.*}
-  rm -rf "$BUILD/$name"
+  rm -rf "${BUILD:?}/${name:?}"
   cp -a "$src" "$BUILD/$name"
   make -C "$BUILD/$name" -j "$JOBS" linux CC="$CC" MYCFLAGS="$CFLAGS -fPIC" MYLDFLAGS="$LDFLAGS"
   install -d "$d/include/lua$mm" "$d/lib/pkgconfig"
@@ -304,7 +303,7 @@ build_one() {
             -Ddocumentation=false -Dudev-dir="$PREFIX/lib/udev"
           ;;
         libei)
-          build_meson "$name" "$src" -Dtests=disabled -Ddocumentation=[] \
+          build_meson "$name" "$src" -Dtests=disabled '-Ddocumentation=[]' \
             -Dsd-bus-provider=libsystemd
           ;;
         *) build_meson "$name" "$src" ;;
@@ -393,6 +392,8 @@ excluded() {
     share/wayland/* | share/wayland-protocols/* | share/hyprland-protocols/*) return 0 ;;
     share/wayland-sessions/* | share/aclocal/* | share/man/* | share/doc/* | share/gtk-doc/* | share/info/* | share/licenses/*) return 0 ;;
     etc/* | var/* | lib/udev/*) return 0 ;;
+    # libinput's debugging tools (noble): Python scripts with extra modules.
+    bin/libinput | libexec/libinput/*) return 0 ;;
     */__pycache__/* | *.pyc) return 0 ;;
   esac
   # Development symlinks: lib/libfoo.so (unversioned, directly in lib/).

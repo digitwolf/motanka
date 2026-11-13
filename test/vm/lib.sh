@@ -30,6 +30,8 @@
 #   MOTANKA_VM_RESULTS   if set, serial and QEMU logs of every VM that is
 #                        torn down are copied there; must be a folder under
 #                        ~/.cache/motanka-vm/results/
+#   MOTANKA_VM_DISK      virtual size of a VM's overlay disk (default 40G;
+#                        the overlay only grows as the guest writes)
 #   MOTANKA_BUILD_VM_CPUS  vCPUs of a build VM (default: host CPUs, at most 10)
 #   MOTANKA_BUILD_VM_RAM   memory of a build VM (default 10G)
 
@@ -51,7 +53,7 @@ MV_VARIANTS=(fresh gnome-snaps kde multiuser)
 MV_NAME_RE='^(resolute|noble)-(fresh|gnome-snaps|kde|multiuser)-[0-9a-f]{6}$'
 MV_GUEST_USER=tester
 MV_GUEST_REPO=/home/tester/motanka
-MV_DISK_SIZE=40G
+MV_DISK_SIZE=${MOTANKA_VM_DISK:-40G}
 MV_BOOT_TIMEOUT=600
 MV_DOWN_TIMEOUT=60
 MV_DEFAULT_GPU_ARGS="-vga none -device virtio-vga -display none"
@@ -529,6 +531,9 @@ mv_boot() {
   mkdir "$dir/seed"
   printf '%s\n' "$release" >"$dir/release"
   printf '%s\n' "$variant" >"$dir/variant"
+  if [[ ! $MV_DISK_SIZE =~ ^[1-9][0-9]*G$ ]]; then
+    mv_die "MOTANKA_VM_DISK must look like 40G, got '$MV_DISK_SIZE'"
+  fi
   qemu-img create -q -f qcow2 -F qcow2 -b "$backing" "$dir/overlay.qcow2" "$MV_DISK_SIZE"
   mv_write_seed "$name"
   mv_start_http "$dir"

@@ -27,6 +27,7 @@ Options:
                        never changed; a mismatch is still an error.
   --version V          Motanka version for the orig file names
   --check              validate components.tsv only; no network, no writes
+  --tsv FILE           read (and update) FILE instead of stack/components.tsv
 
 Exit codes: 0 success, 1 a component is unpinned, failed to download or is
 malformed, 2 usage error or invalid components.tsv, 6 checksum mismatch.
@@ -197,15 +198,15 @@ def read_version():
     return v
 
 
-def rewrite_tsv(lines, updates):
+def rewrite_tsv(path, lines, updates):
     for idx, digest in updates.items():
         parts = lines[idx].split("\t")
         parts[3] = digest
         lines[idx] = "\t".join(parts)
-    tmp = TSV + ".tmp"
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    os.replace(tmp, TSV)
+    os.replace(tmp, path)
 
 
 def layout(out, version, comps, files):
@@ -230,13 +231,15 @@ def main(argv=None):
     p.add_argument("--update-checksums", action="store_true")
     p.add_argument("--version")
     p.add_argument("--check", action="store_true")
+    p.add_argument("--tsv", default=TSV)
     args = p.parse_args(argv)
+    tsv = os.path.abspath(args.tsv)
 
     if os.geteuid() == 0:
         log("refusing to run as root")
         return EXIT_USAGE
     try:
-        lines, comps = parse_tsv(TSV)
+        lines, comps = parse_tsv(tsv)
         version = args.version or read_version()
     except (TsvError, OSError) as e:
         log(str(e))
@@ -245,7 +248,7 @@ def main(argv=None):
         log(f"invalid Motanka version '{version}'")
         return EXIT_USAGE
     if args.check:
-        log(f"{TSV}: {len(comps)} components, valid")
+        log(f"{tsv}: {len(comps)} components, valid")
         return 0
 
     out = os.path.abspath(args.out)
@@ -291,8 +294,8 @@ def main(argv=None):
         files[name] = path
 
     if updates:
-        rewrite_tsv(lines, updates)
-        log(f"wrote {len(updates)} checksum(s) into {TSV}")
+        rewrite_tsv(tsv, lines, updates)
+        log(f"wrote {len(updates)} checksum(s) into {tsv}")
     if problems:
         for msg in problems:
             log(f"error: {msg}")

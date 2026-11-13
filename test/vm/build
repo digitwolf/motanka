@@ -206,7 +206,7 @@ nohup setsid bash -c '
   log=$1 rcf=$2
   shift 2
   rc=0
-  bash "$@" >>"$log" 2>&1 || rc=$?
+  "$@" >>"$log" 2>&1 || rc=$?
   echo "$rc" >"$rcf.tmp"
   mv -f "$rcf.tmp" "$rcf"
 ' launcher "$log" "$rcf" env SOURCE_DATE_EPOCH="$sde" bash "$@" </dev/null >/dev/null 2>&1 &

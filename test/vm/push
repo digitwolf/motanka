@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copy the repository (without .git) into a test VM at /home/tester/motanka.
+# Copy the repository (without .git and the git-ignored .cache/ of upstream
+# reference copies) into a test VM at /home/tester/motanka.
 #
 # Usage: test/vm/push <name>
 #
@@ -25,12 +26,12 @@ mv_ssh_args "$name"
 
 if "${MV_SSH[@]}" 'command -v rsync >/dev/null' </dev/null; then
   mv_need rsync
-  rsync -rlptD --delete --exclude=/.git \
+  rsync -rlptD --delete --exclude=/.git --exclude=/.cache \
     -e "$(mv_rsync_rsh)" \
     "$MV_REPO/" "$MV_SSH_DEST:$MV_GUEST_REPO/"
 else
   mv_log "no rsync in $name; copying with tar"
-  tar -C "$MV_REPO" --exclude=./.git -cf - . |
+  tar -C "$MV_REPO" --exclude=./.git --exclude=./.cache -cf - . |
     "${MV_SSH[@]}" "rm -rf $MV_GUEST_REPO && mkdir -p $MV_GUEST_REPO && tar -C $MV_GUEST_REPO -xf -"
 fi
 mv_log "pushed $MV_REPO to $name:$MV_GUEST_REPO"
