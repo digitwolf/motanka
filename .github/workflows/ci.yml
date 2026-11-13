@@ -1,0 +1,516 @@
+# Motanka CI (task 24.1; requirements 1.2, 13.1, 13.4, 13.7, 13.8, 13.9).
+#
+# Nothing is built, installed or tested on the runner's own system. Every
+# step that lints, builds or tests runs in the harness container
+# (ci/harness/Dockerfile, through ci/in-harness), and every build, install,
+# update and removal happens in throwaway QEMU/KVM VMs that test/vm/ starts
+# from there, as on a development machine (testing.md). The jobs that start
+# VMs need /dev/kvm; ci/runner-setup --kvm fails them at once when it is
+# missing, and every job has a timeout.
+#
+# Jobs:
+#   lint         test/run-all --stage lint (shellcheck) and ci/shfmt-check
+#   unit         test/run-all --stage unit: the bats unit tests in a 26.04 VM
+#   pin-gates    ci/pin-gates against the base branch's upstream.pin: the
+#                Package_Map, overrides, migration and Call_Inventory gates
+#                of both channels (7.9, 7.10, 9.6)
+#   build        motanka-qt6 and motanka-stack for noble and resolute, and
+#   build-shell  then motanka-stack-shell, each in a build VM. Their .debs
+#                are cached under the key of ci/debcache (the package
+#                folder, its build-imports such as stack/*components.tsv,
+#                its sbuild-repos keys, packaging/version.sh and VERSION,
+#                and the key of every local .deb it builds against) and
+#                rebuilt only on a cache miss: the Stack takes more than an
+#                hour, Qt 20 to 30 minutes per release.
+#   build-core   the keyring, source, metapackage and motanka-core packages
+#                for both releases (lintian and tools/debcheck run in
+#                packaging/build.sh); cheap, not cached
+#   vm-plan      the VM test matrix (ci/vm-matrix)
+#   vm           one job per release and VM test: test/run-all --release R
+#                --stage vm --test T, with the cached .debs and a new TEST
+#                key; together these are the stages of test/run-all and
+#                test/run-all --release noble, including the opt-in release
+#                upgrade (MOTANKA_VM_RELEASE_UPGRADE=1, 13.4). Tests that
+#                start the session need a GL render node, which GitHub's
+#                runners do not have: test/run-all reports them as SKIP
+#                with the reason, and ci/report-skips turns every SKIP into
+#                a warning and a line of the job summary. The roundtrip jobs
+#                upload the signed test repository they installed from as
+#                candidate-repo-<release>, for the manual NVIDIA test.
+#   publish      only for a tag v<packaging/VERSION>, after every job above
+#                passed for both releases (13.7, 13.8), and only when the
+#                repository variable MOTANKA_PUBLISH_ENABLED is 'true':
+#                requires test/manual/results/<version>-nvidia.md to pass
+#                ci/check-nvidia-record (13.9); builds the published
+#                variants of the small packages (ci/release-build: no
+#                DEV_BUILD marker, the committed release key); signs one
+#                version for noble and resolute, and for noble-edge and
+#                resolute-edge while the edge pin equals the stable pin
+#                (ci/publish-repo); uploads the site and attaches the .debs
+#                to the GitHub release of the tag
+#   deploy       deploys the site to GitHub Pages:
+#                https://digitwolf.github.io/motanka/apt
+# .github/workflows/repo-resign.yml re-signs the published release weekly,
+# because InRelease is valid for 14 days (4.7).
+#
+# Owner setup before publishing:
+#   - repository variable MOTANKA_PUBLISH_ENABLED = 'true' (Settings,
+#     Secrets and variables, Actions, Variables). Unset or any other value:
+#     publish and deploy are skipped.
+#   - environment "release" with the secret MOTANKA_SIGNING_SUBKEY: the
+#     ASCII-armoured export of the signing subkey only, without a
+#     passphrase (gpg --armor --export-secret-subkeys <subkey-fpr>!); the
+#     primary key stays offline, and ci/publish-repo refuses a file that
+#     holds its secret. Required reviewers on "release" make every
+#     publication and every weekly re-sign wait for approval.
+#   - packaging/keys/motanka-archive.asc: the public half of the release key
+#     (with the signing subkey) instead of the TEST key.
+#   - Pages: source "GitHub Actions"; the "github-pages" environment must
+#     allow deployments from tags v* (its default allows only main).
+#
+# Actions: actions/checkout is pinned by commit; the other actions use
+# their major version tag.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # One suite's package build ends before the job's timeout.
+  MOTANKA_BUILD_TIMEOUT: '19800'
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare the runner
+        run: bash ci/runner-setup
+      - name: shellcheck
+        run: bash ci/in-harness -- bash test/run-all --stage lint
+      - name: shfmt
+        run: bash ci/in-harness -- bash ci/shfmt-check
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-lint
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare the runner
+        run: bash ci/runner-setup --kvm
+      - name: Unit tests in a 26.04 VM
+        run: bash ci/in-harness --kvm -- bash test/run-all --stage unit
+      - name: Skipped checks
+        if: always()
+        run: bash ci/report-skips "${MOTANKA_CI_STATE:-}/results"
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-unit
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  pin-gates:
+    name: pin-gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The base branch's upstream.pin
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          mkdir -p .cache/ci
+          case $EVENT in
+            pull_request) ref="origin/$BASE_REF" ;;
+            push) ref="$BEFORE" ;;
+            *) ref="origin/$DEFAULT_BRANCH" ;;
+          esac
+          if [[ -z $ref || $ref =~ ^0+$ || $ref == origin/ ]] ||
+            ! git show "$ref:upstream.pin" >.cache/ci/base.pin 2>/dev/null; then
+            echo "no upstream.pin at '$ref'; the gates compare upstream.pin with itself"
+            cp upstream.pin .cache/ci/base.pin
+          fi
+          echo "base: $ref"
+          cat .cache/ci/base.pin
+      - name: Prepare the runner
+        run: bash ci/runner-setup
+      - name: Gates
+        run: bash ci/in-harness -- bash ci/pin-gates --base-pin .cache/ci/base.pin --report .cache/ci/pin-gates.md
+      - name: Report
+        if: always()
+        run: |
+          if [[ -f .cache/ci/pin-gates.md ]]; then
+            cat .cache/ci/pin-gates.md >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+  build:
+    name: build (${{ matrix.pkg }}, ${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [noble, resolute]
+        pkg: [motanka-qt6, motanka-stack]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Cache key
+        id: key
+        env:
+          PKG: ${{ matrix.pkg }}
+          SUITE: ${{ matrix.suite }}
+        run: printf 'key=%s\n' "$(bash ci/debcache key "packaging/$PKG" "$SUITE")" >>"$GITHUB_OUTPUT"
+      - name: Look up the cached .debs
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/motanka-ci/debs/${{ matrix.pkg }}-${{ matrix.suite }}
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Prepare the runner
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash ci/runner-setup --kvm
+      - name: Build in a build VM
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          PKG: ${{ matrix.pkg }}
+          SUITE: ${{ matrix.suite }}
+        run: bash ci/in-harness --kvm -- bash ci/debcache build "packaging/$PKG" "$SUITE"
+      - name: Save the .debs
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/motanka-ci/debs/${{ matrix.pkg }}-${{ matrix.suite }}
+          key: ${{ steps.key.outputs.key }}
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-build-${{ matrix.pkg }}-${{ matrix.suite }}
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build-shell:
+    name: build (motanka-stack-shell, ${{ matrix.suite }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [noble, resolute]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Cache key
+        id: key
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: printf 'key=%s\n' "$(bash ci/debcache key packaging/motanka-stack-shell "$SUITE")" >>"$GITHUB_OUTPUT"
+      - name: Look up the cached .debs
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/motanka-ci/debs/motanka-stack-shell-${{ matrix.suite }}
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Prepare the runner
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash ci/runner-setup --kvm
+      - name: Cached motanka-qt6 and motanka-stack
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/restore-debs
+        with:
+          suite: ${{ matrix.suite }}
+          shell: 'false'
+      - name: Build in a build VM
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          bash ci/in-harness -- bash ci/debcache restore "$SUITE" motanka-qt6 motanka-stack
+          bash ci/in-harness --kvm -- bash ci/debcache build packaging/motanka-stack-shell "$SUITE"
+      - name: Save the .debs
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/motanka-ci/debs/motanka-stack-shell-${{ matrix.suite }}
+          key: ${{ steps.key.outputs.key }}
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-build-motanka-stack-shell-${{ matrix.suite }}
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build-core:
+    name: build (keyring, source, motanka, motanka-core, ${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [noble, resolute]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare the runner
+        run: bash ci/runner-setup --kvm
+      - name: Build in a build VM
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: >-
+          bash ci/in-harness --kvm -- bash test/vm/build --suite "$SUITE"
+          packaging/motanka-archive-keyring packaging/motanka-source
+          packaging/motanka packaging/motanka-core
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-build-core-${{ matrix.suite }}
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  vm-plan:
+    name: vm-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: VM test matrix
+        id: plan
+        run: bash ci/vm-matrix | tee -a "$GITHUB_OUTPUT"
+
+  vm:
+    name: vm (${{ matrix.release }}, ${{ matrix.test }})
+    needs: [vm-plan, build, build-shell]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.vm-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare the runner
+        run: bash ci/runner-setup --kvm
+      - name: Cached .debs for noble
+        if: matrix.release == 'noble' || matrix.test == 'release-upgrade'
+        uses: ./.github/actions/restore-debs
+        with:
+          suite: noble
+      - name: Cached .debs for resolute
+        if: matrix.release == 'resolute' || matrix.test == 'release-upgrade'
+        uses: ./.github/actions/restore-debs
+        with:
+          suite: resolute
+      - name: Hand the .debs to the harness
+        env:
+          RELEASE: ${{ matrix.release }}
+          TEST: ${{ matrix.test }}
+        run: |
+          suites=("$RELEASE")
+          if [[ $TEST == release-upgrade ]]; then
+            suites=(noble resolute)
+          fi
+          for s in "${suites[@]}"; do
+            bash ci/in-harness -- bash ci/debcache restore "$s" motanka-qt6 motanka-stack motanka-stack-shell
+          done
+      - name: TEST signing key for the test repositories
+        env:
+          MOTANKA_VM_UPGRADE: '0'
+        run: bash ci/in-harness --kvm -- bash chumak/gen-test-key --force
+      - name: test/run-all --release ${{ matrix.release }} --stage vm --test ${{ matrix.test }}
+        env:
+          RELEASE: ${{ matrix.release }}
+          TEST: ${{ matrix.test }}
+          MOTANKA_VM_RELEASE_UPGRADE: '1'
+        run: bash ci/in-harness --kvm -- bash test/run-all --release "$RELEASE" --stage vm --test "$TEST"
+      - name: Skipped checks
+        if: always()
+        run: bash ci/report-skips "${MOTANKA_CI_STATE:-}/results"
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-vm-${{ matrix.release }}-${{ matrix.test }}
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Candidate repository for the NVIDIA hardware test
+        if: success() && matrix.test == 'roundtrip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-repo-${{ matrix.release }}
+          path: ${{ env.MOTANKA_CI_STATE }}/repo-cache/${{ matrix.release }}-*/repo/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish
+    needs: [lint, unit, pin-gates, build, build-shell, build-core, vm]
+    if: vars.MOTANKA_PUBLISH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: The tag names packaging/VERSION
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(head -n 1 packaging/VERSION | tr -d '[:space:]')
+          if [[ $TAG != "v$version" ]]; then
+            echo "::error::the tag $TAG does not name packaging/VERSION ($version); tag the release as v$version"
+            exit 1
+          fi
+          echo "MOTANKA_RELEASE_VERSION=$version" >>"$GITHUB_ENV"
+      - name: NVIDIA hardware test record
+        run: bash ci/check-nvidia-record
+      - name: Prepare the runner
+        run: bash ci/runner-setup --kvm
+      - name: Cached .debs for noble
+        uses: ./.github/actions/restore-debs
+        with:
+          suite: noble
+      - name: Cached .debs for resolute
+        uses: ./.github/actions/restore-debs
+        with:
+          suite: resolute
+      - name: Published builds of the keyring, source, metapackage and motanka-core
+        run: bash ci/in-harness --kvm -- bash ci/release-build --out .cache/ci/release-debs
+      - name: The Stack, Qt and shell .debs
+        run: |
+          for s in noble resolute; do
+            bash ci/in-harness -- bash ci/debcache restore --to .cache/ci/release-debs "$s" motanka-qt6 motanka-stack motanka-stack-shell
+          done
+      - name: Sign the repository
+        env:
+          MOTANKA_SIGNING_KEY: ${{ secrets.MOTANKA_SIGNING_SUBKEY }}
+        run: bash ci/in-harness -- bash ci/publish-repo --debs .cache/ci/release-debs --out .cache/ci/site --assets .cache/ci/assets
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .cache/ci/site
+      - name: Attach the .debs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(.cache/ci/assets/*.deb)
+          if ((${#files[@]} == 0)); then
+            echo "::error::no published .debs in .cache/ci/assets"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber "${files[@]}"
+          else
+            gh release create "$TAG" --verify-tag --title "Motanka $MOTANKA_RELEASE_VERSION" \
+              --notes "Motanka $MOTANKA_RELEASE_VERSION for Ubuntu 24.04 LTS (noble) and Ubuntu 26.04 LTS (resolute), as published at https://digitwolf.github.io/motanka/apt. The weekly re-sign (.github/workflows/repo-resign.yml) rebuilds the repository from these files." \
+              "${files[@]}"
+          fi
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-publish
+          path: ${{ env.MOTANKA_CI_STATE }}/results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deploy:
+    name: deploy
+    needs: publish
+    if: vars.MOTANKA_PUBLISH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: motanka-pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

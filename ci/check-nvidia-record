@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Check the manual NVIDIA hardware test record of a Motanka version (task
+# 24.4; requirements 8.9, 13.9). The publish job of .github/workflows/ci.yml
+# runs it before anything is built or signed; publication stops when it
+# fails.
+#
+# Usage: ci/check-nvidia-record [--version V] [--record FILE]
+#                               [--template FILE]
+#
+#   --version   Motanka version (default: the first line of packaging/VERSION)
+#   --record    the record (default test/manual/results/<V>-nvidia.md)
+#   --template  the test description that holds the record template in its
+#               "```markdown" block (default test/manual/nvidia.md)
+#
+# The record passes when:
+#   - it exists and no "[fill in" is left in it;
+#   - it has the lines "Motanka version: <V>" and "Commit: <40 hex digits>";
+#   - for each release in RELEASES it has a "## <release>" section with
+#       "Driver: <version>", whose major version is 555 or later (8.9);
+#       "Motanka package version: <packaging/version.sh --version V
+#       <release>>";
+#       one table row "| <check> | PASS | ... |" for every check of the
+#       template's "## noble" table, and no row with another result;
+#       "Result: PASS".
+# Prints one line per problem. Reads files only.
+# Exit codes: 0 the record passes, 1 it is missing or does not pass,
+# 2 usage error.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+usage="ci/check-nvidia-record [--version V] [--record FILE] [--template FILE]"
+
+# The releases a published version serves; both are tested (1.2, 1.3).
+RELEASES=(noble resolute)
+MIN_DRIVER=555
+
+problems=0
+problem() {
+  printf 'check-nvidia-record: %s\n' "$*"
+  problems=$((problems + 1))
+}
+
+die_usage() {
+  printf 'check-nvidia-record: %s\nusage: %s\n' "$1" "$usage" >&2
+  exit 2
+}
+
+version=""
+record=""
+template=$repo/test/manual/nvidia.md
+while (($# > 0)); do
+  case $1 in
+    --version | --record | --template)
+      if (($# < 2)); then
+        die_usage "$1 needs a value"
+      fi
+      case $1 in
+        --version) version=$2 ;;
+        --record) record=$2 ;;
+        --template) template=$2 ;;
+      esac
+      shift 2
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$usage"
+      exit 0
+      ;;
+    *) die_usage "unknown argument '$1'" ;;
+  esac
+done
+if [[ -z $version ]]; then
+  IFS= read -r version <"$repo/packaging/VERSION" || true
+  version=${version//[[:space:]]/}
+fi
+if [[ ! $version =~ ^[0-9][A-Za-z0-9.+~]*$ ]]; then
+  die_usage "invalid Motanka version '$version'"
+fi
+record=${record:-$repo/test/manual/results/$version-nvidia.md}
+if [[ ! -r $template ]]; then
+  die_usage "cannot read the template $template"
+fi
+
+# section <text> <heading>: the lines below "## <heading>" up to the next
+# "## " heading.
+section() {
+  awk -v h="## $2" '$0 == h { f = 1; next } f && /^## / { exit } f' <<<"$1"
+}
+
+# rows: "<check> TAB <result>" for every table row on stdin, without the
+# header and separator rows.
+rows() {
+  awk -F'|' '
+    /^\|/ {
+      if ($0 ~ /^\|[-|: ]+$/) next
+      c = $2; r = $3
+      gsub(/^[ \t]+|[ \t]+$/, "", c)
+      gsub(/^[ \t]+|[ \t]+$/, "", r)
+      if (c == "Check" || c == "") next
+      print c "\t" r
+    }'
+}
+
+# field <text> <name>: the value of the first "<name>: <value>" line.
+field() {
+  awk -v n="$2: " 'index($0, n) == 1 { print substr($0, length(n) + 1); exit }' <<<"$1"
+}
+
+tmpl=$(awk -v fence='```' '$0 == fence "markdown" { f = 1; next } f && $0 == fence { exit } f' "$template")
+mapfile -t checks < <(section "$tmpl" noble | rows | cut -f1)
+if ((${#checks[@]} == 0)); then
+  die_usage "$template has no record template with a '## noble' check table"
+fi
+
+if [[ ! -f $record ]]; then
+  problem "no NVIDIA hardware test record for Motanka $version: ${record#"$repo"/} is missing"
+  problem "run the test in test/manual/nvidia.md on an NVIDIA machine with driver $MIN_DRIVER or later and commit the record"
+  exit 1
+fi
+text=$(<"$record")
+name=${record#"$repo"/}
+
+if grep -qF '[fill in' <<<"$text"; then
+  problem "$name: $(grep -cF '[fill in' <<<"$text") line(s) still hold '[fill in'"
+fi
+got=$(field "$text" "Motanka version")
+if [[ $got != "$version" ]]; then
+  problem "$name: 'Motanka version: ${got:-(missing)}' does not name $version"
+fi
+got=$(field "$text" "Commit")
+if [[ ! $got =~ ^[0-9a-f]{40}$ ]]; then
+  problem "$name: 'Commit:' must be the 40-digit commit that was tested, found '${got:-(missing)}'"
+fi
+
+for rel in "${RELEASES[@]}"; do
+  sec=$(section "$text" "$rel")
+  if [[ -z $sec ]]; then
+    problem "$name: no '## $rel' section"
+    continue
+  fi
+  driver=$(field "$sec" Driver)
+  driver=${driver%% *}
+  if [[ ! $driver =~ ^([0-9]+)(\.[0-9]+)*$ ]]; then
+    problem "$name: $rel: 'Driver:' must be the NVIDIA driver version, found '${driver:-(missing)}'"
+  elif ((10#${BASH_REMATCH[1]} < MIN_DRIVER)); then
+    problem "$name: $rel: driver $driver is older than $MIN_DRIVER; Motanka supports NVIDIA from driver $MIN_DRIVER (8.9)"
+  fi
+  want=$(bash "$repo/packaging/version.sh" --version "$version" "$rel")
+  got=$(field "$sec" "Motanka package version")
+  if [[ $got != "$want" ]]; then
+    problem "$name: $rel: 'Motanka package version: ${got:-(missing)}' is not $want"
+  fi
+  declare -A result=()
+  while IFS=$'\t' read -r c r; do
+    result[$c]=$r
+    if [[ $r != PASS ]]; then
+      problem "$name: $rel: check '$c' is '${r:-(empty)}', not PASS"
+    fi
+  done < <(rows <<<"$sec")
+  for c in "${checks[@]}"; do
+    if [[ -z ${result[$c]+set} ]]; then
+      problem "$name: $rel: the check '$c' of the template has no row"
+    fi
+  done
+  unset result
+  got=$(field "$sec" Result)
+  if [[ $got != PASS ]]; then
+    problem "$name: $rel: 'Result: ${got:-(missing)}' is not PASS"
+  fi
+done
+
+if ((problems > 0)); then
+  printf 'check-nvidia-record: %s does not pass; Motanka %s cannot be published\n' "$name" "$version"
+  exit 1
+fi
+printf 'check-nvidia-record: %s passes for %s (%d checks per release)\n' "$name" "${RELEASES[*]}" "${#checks[@]}"

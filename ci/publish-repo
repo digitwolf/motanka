@@ -1,0 +1,334 @@
+#!/usr/bin/env bash
+# Build the signed Motanka_Repo site for GitHub Pages from the .debs of one
+# Motanka version (task 24.1; requirements 1.2, 3.6, 4.2, 4.7, 13.8). CI
+# only: the publish job of .github/workflows/ci.yml and the weekly re-sign
+# of .github/workflows/repo-resign.yml run it in the harness container. It
+# signs; it does not deploy.
+#
+# Usage: ci/publish-repo --debs <folder> --out <folder> [--assets <folder>]
+#                        [--key <file>]
+#
+#   --debs    the .debs of the version: the published builds of
+#             ci/release-build and the cached Stack, Qt and shell packages,
+#             or the assets of the GitHub release being re-signed
+#   --out     the site; the repository goes into <out>/apt/, which is
+#             https://digitwolf.github.io/motanka/apt once deployed
+#   --assets  also copy every published .deb, once, into this folder (the
+#             assets of the GitHub release, which the re-sign job reads)
+#   --key     armored secret key that signs; default: the content of the
+#             environment variable MOTANKA_SIGNING_KEY (the Actions secret
+#             MOTANKA_SIGNING_SUBKEY), which is written to a 0600 file in a
+#             temporary folder, removed from the environment, and deleted
+#             at exit
+#
+# Checks before signing; any failure stops with nothing written to <out>:
+#   - every .deb is a Motanka_Package of the version packaging/version.sh
+#     gives for noble or for resolute (build-only packages are left out);
+#   - both releases have exactly the binary packages that the control
+#     files under packaging/ declare for them, so one version goes to noble
+#     and resolute together (1.2, 13.8);
+#   - no motanka-core .deb has the DEV_BUILD marker;
+#   - packaging/keys/motanka-archive.asc is not the TEST key, and the
+#     keyring in each motanka-archive-keyring .deb holds the signing key;
+#   - the signing key's primary secret is not in the file (only a stub):
+#     the primary key stays offline, CI signs with a subkey;
+#   - the channel rule: the edge suites get the same packages as the stable
+#     suites while the edge pin of upstream.pin equals the stable pin. When
+#     they differ the job fails, because the package build vendors only the
+#     stable pin (packaging/build.sh) and an edge suite would carry the
+#     wrong Upstream_Pin.
+# Then chumak/build-repo signs noble, noble-edge, resolute and
+# resolute-edge (each suite gets its release's packages and only its own
+# motanka-source-<suite>), gpgv checks every InRelease and SHA256SUMS.gpg
+# against the keyring the packages ship, and the site must stay under
+# GitHub Pages' 1 GB limit.
+# Exit codes: 0 site built, 1 a check failed, 2 usage error.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+usage="ci/publish-repo --debs <folder> --out <folder> [--assets <folder>] [--key <file>]"
+RELEASES=(noble resolute)
+PAGES_LIMIT=$((1000 * 1000 * 1000))
+
+log() {
+  printf 'publish-repo: %s\n' "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  printf '::error title=ci/publish-repo::%s\n' "$*"
+  exit 1
+}
+
+die_usage() {
+  log "$1"
+  printf 'usage: %s\n' "$usage" >&2
+  exit 2
+}
+
+if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+  die_usage "CI only: the publish job of .github/workflows/ci.yml runs it"
+fi
+
+debs="" out="" assets="" key=""
+while (($# > 0)); do
+  case $1 in
+    --debs | --out | --assets | --key)
+      if (($# < 2)); then
+        die_usage "$1 needs a value"
+      fi
+      case $1 in
+        --debs) debs=$2 ;;
+        --out) out=$2 ;;
+        --assets) assets=$2 ;;
+        --key) key=$2 ;;
+      esac
+      shift 2
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$usage"
+      exit 0
+      ;;
+    *) die_usage "unknown argument '$1'" ;;
+  esac
+done
+[[ -n $debs && -n $out ]] || die_usage "--debs and --out are required"
+[[ -d $debs ]] || die_usage "no such folder: $debs"
+if [[ -e $out && -n $(ls -A "$out") ]]; then
+  die_usage "$out exists and is not empty"
+fi
+for tool in dpkg-deb gpg gpgv apt-ftparchive git du; do
+  command -v "$tool" >/dev/null || die "$tool is missing (run it in the harness container: ci/in-harness)"
+done
+
+umask 077
+mkdir -p "$repo/.cache/ci"
+work=$(mktemp -d "$repo/.cache/ci/publish.XXXXXX")
+export GNUPGHOME=$work/gnupg
+mkdir -m 0700 "$GNUPGHOME"
+cleanup() {
+  gpgconf --kill all >/dev/null 2>&1 || true
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+
+if [[ -z $key ]]; then
+  if [[ -z ${MOTANKA_SIGNING_KEY:-} ]]; then
+    die "no signing key: the Actions secret MOTANKA_SIGNING_SUBKEY (environment 'release') is empty or not passed as MOTANKA_SIGNING_KEY"
+  fi
+  key=$work/signing.asc
+  printf '%s\n' "$MOTANKA_SIGNING_KEY" >"$key"
+  unset MOTANKA_SIGNING_KEY
+fi
+[[ -s $key ]] || die "the signing key file $key is empty"
+
+# --- 1. the .debs, sorted by release ---------------------------------------
+declare -A VERSION=() HAVE=()
+for r in "${RELEASES[@]}"; do
+  VERSION[$r]=$(bash "$repo/packaging/version.sh" "$r")
+  mkdir -p "$work/rel/$r"
+done
+shopt -s nullglob
+for f in "$debs"/*.deb; do
+  base=${f##*/}
+  case $base in
+    *-dbgsym_*) continue ;;
+  esac
+  pkg=$(dpkg-deb --field "$f" Package)
+  ver=$(dpkg-deb --field "$f" Version)
+  if [[ $pkg != motanka && $pkg != motanka-* ]]; then
+    die "$base: $pkg is not a Motanka_Package (3.6)"
+  fi
+  if [[ $(dpkg-deb --field "$f" Motanka-Build-Only) == yes ]]; then
+    log "leaving out $base: build-only package"
+    continue
+  fi
+  rel=""
+  for r in "${RELEASES[@]}"; do
+    if [[ $ver == "${VERSION[$r]}" ]]; then
+      rel=$r
+    fi
+  done
+  if [[ -z $rel ]]; then
+    die "$base has version $ver, which is neither ${VERSION[noble]} (noble) nor ${VERSION[resolute]} (resolute)"
+  fi
+  if [[ -n ${HAVE[$rel/$pkg]:-} ]]; then
+    die "two .debs of $pkg for $rel: ${HAVE[$rel/$pkg]##*/} and $base"
+  fi
+  HAVE[$rel/$pkg]=$f
+  cp -f -- "$f" "$work/rel/$rel/"
+done
+shopt -u nullglob
+
+# expected <release>: the binary packages the control files under
+# packaging/ declare for the release, without build-only packages.
+expected() {
+  local r=$1 c d line word listed
+  local -a words
+  for c in "$repo"/packaging/*/debian/control "$repo"/packaging/*/debian/control.in; do
+    [[ -f $c ]] || continue
+    d=${c%/debian/*}
+    if [[ -f $d/suites ]]; then
+      listed=0
+      while IFS= read -r line || [[ -n $line ]]; do
+        read -r -a words <<<"${line%%#*}"
+        for word in "${words[@]}"; do
+          if [[ $word == "$r" ]]; then
+            listed=1
+          fi
+        done
+      done <"$d/suites"
+      ((listed)) || continue
+    fi
+    awk -v suite="$r" '
+      /^#if([ \t]|$)/ { inblk = 1; keep = 0; for (i = 2; i <= NF; i++) if ($i == suite) keep = 1; next }
+      /^#endif/ { inblk = 0; next }
+      inblk && !keep { next }
+      /^#/ { next }
+      { print }
+    ' "$c" | awk '
+      BEGIN { RS = "" }
+      {
+        n = split($0, l, "\n"); name = ""; bo = 0
+        for (i = 1; i <= n; i++) {
+          if (l[i] ~ /^Package:/) { name = l[i]; sub(/^Package:[ \t]*/, "", name); sub(/[ \t]+$/, "", name) }
+          if (l[i] ~ /^XB-Motanka-Build-Only:[ \t]*yes/) bo = 1
+        }
+        if (name != "" && !bo) print name
+      }'
+  done | LC_ALL=C sort -u
+}
+
+problems=0
+for r in "${RELEASES[@]}"; do
+  mapfile -t want < <(expected "$r")
+  ((${#want[@]} > 0)) || die "no binary packages declared for $r under packaging/"
+  declare -A wanted=()
+  for p in "${want[@]}"; do
+    wanted[$p]=1
+    if [[ -z ${HAVE[$r/$p]:-} ]]; then
+      log "$r: no .deb of $p ${VERSION[$r]}"
+      problems=$((problems + 1))
+    fi
+  done
+  for k in "${!HAVE[@]}"; do
+    if [[ $k == "$r"/* && -z ${wanted[${k#*/}]:-} ]]; then
+      log "$r: ${HAVE[$k]##*/} is not declared by any control file under packaging/"
+      problems=$((problems + 1))
+    fi
+  done
+  unset wanted
+  log "$r: ${#want[@]} packages of version ${VERSION[$r]}"
+done
+((problems == 0)) || die "the .debs do not make one complete version for noble and resolute ($problems problem(s) above)"
+
+# --- 2. published builds, not development builds ---------------------------
+if grep -qi 'TEST KEY' "$repo/packaging/keys/motanka-archive.asc"; then
+  die "packaging/keys/motanka-archive.asc is the TEST key; commit the public half of the release key"
+fi
+for r in "${RELEASES[@]}"; do
+  f=${HAVE[$r/motanka-core]}
+  if dpkg-deb --contents "$f" | grep -q ' \./opt/motanka/share/motanka/DEV_BUILD$'; then
+    die "${f##*/} is a development build (it has /opt/motanka/share/motanka/DEV_BUILD); build it with ci/release-build"
+  fi
+done
+
+# --- 3. the signing key -----------------------------------------------------
+gpg --batch --quiet --import "$key" 2>"$work/import.log" || {
+  cat "$work/import.log" >&2
+  die "cannot import the signing key"
+}
+listing=$(gpg --batch --with-colons --list-secret-keys)
+if [[ $(awk -F: '$1 == "sec"' <<<"$listing" | wc -l) != 1 ]]; then
+  die "the signing key file must hold exactly one key"
+fi
+primary_sn=$(awk -F: '$1 == "sec" { print $15; exit }' <<<"$listing")
+if [[ $primary_sn != "#" ]]; then
+  die "the signing key file holds the secret of the primary key; the primary key stays offline: export only the signing subkey (gpg --armor --export-secret-subkeys <subkey-fingerprint>!)"
+fi
+mapfile -t signing < <(awk -F: '
+  $1 == "ssb" { want = ($12 ~ /s/ && $15 != "#") ; next }
+  $1 == "fpr" && want { print $10; want = 0 }
+' <<<"$listing")
+((${#signing[@]} > 0)) || die "the signing key file has no usable signing subkey"
+log "signing subkey(s): ${signing[*]}"
+for r in "${RELEASES[@]}"; do
+  f=${HAVE[$r/motanka-archive-keyring]}
+  mkdir -p "$work/keyring/$r"
+  dpkg-deb -x "$f" "$work/keyring/$r"
+  kr=$work/keyring/$r/usr/share/keyrings/motanka-archive-keyring.gpg
+  [[ -s $kr ]] || die "${f##*/} has no /usr/share/keyrings/motanka-archive-keyring.gpg"
+  shown=$(gpg --batch --with-colons --show-keys "$kr")
+  if grep -q '^uid:.*TEST archive key' <<<"$shown"; then
+    die "${f##*/} ships the TEST key"
+  fi
+  for s in "${signing[@]}"; do
+    grep -q "^fpr:\{9\}$s:" <<<"$shown" || die "${f##*/} does not hold the signing subkey $s; the packages and the secret belong to different keys"
+  done
+done
+
+# --- 4. suites and the channel rule -------------------------------------------
+stable=$(awk -F'\t' '$1 == "stable" { print $2; exit }' "$repo/upstream.pin")
+edge=$(awk -F'\t' '$1 == "edge" { print $2; exit }' "$repo/upstream.pin")
+[[ $stable =~ ^[0-9a-f]{40}$ && $edge =~ ^[0-9a-f]{40}$ ]] || die "upstream.pin has no valid stable and edge commits"
+if [[ $stable != "$edge" ]]; then
+  die "the edge pin ($edge) differs from the stable pin ($stable); the package build vendors only the stable pin, so the edge suites cannot be published from this build. Publish when the pins are equal, or add an edge build of motanka-core first."
+fi
+suites=(noble noble-edge resolute resolute-edge)
+specs=()
+for s in "${suites[@]}"; do
+  r=${s%-edge}
+  d=$work/suite/$s
+  mkdir -p "$d"
+  for k in "${!HAVE[@]}"; do
+    [[ $k == "$r"/* ]] || continue
+    p=${k#*/}
+    if [[ $p == motanka-source-* && $p != "motanka-source-$s" ]]; then
+      continue
+    fi
+    ln -f -- "$work/rel/$r/${HAVE[$k]##*/}" "$d/" 2>/dev/null || cp -f -- "$work/rel/$r/${HAVE[$k]##*/}" "$d/"
+  done
+  specs+=("$s=$d")
+done
+
+# --- 5. sign ----------------------------------------------------------------
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+sde=$(git -C "$repo" log -1 --format=%ct 2>/dev/null || date -u +%s)
+log "building the repository for ${suites[*]} (SOURCE_DATE_EPOCH=$sde)"
+SOURCE_DATE_EPOCH=$sde bash "$repo/chumak/build-repo" --key "$key" "$out/apt" "${specs[@]}"
+
+# --- 6. verify as a client would ---------------------------------------------
+mkdir -m 0700 "$work/gpgv"
+for s in "${suites[@]}"; do
+  r=${s%-edge}
+  gpgv --homedir "$work/gpgv" --keyring "$work/keyring/$r/usr/share/keyrings/motanka-archive-keyring.gpg" \
+    "$out/apt/dists/$s/InRelease" 2>"$work/gpgv.log" || {
+    cat "$work/gpgv.log" >&2
+    die "dists/$s/InRelease does not verify against the keyring of motanka-archive-keyring for $r"
+  }
+done
+gpgv --homedir "$work/gpgv" --keyring "$work/keyring/noble/usr/share/keyrings/motanka-archive-keyring.gpg" \
+  "$out/apt/SHA256SUMS.gpg" "$out/apt/SHA256SUMS" 2>"$work/gpgv.log" || {
+  cat "$work/gpgv.log" >&2
+  die "SHA256SUMS.gpg does not verify against the shipped keyring"
+}
+size=$(du -sb "$out" | cut -f1)
+if ((size > PAGES_LIMIT)); then
+  du -ab "$out" | LC_ALL=C sort -rn | head -n 10 >&2
+  die "the site is $size bytes, more than GitHub Pages' limit of $PAGES_LIMIT"
+fi
+log "site: $((size / 1048576)) MiB in $out/apt"
+
+if [[ -n $assets ]]; then
+  mkdir -p "$assets"
+  for k in "${!HAVE[@]}"; do
+    cp -f -- "${HAVE[$k]}" "$assets/"
+  done
+  log "copied ${#HAVE[@]} .debs into $assets"
+fi
+find "$out" -type d -exec chmod 0755 {} +
+find "$out" -type f -exec chmod 0644 {} +
+log "done: ${suites[*]} signed with ${signing[*]}"

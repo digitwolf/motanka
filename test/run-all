@@ -3,9 +3,23 @@
 # Lint on the host, then unit tests and VM tests in throwaway VMs.
 #
 # Usage: test/run-all [--release resolute|noble] [--keep]
+#                     [--stage lint|unit|vm]... [--test <name>]...
+#
+#   --release  the release of the unit-test VM and of the VM tests
+#              (default resolute, 26.04)
+#   --keep     keep the unit-test VM afterwards
+#   --stage    run only these groups of stages (repeatable; default all):
+#                lint  the shellcheck stage
+#                unit  the boot, unit and teardown stages
+#                vm    the vm-<test> stages
+#   --test     with the vm group, run only these VM tests (repeatable; the
+#              name of test/vm/tests/<name>.sh)
+# .github/workflows/ci.yml runs each group in its own job and each VM test
+# in its own job through these options.
 #
 # Stages:
-#   lint        shellcheck on every shell file in the repository except test/bats/ (host)
+#   [shellcheck] shellcheck on every shell file in the repository except
+#               test/bats/ (host)
 #   boot        a fresh VM of the release (default resolute, 26.04)
 #   unit        push the repository into that VM and run test/unit/run there
 #   vm-<test>   every executable test/vm/tests/*.sh, run on the host; each
@@ -14,32 +28,54 @@
 #               run only when their variable is 1, and are SKIP otherwise:
 #                 release-upgrade.sh  MOTANKA_VM_RELEASE_UPGRADE=1 (24.04 ->
 #                                     26.04 with a twin VM; an hour or more)
-#                 parity.sh           MOTANKA_VM_PARITY=1 (an Arch Linux
-#                                     reference VM with Upstream; its first
-#                                     run builds that image, an hour or more)
+#               Tests in NEEDS_GL start the Motanka session in a VM with a
+#               virgl GPU (MOTANKA_VM_GPU=gl), which needs read and write
+#               access to the host's render node (MOTANKA_VM_RENDER_NODE,
+#               default /dev/dri/renderD128). Without it, as on CI runners
+#               without a GPU, they are SKIP with that reason instead of
+#               failing to boot:
+#                 first-login.sh, session.sh, stack.sh
+#               roundtrip.sh and release-upgrade.sh check the render node
+#               themselves and then skip only their login, with "SKIP:"
+#               lines in their logs.
 #   teardown    stop the unit-test VM; skipped with --keep
 #
-# Logs go to ~/.cache/motanka-vm/results/<run-id>/. Exits 1 if any stage
-# failed.
+# Logs go to ~/.cache/motanka-vm/results/<run-id>/; summary.txt there has
+# one line per stage: PASS, FAIL (exit <code>) or SKIP (<reason>). Exits 1
+# if any stage failed.
 set -euo pipefail
 # shellcheck source=vm/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vm/lib.sh"
-MV_USAGE="test/run-all [--release resolute|noble] [--keep]"
+MV_USAGE="test/run-all [--release resolute|noble] [--keep] [--stage lint|unit|vm]... [--test <name>]..."
 mv_init
 
 release=resolute
 keep_vm=false
+sel_stages=()
+sel_tests=()
 while (($# > 0)); do
   case $1 in
-    --release)
+    --release | --stage | --test)
       if (($# < 2)); then
-        mv_usage "--release needs a value"
+        mv_usage "$1 needs a value"
       fi
-      release=$2
+      case $1 in
+        --release) release=$2 ;;
+        --stage) sel_stages+=("$2") ;;
+        --test) sel_tests+=("$2") ;;
+      esac
       shift 2
       ;;
     --release=*)
       release=${1#*=}
+      shift
+      ;;
+    --stage=*)
+      sel_stages+=("${1#*=}")
+      shift
+      ;;
+    --test=*)
+      sel_tests+=("${1#*=}")
       shift
       ;;
     --keep)
@@ -56,9 +92,46 @@ while (($# > 0)); do
   esac
 done
 mv_check_release "$release"
-mv_check_kvm
-mv_need shellcheck qemu-system-x86_64 qemu-img ssh ssh-keygen rsync python3 \
-  gpgv setsid timeout flock
+for s in "${sel_stages[@]}"; do
+  case $s in
+    lint | unit | vm) ;;
+    *) mv_usage "unknown stage group '$s' (expected lint, unit or vm)" ;;
+  esac
+done
+
+# want <group>: the group runs (all of them when no --stage was given).
+want() {
+  local s
+  if ((${#sel_stages[@]} == 0)); then
+    return 0
+  fi
+  for s in "${sel_stages[@]}"; do
+    if [[ $s == "$1" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ((${#sel_tests[@]} > 0)); then
+  if ! want vm; then
+    mv_usage "--test needs the vm stage group"
+  fi
+  for t in "${sel_tests[@]}"; do
+    if [[ ! $t =~ ^[a-z0-9][a-z0-9-]*$ || ! -x $MV_LIB_DIR/tests/$t.sh ]]; then
+      mv_usage "no VM test '$t' (expected the name of an executable test/vm/tests/<name>.sh)"
+    fi
+  done
+fi
+
+if want lint; then
+  mv_need shellcheck
+fi
+if want unit || want vm; then
+  mv_check_kvm
+  mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen rsync python3 \
+    gpgv setsid timeout flock
+fi
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(mv_hex6)"
 RESULTS_DIR="$MV_RESULTS/$run_id"
@@ -68,9 +141,12 @@ export MOTANKA_VM_RELEASE="$release"
 
 STAGES=()
 declare -A RESULT=()
+declare -A REASON=()
 unit_vm=""
 # VM tests that run only on request: test name -> the variable that must be 1.
-declare -A OPT_IN=([release-upgrade]=MOTANKA_VM_RELEASE_UPGRADE [parity]=MOTANKA_VM_PARITY)
+declare -A OPT_IN=([release-upgrade]=MOTANKA_VM_RELEASE_UPGRADE)
+# VM tests that cannot run without a GL render node (MOTANKA_VM_GPU=gl).
+declare -A NEEDS_GL=([first-login]=1 [session]=1 [stack]=1)
 
 # run_stage <stage> <command...>: runs the command, logs its output to
 # <stage>.log and stderr, and records the exit code.
@@ -91,7 +167,28 @@ run_stage() {
 skip_stage() {
   STAGES+=("$1")
   RESULT[$1]=skip
+  REASON[$1]=$2
   mv_log "--- $1: SKIP ($2)"
+}
+
+# selected <test-name>: the test runs in this invocation (all of them when
+# no --test was given).
+selected() {
+  local t
+  if ((${#sel_tests[@]} == 0)); then
+    return 0
+  fi
+  for t in "${sel_tests[@]}"; do
+    if [[ $t == "$1" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# gl_usable: the render node a virgl VM needs is readable and writable.
+gl_usable() {
+  [[ -r $MV_GL_RENDER_NODE && -w $MV_GL_RENDER_NODE ]]
 }
 
 # Prints the repository-relative path of every shell file outside .git and
@@ -141,53 +238,78 @@ stage_unit() {
 {
   printf 'run-id: %s\n' "$run_id"
   printf 'release: %s\n' "$release"
+  printf 'stages: %s\n' "${sel_stages[*]:-lint unit vm}"
+  printf 'tests: %s\n' "${sel_tests[*]:-all}"
   printf 'commit: %s\n' "$(git -C "$MV_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
   printf 'changed files: %s\n' "$(git -C "$MV_REPO" status --porcelain 2>/dev/null | wc -l)"
-  printf 'qemu: %s\n' "$(qemu-system-x86_64 --version | head -n 1)"
+  if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    printf 'qemu: %s\n' "$(qemu-system-x86_64 --version | head -n 1)"
+  else
+    printf 'qemu: not used\n'
+  fi
   printf 'vm: cpus=%s ram=%s gpu-args=%s\n' "${MOTANKA_VM_CPUS:-4}" \
     "${MOTANKA_VM_RAM:-6G}" "${MOTANKA_VM_GPU_ARGS-$MV_DEFAULT_GPU_ARGS}"
+  if gl_usable; then
+    printf 'gl render node: %s (usable)\n' "$MV_GL_RENDER_NODE"
+  else
+    printf 'gl render node: %s (not usable)\n' "$MV_GL_RENDER_NODE"
+  fi
 } >"$RESULTS_DIR/run.txt"
 mv_log "run $run_id on $release; logs in $RESULTS_DIR"
 
 # 1. Lint on the host.
-run_stage shellcheck stage_shellcheck
+if want lint; then
+  run_stage shellcheck stage_shellcheck
+fi
 
 # 2. Unit tests inside a VM.
-run_stage boot stage_boot </dev/null
-if [[ ${RESULT[boot]} == 0 ]]; then
-  unit_vm=$(tail -n 1 "$RESULTS_DIR/unit-vm.name")
-  if ! mv_valid_name "$unit_vm"; then
-    mv_die "test/vm/up printed an invalid VM name '$unit_vm'"
+if want unit; then
+  run_stage boot stage_boot </dev/null
+  if [[ ${RESULT[boot]} == 0 ]]; then
+    unit_vm=$(tail -n 1 "$RESULTS_DIR/unit-vm.name")
+    if ! mv_valid_name "$unit_vm"; then
+      mv_die "test/vm/up printed an invalid VM name '$unit_vm'"
+    fi
+    if ! $keep_vm; then
+      MV_CLEANUP_VMS+=("$unit_vm")
+    fi
+    run_stage unit stage_unit
+  else
+    skip_stage unit "no VM"
   fi
-  if ! $keep_vm; then
-    MV_CLEANUP_VMS+=("$unit_vm")
-  fi
-  run_stage unit stage_unit
-else
-  skip_stage unit "no VM"
 fi
 
 # 3. VM tests; each boots its own VMs.
-shopt -s nullglob
-tests=("$MV_LIB_DIR"/tests/*.sh)
-shopt -u nullglob
-if ((${#tests[@]} == 0)); then
-  mv_log "no VM tests in test/vm/tests/"
+if want vm; then
+  shopt -s nullglob
+  tests=("$MV_LIB_DIR"/tests/*.sh)
+  shopt -u nullglob
+  if ((${#tests[@]} == 0)); then
+    mv_log "no VM tests in test/vm/tests/"
+  fi
+  for t in "${tests[@]}"; do
+    name=$(basename "$t" .sh)
+    if ! selected "$name"; then
+      continue
+    fi
+    if [[ ! -x $t ]]; then
+      mv_log "ignoring $t: not executable"
+      continue
+    fi
+    stage="vm-$name"
+    opt=${OPT_IN[$name]:-}
+    if [[ -n $opt && ${!opt:-0} != 1 ]]; then
+      skip_stage "$stage" "opt-in; set $opt=1 to run it"
+      continue
+    fi
+    if [[ -n ${NEEDS_GL[$name]:-} ]] && ! gl_usable; then
+      skip_stage "$stage" "needs MOTANKA_VM_GPU=gl: the render node $MV_GL_RENDER_NODE is not readable and writable by $(id -un), so the Motanka session cannot start in a VM here"
+      continue
+    fi
+    run_stage "$stage" env MOTANKA_VM_RELEASE="$release" \
+      MOTANKA_VM_RESULTS="$RESULTS_DIR/$stage" "$t" </dev/null
+  done
 fi
-for t in "${tests[@]}"; do
-  if [[ ! -x $t ]]; then
-    mv_log "ignoring $t: not executable"
-    continue
-  fi
-  stage="vm-$(basename "$t" .sh)"
-  opt=${OPT_IN[$(basename "$t" .sh)]:-}
-  if [[ -n $opt && ${!opt:-0} != 1 ]]; then
-    skip_stage "$stage" "opt-in; set $opt=1 to run it"
-    continue
-  fi
-  run_stage "$stage" env MOTANKA_VM_RELEASE="$release" \
-    MOTANKA_VM_RESULTS="$RESULTS_DIR/$stage" "$t" </dev/null
-done
 
 # 4. Teardown.
 if [[ -n $unit_vm ]]; then
@@ -205,7 +327,7 @@ failed=0
 for s in "${STAGES[@]}"; do
   case ${RESULT[$s]} in
     0) word=PASS ;;
-    skip) word=SKIP ;;
+    skip) word="SKIP (${REASON[$s]})" ;;
     *)
       word="FAIL (exit ${RESULT[$s]})"
       failed=1

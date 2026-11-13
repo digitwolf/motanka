@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Make every skipped check of a test/run-all run visible in the GitHub
+# Actions run (task 24.1): one warning annotation and one line of the job
+# summary per SKIP stage of every summary.txt below <results>, and per
+# "SKIP:" line in the stage logs (the login fallbacks of roundtrip.sh and
+# release-upgrade.sh). A skip is never reported as a pass.
+#
+# Usage: ci/report-skips <results-folder>
+#
+# Reads files only. Exit 0, also when nothing was skipped.
+set -euo pipefail
+
+if (($# != 1)); then
+  printf 'usage: ci/report-skips <results-folder>\n' >&2
+  exit 2
+fi
+results=$1
+if [[ ! -d $results ]]; then
+  printf 'report-skips: no results folder %s\n' "$results" >&2
+  exit 0
+fi
+
+lines=()
+while IFS= read -r -d '' f; do
+  while IFS= read -r line; do
+    lines+=("$line")
+  done < <(awk '$2 == "SKIP" { stage = $1; $1 = ""; $2 = ""; sub(/^ +/, ""); print stage ": skipped " $0 }' "$f")
+done < <(find "$results" -name summary.txt -type f -print0 | LC_ALL=C sort -z)
+while IFS= read -r line; do
+  lines+=("$line")
+done < <(find "$results" -name '*.log' -type f -exec grep -h -o 'SKIP: .*' {} + 2>/dev/null | LC_ALL=C sort -u | head -n 40)
+
+if ((${#lines[@]} == 0)); then
+  printf 'report-skips: nothing was skipped\n'
+  exit 0
+fi
+for line in "${lines[@]}"; do
+  # Annotation text: percent signs, carriage returns and newlines escaped.
+  msg=${line//'%'/'%25'}
+  msg=${msg//$'\r'/'%0D'}
+  printf '::warning title=skipped test::%s\n' "$msg"
+done
+if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+  {
+    printf '### Skipped checks\n\n'
+    printf -- '- %s\n' "${lines[@]}"
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
+printf 'report-skips: %d skipped checks reported\n' "${#lines[@]}"

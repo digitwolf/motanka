@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Run a command in the CI harness container (ci/harness/Dockerfile) on a
+# GitHub-hosted runner (task 24.1). CI only: it refuses to run unless
+# GITHUB_ACTIONS is "true".
+#
+# Usage: ci/in-harness [--kvm] [--] <command> [args...]
+#
+#   --kvm   pass /dev/kvm into the container with the device's group, so
+#           the harness can start QEMU/KVM VMs without any change to the
+#           runner's /dev/kvm; fails at once when /dev/kvm is missing
+#
+# The container runs as the runner's uid and gid with HOME=/home/ci. The
+# repository is mounted at /work (the working folder), MOTANKA_CI_STATE
+# (default ~/.cache/motanka-vm, set by ci/runner-setup) at
+# /home/ci/.cache/motanka-vm, the harness state, and ~/.cache/motanka-ci at
+# /home/ci/.cache/motanka-ci, the .deb cache of ci/debcache. Every
+# environment variable whose name starts with MOTANKA_ (except
+# MOTANKA_CI_*) and GITHUB_ACTIONS are passed in. The image is built on
+# first use in the job. Exits with the command's exit code.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+image=motanka-harness:ci
+
+fail() {
+  printf '::error title=ci/in-harness::%s\n' "$*"
+  printf 'in-harness: error: %s\n' "$*" >&2
+  exit 1
+}
+
+if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+  printf 'in-harness: CI only (GITHUB_ACTIONS is not "true"); on a development machine run the command directly\n' >&2
+  exit 2
+fi
+
+kvm=false
+while (($# > 0)); do
+  case $1 in
+    --kvm)
+      kvm=true
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *) break ;;
+  esac
+done
+if (($# == 0)); then
+  printf 'usage: ci/in-harness [--kvm] [--] <command> [args...]\n' >&2
+  exit 2
+fi
+command -v docker >/dev/null 2>&1 || fail "docker is not available on this runner"
+
+state=${MOTANKA_CI_STATE:-$HOME/.cache/motanka-vm}
+cache=$HOME/.cache/motanka-ci
+mkdir -p "$state" "$cache"
+state=$(cd "$state" && pwd -P)
+cache=$(cd "$cache" && pwd -P)
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  printf 'in-harness: building %s from ci/harness/Dockerfile\n' "$image" >&2
+  docker build --pull --quiet \
+    --build-arg CI_UID="$(id -u)" --build-arg CI_GID="$(id -g)" \
+    --tag "$image" "$repo/ci/harness" >&2
+fi
+
+args=(run --rm --init
+  --volume "$repo:/work"
+  --volume "$state:/home/ci/.cache/motanka-vm"
+  --volume "$cache:/home/ci/.cache/motanka-ci"
+  --workdir /work
+  --env HOME=/home/ci
+  --env GITHUB_ACTIONS)
+while IFS= read -r v; do
+  if [[ $v == MOTANKA_* && $v != MOTANKA_CI_* ]]; then
+    args+=(--env "$v")
+  fi
+done < <(compgen -e)
+if $kvm; then
+  if [[ ! -e /dev/kvm ]]; then
+    fail "/dev/kvm does not exist on this runner; the VM harness needs KVM (a GitHub-hosted Linux runner with nested virtualisation)"
+  fi
+  if [[ ! -c /dev/kvm ]]; then
+    fail "/dev/kvm is not a character device on this runner"
+  fi
+  args+=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)")
+fi
+exec docker "${args[@]}" "$image" "$@"

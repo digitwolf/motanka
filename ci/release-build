@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Build the published variants of the packages whose development and
+# published builds differ, for noble and resolute, in one throwaway build
+# VM (task 24.1). CI only: the publish job of .github/workflows/ci.yml runs
+# it in the harness container (ci/in-harness --kvm).
+#
+# Usage: ci/release-build --out <folder>
+#
+# The packages: motanka-archive-keyring, motanka-source, motanka and
+# motanka-core. Published builds differ from the development builds the
+# VM tests install in two ways:
+#   - motanka-core is built with the build profile pkg.motanka.release, so
+#     it has no /opt/motanka/share/motanka/DEV_BUILD marker (14.8: the
+#     marker makes the CLI refuse to run outside a VM);
+#   - the keyring and the CLI carry packaging/keys/motanka-archive.asc as
+#     committed, which must be the public half of the release key, not the
+#     TEST key the VM tests generate.
+# The profile reaches sbuild through DEB_BUILD_PROFILES (sbuild's default
+# for --profiles, and passed into the build by its environment filter):
+# the build VM gets "DEB_BUILD_PROFILES=pkg.motanka.release" in its
+# /etc/environment, which pam_env applies to every SSH session, so
+# test/vm/build and packaging/build.sh run unchanged. The Stack, Qt and
+# shell packages are the same in both kinds of build and come from the
+# .deb cache (ci/debcache).
+#
+# Checks: the committed archive key is not the TEST key; every SSH session
+# of the VM has the profile; each motanka-core .deb has no DEV_BUILD.
+# Results: the .debs (without -dbgsym packages) are copied into <folder>.
+# Exit codes: 0 built, 1 failure, 2 usage error.
+set -euo pipefail
+# shellcheck source=../test/vm/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../test/vm/lib.sh"
+MV_USAGE="ci/release-build --out <folder>"
+mv_init
+
+PROFILE=pkg.motanka.release
+PKGS=(packaging/motanka-archive-keyring packaging/motanka-source packaging/motanka packaging/motanka-core)
+KEY=$MV_REPO/packaging/keys/motanka-archive.asc
+
+if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+  mv_die "CI only: published builds are made by the publish job of .github/workflows/ci.yml"
+fi
+out=""
+while (($# > 0)); do
+  case $1 in
+    --out)
+      if (($# < 2)); then
+        mv_usage "--out needs a value"
+      fi
+      out=$2
+      shift 2
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$MV_USAGE"
+      exit 0
+      ;;
+    *) mv_usage "unknown argument '$1'" ;;
+  esac
+done
+if [[ -z $out ]]; then
+  mv_usage "--out is required"
+fi
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+
+if [[ ! -s $KEY ]]; then
+  mv_die "$KEY is missing"
+fi
+if grep -qi 'TEST KEY' "$KEY"; then
+  mv_die "packaging/keys/motanka-archive.asc is the TEST key of chumak/gen-test-key; commit the public half of the release key (with its signing subkey) before publishing"
+fi
+mv_check_kvm
+mv_need qemu-system-x86_64 qemu-img ssh ssh-keygen rsync python3 setsid timeout tar git dpkg-deb
+
+export MOTANKA_VM_UPGRADE=0
+mv_up_build_vm
+vm=$MV_BOOTED
+run() { "$MV_LIB_DIR/run" "$vm" -- "$@" </dev/null; }
+
+mv_log "setting DEB_BUILD_PROFILES=$PROFILE for every SSH session of $vm"
+run "grep -qx 'DEB_BUILD_PROFILES=$PROFILE' /etc/environment || echo 'DEB_BUILD_PROFILES=$PROFILE' | sudo tee -a /etc/environment >/dev/null"
+# shellcheck disable=SC2016 # expanded by the shell in the VM
+got=$(run 'printf "%s" "${DEB_BUILD_PROFILES:-}"')
+if [[ $got != "$PROFILE" ]]; then
+  mv_die "a new SSH session of $vm has DEB_BUILD_PROFILES='$got', not '$PROFILE' (pam_env did not apply /etc/environment)"
+fi
+
+list=$(mktemp "$MV_STATE/.release-build.XXXXXX")
+MV_CLEANUP_PATHS+=("$list")
+abs=()
+for p in "${PKGS[@]}"; do
+  abs+=("$MV_REPO/$p")
+done
+mv_log "building ${PKGS[*]##*/} for noble and resolute in $vm"
+"$MV_LIB_DIR/build" --vm "$vm" --suite all "${abs[@]}" >"$list"
+mv_destroy "$vm"
+
+n=0
+cores=0
+while IFS= read -r f; do
+  [[ $f == *.deb ]] || continue
+  case ${f##*/} in
+    *-dbgsym_*) continue ;;
+  esac
+  [[ -f $f ]] || mv_die "test/vm/build printed $f, which does not exist"
+  if [[ ${f##*/} == motanka-core_* ]]; then
+    if dpkg-deb --contents "$f" | grep -q ' \./opt/motanka/share/motanka/DEV_BUILD$'; then
+      mv_die "${f##*/} has the DEV_BUILD marker: the build profile $PROFILE did not reach the build"
+    fi
+    cores=$((cores + 1))
+  fi
+  cp -f -- "$f" "$out/"
+  n=$((n + 1))
+done <"$list"
+if ((cores != 2)); then
+  mv_die "expected a motanka-core .deb for noble and for resolute, got $cores"
+fi
+mv_log "copied $n published .debs into $out (motanka-core without DEV_BUILD)"

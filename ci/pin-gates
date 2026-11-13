@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# Upstream_Pin gates (task 24.2; requirements 7.9, 7.10, 9.6): for each
+# Channel of upstream.pin, check the Upstream tree at its pin against the
+# Compat_Layer and write a Markdown report. .github/workflows/ci.yml runs
+# it on every change (against the base branch's upstream.pin), and
+# ci/pin-bump runs it for every bump proposal.
+#
+# Usage: ci/pin-gates [--base-pin FILE] [--report FILE] [--work DIR]
+#                     [--aptnames DIR] [--write-inventory]
+#                     [--regenerate-migrations]
+#
+#   --base-pin   upstream.pin of the branch the change goes into (default:
+#                upstream.pin itself, so no file counts as changed)
+#   --report     the Markdown report (default <work>/report.md)
+#   --work       work folder (default .cache/ci/pin-gates in the repository)
+#   --aptnames   folder with noble.txt and resolute.txt; default: made by
+#                tools/aptnames in <work>/aptnames from the Ubuntu archive
+#   --write-inventory
+#                write the Call_Inventory of each pin into compat/inventory/
+#                (a bump) instead of requiring the committed one to be
+#                current
+#   --regenerate-migrations
+#                when compat/migrations.tsv differs from the classification
+#                of the stable tree, write it (a stable bump); the report
+#                shows the diff against the file as it was
+#
+# Gates per Channel; the edge gates are left out while the edge pin equals
+# the stable pin. The trees come from tools/fetch-upstream and tools/vendor,
+# which check the tarball against the pin's SHA-256.
+#   inventory   compat/inventory/<commit>.tsv and .summary.md are what
+#               tools/inventory makes of the tree                [blocking]
+#   pkgmap      tools/pkgmap validate: every package of Upstream's lists
+#               has an outcome for both releases (7.9)           [blocking]
+#   overrides   tools/checkoverrides --old <base tree> --new <tree>: every
+#               changed file that has an override or Arch findings is
+#               reviewed in compat/reviewed/<commit> (7.10)      [blocking]
+#   migrations  tools/classify-migrations --check compat/migrations.tsv
+#               (9.6): blocking for stable, whose tree motanka-core vendors
+#               and checks the same way; for edge the diff lists the
+#               migrations to classify when edge becomes stable  [info]
+# Exit codes: 0 every blocking gate passed, 1 a blocking gate failed,
+# 2 usage or input error (download, unpack).
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+usage="ci/pin-gates [--base-pin FILE] [--report FILE] [--work DIR] [--aptnames DIR] [--write-inventory] [--regenerate-migrations]"
+SHOW_LINES=150
+
+log() {
+  printf 'pin-gates: %s\n' "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  exit 2
+}
+
+die_usage() {
+  log "$1"
+  printf 'usage: %s\n' "$usage" >&2
+  exit 2
+}
+
+base_pin=$repo/upstream.pin
+report=""
+work=$repo/.cache/ci/pin-gates
+aptnames=""
+write_inventory=false
+regenerate=false
+while (($# > 0)); do
+  case $1 in
+    --base-pin | --report | --work | --aptnames)
+      if (($# < 2)); then
+        die_usage "$1 needs a value"
+      fi
+      case $1 in
+        --base-pin) base_pin=$2 ;;
+        --report) report=$2 ;;
+        --work) work=$2 ;;
+        --aptnames) aptnames=$2 ;;
+      esac
+      shift 2
+      ;;
+    --write-inventory)
+      write_inventory=true
+      shift
+      ;;
+    --regenerate-migrations)
+      regenerate=true
+      shift
+      ;;
+    -h | --help)
+      printf 'usage: %s\n' "$usage"
+      exit 0
+      ;;
+    *) die_usage "unknown argument '$1'" ;;
+  esac
+done
+[[ -r $base_pin ]] || die_usage "cannot read the base pin file $base_pin"
+mkdir -p "$work"
+work=$(cd "$work" && pwd)
+base_pin=$(cd "$(dirname "$base_pin")" && pwd)/$(basename "$base_pin")
+if [[ $base_pin != "$work/base.pin" ]]; then
+  cp -f -- "$base_pin" "$work/base.pin"
+fi
+base_pin=$work/base.pin
+report=${report:-$work/report.md}
+pin=$repo/upstream.pin
+
+# pin_field <file> <channel> <field number>
+pin_field() {
+  awk -F'\t' -v c="$2" -v n="$3" '$1 == c { print $n; exit }' "$1"
+}
+
+# tree_of <pin file> <channel>: prints the folder of the Upstream tree at
+# the channel's commit, downloading, verifying and unpacking it once.
+tree_of() {
+  local file=$1 channel=$2 commit dest tgz
+  commit=$(pin_field "$file" "$channel" 2)
+  [[ $commit =~ ^[0-9a-f]{40}$ ]] || die "$file has no valid $channel commit"
+  dest=$work/trees/$commit
+  if [[ -d $dest/bin ]]; then
+    printf '%s\n' "$dest"
+    return 0
+  fi
+  if ! python3 "$repo/tools/fetch-upstream" --pin "$file" --channel "$channel" --out "$work/upstream" \
+    >"$work/fetch.out" 2>"$work/fetch.log"; then
+    cat "$work/fetch.log" >&2
+    die "tools/fetch-upstream failed for $channel $commit"
+  fi
+  tgz=$work/upstream/downloads/omarchy-$commit.tar.gz
+  mkdir -p "$work/trees"
+  rm -rf -- "$dest"
+  if ! bash "$repo/tools/vendor" --pin "$file" --tarball "$tgz" "$channel" "$dest" 2>"$work/vendor.log"; then
+    cat "$work/vendor.log" >&2
+    die "tools/vendor refused $tgz for $channel $commit"
+  fi
+  printf '%s\n' "$dest"
+}
+
+ROWS=()
+DETAILS=()
+blocking_failed=0
+
+# show <title> <file>...: a collapsed block with the first lines of the
+# files.
+show() {
+  local title=$1 n
+  shift
+  n=$(cat -- "$@" 2>/dev/null | wc -l)
+  {
+    printf '<details><summary>%s</summary>\n\n```\n' "$title"
+    cat -- "$@" 2>/dev/null | head -n "$SHOW_LINES" | sed 's/```/'"'''"'/g'
+    if ((n > SHOW_LINES)); then
+      printf '... %d more lines in the job log\n' $((n - SHOW_LINES))
+    fi
+    printf '```\n\n</details>\n'
+  } >"$work/detail.$$"
+  DETAILS+=("$(<"$work/detail.$$")")
+  rm -f -- "$work/detail.$$"
+}
+
+# gate <channel> <gate> <result> <blocking 0|1> <note>
+gate() {
+  ROWS+=("| $1 | $2 | $3 | $5 |")
+  if [[ $4 == 1 && $3 == FAIL ]]; then
+    blocking_failed=1
+  fi
+  log "$1 $2: $3${5:+ ($5)}"
+  if [[ $3 == FAIL ]]; then
+    printf '::error title=pin gate %s %s::%s\n' "$1" "$2" "${5:-failed; see the report}"
+  fi
+}
+
+if [[ -z $aptnames ]]; then
+  aptnames=$work/aptnames
+  log "fetching the apt name lists of noble and resolute"
+  python3 "$repo/tools/aptnames" --out "$aptnames" || die "tools/aptnames failed"
+fi
+[[ -s $aptnames/noble.txt && -s $aptnames/resolute.txt ]] || die "$aptnames has no noble.txt and resolute.txt"
+
+stable_commit=$(pin_field "$pin" stable 2)
+edge_commit=$(pin_field "$pin" edge 2)
+channels=(stable)
+if [[ $edge_commit != "$stable_commit" ]]; then
+  channels+=(edge)
+fi
+
+for channel in "${channels[@]}"; do
+  commit=$(pin_field "$pin" "$channel" 2)
+  old_commit=$(pin_field "$base_pin" "$channel" 2)
+  [[ $old_commit =~ ^[0-9a-f]{40}$ ]] || old_commit=$commit
+  tree=$(tree_of "$pin" "$channel")
+  if [[ $old_commit == "$commit" ]]; then
+    old_tree=$tree
+  else
+    old_tree=$(tree_of "$base_pin" "$channel")
+  fi
+  o=$work/$channel
+  rm -rf -- "$o"
+  mkdir -p "$o"
+
+  # inventory
+  inv=$repo/compat/inventory/$commit.tsv
+  if ! python3 "$repo/tools/inventory" --out-dir "$o" "$tree" "$commit" >"$o/inventory.log" 2>&1; then
+    gate "$channel" inventory FAIL 1 "tools/inventory failed"
+    show "$channel: tools/inventory" "$o/inventory.log"
+    inv=""
+  elif $write_inventory; then
+    cp -f -- "$o/$commit.tsv" "$o/$commit.summary.md" "$repo/compat/inventory/"
+    gate "$channel" inventory written 1 "compat/inventory/$commit.tsv regenerated"
+  elif [[ ! -f $inv || ! -f $repo/compat/inventory/$commit.summary.md ]]; then
+    gate "$channel" inventory FAIL 1 "compat/inventory/$commit.tsv or .summary.md is missing; run tools/inventory <tree> $commit"
+    inv=$o/$commit.tsv
+  elif cmp -s "$o/$commit.tsv" "$inv" && cmp -s "$o/$commit.summary.md" "$repo/compat/inventory/$commit.summary.md"; then
+    gate "$channel" inventory PASS 1 "compat/inventory/$commit.tsv is current"
+  else
+    diff -u "$inv" "$o/$commit.tsv" >"$o/inventory.diff" || true
+    gate "$channel" inventory FAIL 1 "compat/inventory/$commit.tsv is not what tools/inventory makes of the tree"
+    show "$channel: Call_Inventory diff" "$o/inventory.diff"
+    inv=$o/$commit.tsv
+  fi
+
+  # pkgmap
+  if python3 "$repo/tools/pkgmap" validate --upstream "$tree" --aptnames "$aptnames" >"$o/pkgmap.log" 2>&1; then
+    gate "$channel" pkgmap PASS 1 "every Upstream package has an outcome"
+  else
+    gate "$channel" pkgmap FAIL 1 "packages.yaml lacks or breaks entries (7.9)"
+  fi
+  show "$channel: tools/pkgmap validate" "$o/pkgmap.log"
+
+  # overrides
+  if [[ -z $inv ]]; then
+    gate "$channel" overrides FAIL 1 "no Call_Inventory"
+  elif python3 "$repo/tools/checkoverrides" --old "$old_tree" --new "$tree" --pin "$commit" \
+    --inventory "$inv" >"$o/overrides.log" 2>&1; then
+    gate "$channel" overrides PASS 1 "${old_commit:0:12} to ${commit:0:12}"
+  else
+    gate "$channel" overrides FAIL 1 "review the files listed and record them in compat/reviewed/$commit (7.10)"
+  fi
+  show "$channel: tools/checkoverrides" "$o/overrides.log"
+
+  # migrations
+  if [[ -z $inv ]]; then
+    gate "$channel" migrations FAIL 1 "no Call_Inventory"
+    continue
+  fi
+  rc=0
+  python3 "$repo/tools/classify-migrations" --upstream "$tree" --inventory "$inv" \
+    --check "$repo/compat/migrations.tsv" >"$o/migrations.diff" 2>"$o/migrations.log" || rc=$?
+  case $rc in
+    0)
+      gate "$channel" migrations PASS 1 "$(tail -n 1 "$o/migrations.log")"
+      ;;
+    1)
+      if [[ $channel == stable ]] && $regenerate; then
+        if python3 "$repo/tools/classify-migrations" --upstream "$tree" --inventory "$inv" \
+          -o "$repo/compat/migrations.tsv" >>"$o/migrations.log" 2>&1; then
+          gate "$channel" migrations regenerated 1 "compat/migrations.tsv rewritten; review the diff (9.6)"
+        else
+          gate "$channel" migrations FAIL 1 "tools/classify-migrations -o failed"
+        fi
+      elif [[ $channel == stable ]]; then
+        gate "$channel" migrations FAIL 1 "compat/migrations.tsv differs from the classification of the stable tree"
+      else
+        gate "$channel" migrations info 0 "classes of the migrations edge adds or changes; compat/migrations.tsv follows stable"
+      fi
+      show "$channel: classification diff against the committed compat/migrations.tsv" "$o/migrations.diff" "$o/migrations.log"
+      ;;
+    *)
+      gate "$channel" migrations FAIL 1 "tools/classify-migrations failed (exit $rc)"
+      show "$channel: tools/classify-migrations" "$o/migrations.log"
+      ;;
+  esac
+done
+
+{
+  printf '## Upstream_Pin gates\n\n'
+  bt='`'
+  for channel in stable edge; do
+    printf -- '- %s: %s%s%s (base %s%s%s)\n' "$channel" \
+      "$bt" "$(pin_field "$pin" "$channel" 2)" "$bt" "$bt" "$(pin_field "$base_pin" "$channel" 2)" "$bt"
+  done
+  if [[ $edge_commit == "$stable_commit" ]]; then
+    printf -- '- The edge pin equals the stable pin; the stable gates cover it.\n'
+  fi
+  printf '\n| Channel | Gate | Result | Note |\n|---|---|---|---|\n'
+  printf '%s\n' "${ROWS[@]}"
+  printf '\n'
+  if ((blocking_failed)); then
+    printf '**A blocking gate failed.** The bump cannot be merged until it passes.\n\n'
+  else
+    printf 'Every blocking gate passed.\n\n'
+  fi
+  printf '%s\n\n' "${DETAILS[@]}"
+} >"$report"
+log "report: $report"
+exit "$blocking_failed"

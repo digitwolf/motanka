@@ -1,0 +1,46 @@
+# Restore the cached .debs of the slow packages for one suite (task 24.1):
+# motanka-qt6 and motanka-stack, and motanka-stack-shell unless "shell" is
+# 'false'. The keys come from ci/debcache key, the same way the build jobs
+# of .github/workflows/ci.yml save them; a missing cache fails the step.
+# The files land in ~/.cache/motanka-ci/debs/<package>-<suite>/; run
+# "ci/in-harness -- bash ci/debcache restore <suite> <package>..." next to
+# put them where the VM harness looks for them.
+name: Restore cached Motanka .debs
+description: Restore the cached motanka-qt6, motanka-stack and motanka-stack-shell .debs of one suite.
+inputs:
+  suite:
+    description: noble or resolute
+    required: true
+  shell:
+    description: "'false' to leave out motanka-stack-shell"
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - id: keys
+      shell: bash
+      env:
+        SUITE: ${{ inputs.suite }}
+      run: |
+        {
+          printf 'qt6=%s\n' "$(bash ci/debcache key packaging/motanka-qt6 "$SUITE")"
+          printf 'stack=%s\n' "$(bash ci/debcache key packaging/motanka-stack "$SUITE")"
+          printf 'shell=%s\n' "$(bash ci/debcache key packaging/motanka-stack-shell "$SUITE")"
+        } >>"$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/motanka-ci/debs/motanka-qt6-${{ inputs.suite }}
+        key: ${{ steps.keys.outputs.qt6 }}
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/motanka-ci/debs/motanka-stack-${{ inputs.suite }}
+        key: ${{ steps.keys.outputs.stack }}
+        fail-on-cache-miss: true
+    - if: inputs.shell != 'false'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/motanka-ci/debs/motanka-stack-shell-${{ inputs.suite }}
+        key: ${{ steps.keys.outputs.shell }}
+        fail-on-cache-miss: true

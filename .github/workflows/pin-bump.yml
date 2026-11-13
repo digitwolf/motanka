@@ -1,0 +1,153 @@
+# Upstream_Pin bump proposals (task 24.2; requirements 7.9, 7.10, 9.4-9.6).
+#
+# Daily, and on demand, for each Channel:
+#   edge    the head of Upstream's default branch quattro (9.5)
+#   stable  Upstream's newest release tag vX.Y.Z (9.4)
+# ci/pin-bump (in the harness container) moves the Channel's line of
+# upstream.pin to the newest commit, regenerates the Call_Inventory
+# (tools/inventory), runs the gates of ci/pin-gates (tools/pkgmap validate,
+# tools/checkoverrides, tools/classify-migrations against the committed
+# compat/migrations.tsv; a stable bump also regenerates that file) and
+# writes the pull request text with the gate results. This workflow then
+#   - pushes the branch pin-bump/<channel> and opens or updates its pull
+#     request into the default branch; a branch that already proposes the
+#     same commit is left alone, so review files added to it survive;
+#   - sets the commit status motanka/pin-gates (success or failure), which
+#     branch protection can require;
+#   - starts .github/workflows/ci.yml on the branch (workflow_dispatch),
+#     because pushes and pull requests made with GITHUB_TOKEN start no
+#     workflow runs themselves. That run tests the bump on both releases
+#     (13.1) and repeats the gates.
+# A bump that fails a gate is still proposed, so the report shows what to
+# fix; it cannot pass CI until it is fixed.
+#
+# Owner setup: Settings, Actions, General, Workflow permissions: allow
+# GitHub Actions to create pull requests.
+#
+# Actions: actions/checkout is pinned by commit.
+
+name: pin-bump
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel to check
+        type: choice
+        options: [both, edge, stable]
+        default: both
+
+permissions: {}
+
+concurrency:
+  group: pin-bump
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    name: propose (${{ matrix.channel }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [edge, stable]
+    steps:
+      - name: Selected channel
+        id: select
+        env:
+          WANT: ${{ inputs.channel || 'both' }}
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          if [[ $WANT == both || $WANT == "$CHANNEL" ]]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run=false" >>"$GITHUB_OUTPUT"
+          fi
+      - if: steps.select.outputs.run == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare the runner
+        if: steps.select.outputs.run == 'true'
+        run: bash ci/runner-setup
+      - name: Proposal and gates
+        id: bump
+        if: steps.select.outputs.run == 'true'
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          w=".cache/ci/pin-bump-$CHANNEL"
+          bash ci/in-harness -- bash ci/pin-bump "$CHANNEL" --work "$w"
+          result=$(cat "$w/result")
+          echo "result=$result" >>"$GITHUB_OUTPUT"
+          if [[ $result == bump ]]; then
+            echo "gates=$(cat "$w/gates")" >>"$GITHUB_OUTPUT"
+            echo "commit=$(cat "$w/commit")" >>"$GITHUB_OUTPUT"
+            cat "$w/body.md" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "The $CHANNEL pin is at Upstream's newest commit; nothing to propose." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Branch, pull request, status and CI run
+        if: steps.select.outputs.run == 'true' && steps.bump.outputs.result == 'bump'
+        env:
+          CHANNEL: ${{ matrix.channel }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+          GATES: ${{ steps.bump.outputs.gates }}
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          w=".cache/ci/pin-bump-$CHANNEL"
+          branch="pin-bump/$CHANNEL"
+          if git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null; then
+            proposed=$(git show "origin/$branch:upstream.pin" | awk -F'\t' -v c="$CHANNEL" '$1 == c { print $2; exit }')
+            if [[ $proposed == "$COMMIT" ]]; then
+              echo "$branch already proposes $COMMIT; the branch is left as it is"
+              exit 0
+            fi
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -C "$branch"
+          git add -- upstream.pin compat/inventory compat/migrations.tsv
+          git commit --quiet -m "$(cat "$w/title")" -m "Generated by .github/workflows/pin-bump.yml (ci/pin-bump $CHANNEL)."
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --force origin "HEAD:refs/heads/$branch"
+          sha=$(git rev-parse HEAD)
+          number=$(gh pr list --head "$branch" --base "$DEFAULT_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [[ -n $number ]]; then
+            gh pr edit "$number" --title "$(cat "$w/title")" --body-file "$w/body.md"
+          else
+            gh pr create --head "$branch" --base "$DEFAULT_BRANCH" --title "$(cat "$w/title")" --body-file "$w/body.md"
+          fi
+          if [[ $GATES == pass ]]; then
+            state=success
+            description="Upstream_Pin gates passed"
+          else
+            state=failure
+            description="An Upstream_Pin gate failed; see the pull request"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+            -f state="$state" -f context=motanka/pin-gates \
+            -f description="$description" -f target_url="$RUN_URL" >/dev/null
+          gh workflow run ci.yml --ref "$branch"
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pin-bump-${{ matrix.channel }}
+          path: .cache/ci/pin-bump-${{ matrix.channel }}/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14

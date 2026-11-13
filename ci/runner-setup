@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Prepare a GitHub-hosted runner for the VM harness (task 24.1). CI only.
+#
+# Usage: ci/runner-setup [--kvm]
+#
+#   --kvm   fail at once, with an error annotation, when /dev/kvm is missing
+#           or is not a character device, instead of letting a later step
+#           time out
+#
+# Picks the folder for the harness state (~/.cache/motanka-vm inside the
+# harness container: base images, overlays, build results): the runner's
+# temporary disk /mnt when it has more free space than the home folder's
+# file system, else ~/.cache/motanka-vm. A Stack build VM needs tens of GB.
+# On /mnt the folder is created with "sudo -n mkdir" and "sudo -n chown"
+# when /mnt is not writable; that is the only privileged call, it changes
+# only the ephemeral runner, and nothing is installed there. The folder is
+# written to $GITHUB_ENV as MOTANKA_CI_STATE for ci/in-harness and for the
+# workflow's artifact steps.
+set -euo pipefail
+
+fail() {
+  printf '::error title=ci/runner-setup::%s\n' "$*"
+  printf 'runner-setup: error: %s\n' "$*" >&2
+  exit 1
+}
+
+if [[ ${GITHUB_ACTIONS:-} != true || -z ${GITHUB_ENV:-} ]]; then
+  printf 'runner-setup: CI only (GITHUB_ACTIONS and GITHUB_ENV are not set)\n' >&2
+  exit 2
+fi
+
+kvm=false
+case ${1:-} in
+  --kvm) kvm=true ;;
+  "") ;;
+  *)
+    printf 'usage: ci/runner-setup [--kvm]\n' >&2
+    exit 2
+    ;;
+esac
+
+if $kvm; then
+  if [[ ! -e /dev/kvm ]]; then
+    fail "/dev/kvm does not exist on this runner; the VM tests and package builds need KVM. Use a GitHub-hosted Linux runner with nested virtualisation (ubuntu-24.04) or a self-hosted runner with KVM."
+  fi
+  if [[ ! -c /dev/kvm ]]; then
+    fail "/dev/kvm is not a character device on this runner"
+  fi
+  printf 'runner-setup: /dev/kvm: %s\n' "$(stat -c '%A %U:%G' /dev/kvm)"
+fi
+
+# avail_kib <path>: free space of the file system holding <path>.
+avail_kib() {
+  df --output=avail -k "$1" 2>/dev/null | tail -n 1 | tr -d ' '
+}
+
+mkdir -p "$HOME/.cache"
+state=$HOME/.cache/motanka-vm
+home_free=$(avail_kib "$HOME/.cache")
+mnt_free=0
+if [[ -d /mnt ]]; then
+  mnt_free=$(avail_kib /mnt)
+fi
+if [[ $mnt_free =~ ^[0-9]+$ && $home_free =~ ^[0-9]+$ ]] && ((mnt_free > home_free)); then
+  state=/mnt/motanka-vm
+  if [[ ! -d $state ]]; then
+    if [[ -w /mnt ]]; then
+      mkdir "$state"
+    else
+      sudo -n mkdir "$state"
+      sudo -n chown "$(id -u):$(id -g)" "$state"
+    fi
+  fi
+fi
+mkdir -p "$state" "$HOME/.cache/motanka-ci"
+printf 'MOTANKA_CI_STATE=%s\n' "$state" >>"$GITHUB_ENV"
+printf 'runner-setup: harness state in %s (%s GiB free); home folder file system %s GiB free\n' \
+  "$state" "$(($(avail_kib "$state") / 1048576))" "$((home_free / 1048576))"

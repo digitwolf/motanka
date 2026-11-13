@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Write the apt package name lists that tools/pkgmap validate reads.
+
+usage: tools/aptnames --out DIR [--mirror URL] [--keyring FILE]
+
+For each Supported_Release (noble, resolute) it downloads InRelease of the
+release, -updates and -security pockets from the mirror (default
+http://archive.ubuntu.com/ubuntu), checks its signature with gpgv against
+the keyring (default /usr/share/keyrings/ubuntu-archive-keyring.gpg), and
+reads only the signed text of a file that is exactly one clearsigned
+message. For the components main and universe it then downloads
+<component>/binary-amd64/Packages.xz (Packages.gz when the release file
+lists no .xz), checks its size and SHA-256 against the signed text, and
+writes DIR/<release>.txt: every package name of the release's pockets and
+components, sorted, one per line, through a temporary file and a rename.
+A list is written only when all its downloads passed.
+
+The mirror may be http://, https:// or file:// (tests). gpgv runs with a
+temporary home folder inside DIR, which is deleted afterwards; nothing is
+written outside DIR. It downloads and verifies only, so it may run on the
+development host; the CI runs it in the harness container (ci/pin-gates).
+
+Exit codes: 0 written, 1 download, signature or checksum failure, 2 usage
+error. Python 3 standard library only, plus gpgv.
+"""
+
+import argparse
+import gzip
+import hashlib
+import lzma
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+RELEASES = ("noble", "resolute")
+POCKETS = ("", "-updates", "-security")
+COMPONENTS = ("main", "universe")
+DEFAULT_MIRROR = "http://archive.ubuntu.com/ubuntu"
+DEFAULT_KEYRING = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+ATTEMPTS = 4
+TIMEOUT = 60
+USER_AGENT = "motanka-aptnames/1 (+https://github.com/digitwolf/motanka)"
+
+
+class Failure(Exception):
+    pass
+
+
+def log(msg):
+    print(f"aptnames: {msg}", file=sys.stderr)
+
+
+def fetch(url):
+    last = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return resp.read()
+        except (urllib.error.URLError, OSError) as e:
+            last = e
+            if url.startswith("file:") or attempt == ATTEMPTS:
+                break
+            time.sleep(3 * attempt)
+    raise Failure(f"cannot download {url}: {last}")
+
+
+def clearsigned_body(data, where):
+    """The signed text of a file that is exactly one clearsigned message."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Failure(f"{where}: not UTF-8 text")
+    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in text.split("\n")]
+    if not lines or lines[0] != "-----BEGIN PGP SIGNED MESSAGE-----":
+        raise Failure(f"{where}: does not start with a clearsigned message")
+    i = 1
+    while i < len(lines) and lines[i] != "":
+        if not lines[i].startswith("Hash: "):
+            raise Failure(f"{where}: unexpected armour header '{lines[i]}'")
+        i += 1
+    i += 1
+    body = []
+    while i < len(lines) and lines[i] != "-----BEGIN PGP SIGNATURE-----":
+        line = lines[i]
+        if line.startswith("- "):
+            line = line[2:]
+        elif line.startswith("-"):
+            raise Failure(f"{where}: a signed line starts with '-' without dash escaping")
+        body.append(line)
+        i += 1
+    if i >= len(lines):
+        raise Failure(f"{where}: no signature")
+    while i < len(lines) and lines[i] != "-----END PGP SIGNATURE-----":
+        i += 1
+    if i >= len(lines):
+        raise Failure(f"{where}: the signature does not end")
+    if any(ln.strip() for ln in lines[i + 1:]):
+        raise Failure(f"{where}: data after the signature")
+    return "\n".join(body)
+
+
+def verify(data, keyring, work, where):
+    path = os.path.join(work, "InRelease")
+    home = os.path.join(work, "gnupg")
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+    try:
+        res = subprocess.run(["gpgv", "--homedir", home, "--keyring", keyring, path],
+                             capture_output=True, check=False)
+    except FileNotFoundError:
+        raise Failure("gpgv is missing")
+    if res.returncode != 0:
+        msg = res.stderr.decode("utf-8", "replace").strip()
+        raise Failure(f"{where}: the signature does not verify against {keyring}: {msg}")
+    return clearsigned_body(data, where)
+
+
+def sha256_entries(body):
+    """{path: (sha256, size)} from the SHA256 section of a release file."""
+    entries, in_sha = {}, False
+    for line in body.split("\n"):
+        if line.startswith(" "):
+            if in_sha:
+                parts = line.split()
+                if len(parts) == 3 and parts[1].isdigit():
+                    entries[parts[2]] = (parts[0].lower(), int(parts[1]))
+            continue
+        in_sha = line.rstrip() == "SHA256:"
+    return entries
+
+
+def package_names(data, compression):
+    if compression == "xz":
+        raw = lzma.decompress(data)
+    else:
+        raw = gzip.decompress(data)
+    names = set()
+    for line in raw.decode("utf-8", "replace").split("\n"):
+        if line.startswith("Package: "):
+            name = line[len("Package: "):].strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def release_names(mirror, release, keyring, work):
+    names = set()
+    for pocket in POCKETS:
+        suite = release + pocket
+        base = f"{mirror}/dists/{suite}"
+        body = verify(fetch(f"{base}/InRelease"), keyring, work, f"{suite}/InRelease")
+        entries = sha256_entries(body)
+        for comp in COMPONENTS:
+            for ext in ("xz", "gz"):
+                rel = f"{comp}/binary-amd64/Packages.{ext}"
+                if rel in entries:
+                    break
+            else:
+                raise Failure(f"{suite}/InRelease lists no {comp}/binary-amd64/Packages.xz or .gz")
+            want_sha, want_size = entries[rel]
+            data = fetch(f"{base}/{rel}")
+            if len(data) != want_size or hashlib.sha256(data).hexdigest() != want_sha:
+                raise Failure(f"{suite}/{rel}: size or SHA-256 differs from the signed {suite}/InRelease")
+            found = package_names(data, ext)
+            names |= found
+            log(f"{suite} {comp}: {len(found)} packages")
+    return names
+
+
+def write_atomic(path, lines):
+    fd, tmp = tempfile.mkstemp(prefix=".aptnames.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"aptnames: {message}", file=sys.stderr)
+        sys.exit(2)
+
+
+def main(argv):
+    p = Parser(prog="tools/aptnames",
+               description="Write <release>.txt package name lists for tools/pkgmap validate.")
+    p.add_argument("--out", required=True, help="output folder")
+    p.add_argument("--mirror", default=DEFAULT_MIRROR, help=f"Ubuntu archive mirror (default {DEFAULT_MIRROR})")
+    p.add_argument("--keyring", default=DEFAULT_KEYRING, help=f"keyring for gpgv (default {DEFAULT_KEYRING})")
+    args = p.parse_args(argv)
+    mirror = args.mirror.rstrip("/")
+    if not mirror.startswith(("http://", "https://", "file:///")):
+        p.error("--mirror must start with http://, https:// or file:///")
+    keyring = os.path.abspath(args.keyring)
+    if not os.path.isfile(keyring):
+        print(f"aptnames: no keyring at {keyring}", file=sys.stderr)
+        return 2
+    out = os.path.abspath(args.out)
+    try:
+        os.makedirs(out, exist_ok=True)
+    except OSError as e:
+        print(f"aptnames: cannot create {out}: {e}", file=sys.stderr)
+        return 2
+    work = tempfile.mkdtemp(prefix=".aptnames-work.", dir=out)
+    try:
+        for release in RELEASES:
+            names = release_names(mirror, release, keyring, work)
+            if not names:
+                raise Failure(f"{release}: no package names found")
+            write_atomic(os.path.join(out, release + ".txt"), sorted(names))
+            log(f"{release}: {len(names)} names in {os.path.join(out, release + '.txt')}")
+    except Failure as e:
+        print(f"aptnames: error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

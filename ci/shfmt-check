@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# shfmt on every shell file of the repository (tech.md: shfmt -i 2), the
+# same files test/run-all gives shellcheck: *.sh, *.bash, *.bats and files
+# with a sh, bash or bats shebang, outside .git, .cache and the vendored
+# test/bats. Prints the diff shfmt would apply and exits 1 when a file is
+# not formatted.
+#
+# Usage: ci/shfmt-check
+#
+# Flags: -i 2 (two-space indentation) and -ci (indented case branches, the
+# style of the repository). Runs in the CI harness container or in a test
+# VM, never on the development host (testing.md); it refuses to run where
+# neither a container nor a VM is detected.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+FLAGS=(-i 2 -ci)
+
+virt=""
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+  virt=$(systemd-detect-virt 2>/dev/null || true)
+fi
+if [[ ! -f /.dockerenv && -z ${container:-} && (-z $virt || $virt == none) ]]; then
+  printf 'shfmt-check: refusing to run outside a container or VM; the CI runs it through ci/in-harness, a developer in a test VM\n' >&2
+  exit 2
+fi
+command -v shfmt >/dev/null 2>&1 || {
+  printf 'shfmt-check: shfmt is missing\n' >&2
+  exit 2
+}
+
+files=()
+sh_re='^#!.*(/|[[:space:]])(ba|da)?sh([[:space:]]|$)'
+bats_re='^#!.*(/|[[:space:]])bats([[:space:]]|$)'
+while IFS= read -r -d '' f; do
+  f=${f#./}
+  case $f in
+    *.sh | *.bash | *.bats)
+      files+=("$f")
+      continue
+      ;;
+  esac
+  first=""
+  IFS= read -r first <"$repo/$f" 2>/dev/null || true
+  if [[ $first =~ $sh_re || $first =~ $bats_re ]]; then
+    files+=("$f")
+  fi
+done < <(cd "$repo" && find . \( -path ./.git -o -path ./test/bats -o -path ./.cache \) -prune -o -type f -print0 | LC_ALL=C sort -z)
+
+if ((${#files[@]} == 0)); then
+  printf 'shfmt-check: no shell files found\n' >&2
+  exit 1
+fi
+printf 'shfmt %s %s on %d files\n' "$(shfmt --version)" "${FLAGS[*]}" "${#files[@]}"
+cd "$repo"
+if ! shfmt "${FLAGS[@]}" -d -- "${files[@]}"; then
+  printf 'shfmt-check: the files above are not formatted; run shfmt %s -w <file> in a test VM\n' "${FLAGS[*]}" >&2
+  exit 1
+fi
+printf 'shfmt-check: all files are formatted\n'

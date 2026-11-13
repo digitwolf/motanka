@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# Prepare an Upstream_Pin bump proposal for one Channel (task 24.2;
+# requirements 9.4, 9.5): find Upstream's newest commit for the Channel,
+# move the Channel's line of upstream.pin to it, run ci/pin-gates (which
+# regenerates the Call_Inventory and, for stable, compat/migrations.tsv),
+# drop Call_Inventory files no pin names any more, and write the pull
+# request's title and body. .github/workflows/pin-bump.yml runs it daily in
+# the harness container and opens or updates the pull request; nothing here
+# pushes or talks to the GitHub API.
+#
+# Usage: ci/pin-bump <edge|stable> [--work DIR]
+#
+#   edge     the head of Upstream's default branch, quattro (9.5)
+#   stable   the newest release tag vX.Y.Z (9.4); a tag older than or equal
+#            to the pinned tag is no bump
+#   --work   work folder (default .cache/ci/pin-bump-<channel>)
+#
+# Results in the work folder:
+#   result    "none" (the pin is already the newest) or "bump"
+#   gates     "pass" or "fail" (bump only)
+#   commit    the proposed commit (bump only)
+#   title     the pull request title, a Conventional Commit subject
+#   body.md   the pull request body with the gate report
+# The working tree is changed only for a bump: upstream.pin,
+# compat/inventory/, and for stable compat/migrations.tsv.
+# Exit codes: 0 done (also when a gate fails), 1 error, 2 usage error.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+UPSTREAM_GIT=https://github.com/basecamp/omarchy
+UPSTREAM_WEB=https://github.com/basecamp/omarchy
+ARCHIVE=https://github.com/basecamp/omarchy/archive
+BRANCH=quattro
+BODY_MAX=60000
+usage="ci/pin-bump <edge|stable> [--work DIR]"
+
+log() {
+  printf 'pin-bump: %s\n' "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  exit 1
+}
+
+channel=""
+work=""
+while (($# > 0)); do
+  case $1 in
+    --work)
+      (($# >= 2)) || {
+        printf 'usage: %s\n' "$usage" >&2
+        exit 2
+      }
+      work=$2
+      shift 2
+      ;;
+    edge | stable)
+      channel=$1
+      shift
+      ;;
+    *)
+      printf 'pin-bump: unknown argument %s\nusage: %s\n' "$1" "$usage" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ -z $channel ]]; then
+  printf 'usage: %s\n' "$usage" >&2
+  exit 2
+fi
+work=${work:-$repo/.cache/ci/pin-bump-$channel}
+rm -rf -- "$work"
+mkdir -p "$work"
+work=$(cd "$work" && pwd)
+pin=$repo/upstream.pin
+
+pin_field() {
+  awk -F'\t' -v c="$1" -v n="$2" '$1 == c { print $n; exit }' "$pin"
+}
+
+cur_commit=$(pin_field "$channel" 2)
+cur_tag=$(pin_field "$channel" 3)
+[[ $cur_commit =~ ^[0-9a-f]{40}$ ]] || die "upstream.pin has no valid $channel line"
+
+# --- the newest Upstream commit of the Channel -------------------------------
+if [[ $channel == edge ]]; then
+  line=$(git ls-remote --heads "$UPSTREAM_GIT" "refs/heads/$BRANCH") || die "git ls-remote $UPSTREAM_GIT failed"
+  commit=${line%%[[:space:]]*}
+  tag=-
+else
+  refs=$(git ls-remote --tags "$UPSTREAM_GIT") || die "git ls-remote --tags $UPSTREAM_GIT failed"
+  tag=$(awk '{ print $2 }' <<<"$refs" |
+    sed -n 's|^refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' |
+    sort -V | tail -n 1)
+  [[ -n $tag ]] || die "Upstream has no release tag vX.Y.Z"
+  # An annotated tag points to a tag object; its commit is the peeled ref.
+  commit=$(awk -v r="refs/tags/$tag^{}" '$2 == r { print $1; exit }' <<<"$refs")
+  if [[ -z $commit ]]; then
+    commit=$(awk -v r="refs/tags/$tag" '$2 == r { print $1; exit }' <<<"$refs")
+  fi
+  if [[ $cur_tag =~ ^v[0-9] && $(printf '%s\n%s\n' "$cur_tag" "$tag" | sort -V | tail -n 1) == "$cur_tag" ]]; then
+    log "the newest release tag $tag is not newer than the pinned $cur_tag"
+    commit=$cur_commit
+  fi
+fi
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || die "could not read the $channel commit from $UPSTREAM_GIT (got '$commit')"
+
+if [[ $commit == "$cur_commit" ]]; then
+  log "$channel is at the newest commit ${commit:0:12}${tag:+ ($tag)}; no bump"
+  printf 'none\n' >"$work/result"
+  exit 0
+fi
+log "$channel: ${cur_commit:0:12} ($cur_tag) -> ${commit:0:12} ($tag)"
+
+# --- the tarball and the new pin line -------------------------------------------
+gates_work=$work/gate-work
+dl=$gates_work/upstream/downloads
+mkdir -p "$dl"
+tgz=$dl/omarchy-$commit.tar.gz
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 4 \
+  --output "$tgz.part" "$ARCHIVE/$commit.tar.gz" || die "cannot download $ARCHIVE/$commit.tar.gz"
+mv -f -- "$tgz.part" "$tgz"
+sha=$(sha256sum "$tgz")
+sha=${sha:0:64}
+log "tarball SHA-256 $sha"
+
+cp -f -- "$pin" "$work/base.pin"
+newline=$(printf '%s\t%s\t%s\t%s' "$channel" "$commit" "$tag" "$sha")
+awk -F'\t' -v c="$channel" -v l="$newline" '
+  $1 == c { print l; n++; next }
+  { print }
+  END { if (n != 1) exit 1 }
+' "$work/base.pin" >"$work/upstream.pin" || die "upstream.pin must have exactly one $channel line"
+mv -f -- "$work/upstream.pin" "$pin"
+
+# --- gates ------------------------------------------------------------------
+args=(--base-pin "$work/base.pin" --work "$gates_work" --report "$work/gates.md" --write-inventory)
+if [[ $channel == stable ]]; then
+  args+=(--regenerate-migrations)
+fi
+rc=0
+bash "$repo/ci/pin-gates" "${args[@]}" || rc=$?
+case $rc in
+  0) gates=pass ;;
+  1) gates=fail ;;
+  *) die "ci/pin-gates failed (exit $rc)" ;;
+esac
+
+# Call_Inventory files of commits neither pin names any more.
+stable=$(pin_field stable 2)
+edge=$(pin_field edge 2)
+shopt -s nullglob
+for f in "$repo"/compat/inventory/*.tsv; do
+  c=$(basename "$f" .tsv)
+  if [[ $c != "$stable" && $c != "$edge" ]]; then
+    rm -f -- "$f" "$repo/compat/inventory/$c.summary.md"
+    log "removed compat/inventory/$c.{tsv,summary.md}: no pin names $c"
+  fi
+done
+shopt -u nullglob
+
+# --- pull request text ----------------------------------------------------------
+if [[ $channel == edge ]]; then
+  title="chore(pin): move edge to $BRANCH at ${commit:0:12}"
+else
+  title="chore(pin): move stable to $tag"
+fi
+bt='`'
+{
+  printf 'Automated proposal from %s.github/workflows/pin-bump.yml%s (%sci/pin-bump %s%s).\n\n' "$bt" "$bt" "$bt" "$channel" "$bt"
+  printf 'It moves the **%s** Upstream_Pin in %supstream.pin%s:\n\n' "$channel" "$bt" "$bt"
+  printf '| | Commit | Tag |\n|---|---|---|\n'
+  printf '| now | [%s%s%s](%s/commit/%s) | %s |\n' "$bt" "${cur_commit:0:12}" "$bt" "$UPSTREAM_WEB" "$cur_commit" "$cur_tag"
+  printf '| proposed | [%s%s%s](%s/commit/%s) | %s |\n\n' "$bt" "${commit:0:12}" "$bt" "$UPSTREAM_WEB" "$commit" "$tag"
+  printf 'Upstream changes: %s/compare/%s...%s\n\n' "$UPSTREAM_WEB" "$cur_commit" "$commit"
+  printf 'Tarball SHA-256: %s%s%s\n\n' "$bt" "$sha" "$bt"
+  if [[ $gates == pass ]]; then
+    printf 'Gates: **pass** (commit status %smotanka/pin-gates%s).\n\n' "$bt" "$bt"
+  else
+    printf 'Gates: **fail** (commit status %smotanka/pin-gates%s). Fix what the report below names on this branch; the next daily run starts again from the default branch.\n\n' "$bt" "$bt"
+  fi
+  printf 'Before merging:\n\n'
+  printf -- '- [ ] every file %stools/checkoverrides%s lists is read and recorded in %scompat/reviewed/%s%s (7.10)\n' "$bt" "$bt" "$bt" "$commit" "$bt"
+  printf -- '- [ ] every package %stools/pkgmap validate%s names has an outcome in %spackages.yaml%s (7.9)\n' "$bt" "$bt" "$bt" "$bt"
+  printf -- '- [ ] the classes of new and changed migrations in the diff below are right (9.6)\n'
+  printf -- '- [ ] the %sci%s workflow passed on this branch for noble and resolute (13.1)\n\n' "$bt" "$bt"
+  cat "$work/gates.md"
+} >"$work/body.full"
+if (($(wc -c <"$work/body.full") > BODY_MAX)); then
+  {
+    head -c "$BODY_MAX" "$work/body.full"
+    printf '\n\n(The report was cut at %d characters; the full report is in the job log and the run artifacts.)\n' "$BODY_MAX"
+  } >"$work/body.md"
+else
+  cp -f -- "$work/body.full" "$work/body.md"
+fi
+
+printf '%s\n' "$title" >"$work/title"
+printf '%s\n' "$commit" >"$work/commit"
+printf '%s\n' "$gates" >"$work/gates"
+printf 'bump\n' >"$work/result"
+log "proposal ready: $title (gates $gates)"

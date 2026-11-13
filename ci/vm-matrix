@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Print the matrix of the vm jobs of .github/workflows/ci.yml as one
+# GITHUB_OUTPUT line, matrix=<JSON>: one entry {"release", "test"} for each
+# executable test/vm/tests/<test>.sh and each release, resolute and noble,
+# as test/run-all and test/run-all --release noble run them. The release
+# upgrade test always goes from noble to resolute, so it gets one entry,
+# for noble.
+#
+# Usage: ci/vm-matrix
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/.." && pwd)
+
+entries=()
+shopt -s nullglob
+for t in "$repo"/test/vm/tests/*.sh; do
+  [[ -x $t ]] || continue
+  name=$(basename "$t" .sh)
+  if [[ ! $name =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    printf 'vm-matrix: invalid VM test name %s\n' "$name" >&2
+    exit 1
+  fi
+  for release in resolute noble; do
+    if [[ $name == release-upgrade && $release != noble ]]; then
+      continue
+    fi
+    entries+=("{\"release\":\"$release\",\"test\":\"$name\"}")
+  done
+done
+shopt -u nullglob
+if ((${#entries[@]} == 0)); then
+  printf 'vm-matrix: no executable VM tests in test/vm/tests/\n' >&2
+  exit 1
+fi
+joined=$(
+  IFS=,
+  printf '%s' "${entries[*]}"
+)
+printf 'matrix={"include":[%s]}\n' "$joined"

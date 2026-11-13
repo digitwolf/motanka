@@ -1,0 +1,77 @@
+#compdef motanka
+# Zsh completion for motanka(1) (task 24.5).
+#
+# motanka-core installs this file as /usr/share/zsh/vendor-completions/_motanka,
+# which Ubuntu's zsh has on its fpath. It completes the commands, the options
+# each command's --help lists and the values of --channel. The
+# development-build option --i-know-this-is-not-a-vm is never offered.
+
+_motanka() {
+  local curcontext=$curcontext state line ret=1
+  typeset -A opt_args
+  local -a commands help_opts yes_opts dry_opts
+
+  commands=(
+    'install:add Motanka to this Ubuntu installation'
+    'remove:remove Motanka and restore the earlier state'
+    'update:update Motanka and move to the channel'"'"'s Upstream pin'
+    'rollback:return to the latest snapshot'
+    'doctor:report the state of Motanka'
+    'help:show the commands, their options and the exit statuses'
+  )
+  help_opts=('(- *)'{-h,--help}'[show the help of the command]')
+  yes_opts=('(--yes -y)'{--yes,-y}'[do not ask for confirmation]')
+  dry_opts=('--dry-run[print the plan and change nothing]')
+
+  _arguments -C \
+    '(- *)'{-h,--help}'[show the commands, their options and the exit statuses]' \
+    '1:command:->command' \
+    '*::option:->option' && ret=0
+
+  case $state in
+    command)
+      _describe -t commands 'motanka command' commands && ret=0
+      ;;
+    option)
+      curcontext=${curcontext%:*:*}:motanka-$words[1]:
+      case $words[1] in
+        install)
+          _arguments \
+            $help_opts $yes_opts $dry_opts \
+            '--channel=[the channel to follow]:channel:((stable\:"follow the release tags of upstream Omarchy" edge\:"follow the default branch of upstream Omarchy"))' \
+            && ret=0
+          ;;
+        remove)
+          _arguments \
+            $help_opts $yes_opts $dry_opts \
+            '--purge[also remove packages and web apps installed from Omarchy menus]' \
+            && ret=0
+          ;;
+        update)
+          _arguments \
+            $help_opts $yes_opts $dry_opts \
+            '--system[allow changes to packages Motanka does not own]' \
+            && ret=0
+          ;;
+        rollback)
+          _arguments \
+            $help_opts $yes_opts $dry_opts \
+            && ret=0
+          ;;
+        doctor)
+          _arguments \
+            $help_opts \
+            '--json[print the report as one JSON document]' \
+            '--fix[as root, switch the apt source to the running release, then report]' \
+            && ret=0
+          ;;
+        help)
+          _message 'no arguments' && ret=0
+          ;;
+      esac
+      ;;
+  esac
+  return ret
+}
+
+_motanka "$@"

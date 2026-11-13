@@ -1,0 +1,91 @@
+# Weekly re-sign of the published Motanka_Repo (task 24.1; requirement
+# 4.7). InRelease is valid for 14 days after signing (chumak/build-repo), so
+# a repository that is not signed again stops working for apt. Every week
+# this rebuilds the site from the .debs attached to the latest GitHub
+# release (the publish job of ci.yml attaches them), at that release's tag,
+# signs it with a new Date and Valid-Until, and deploys it. The packages
+# do not change.
+#
+# Runs only when the repository variable MOTANKA_PUBLISH_ENABLED is 'true',
+# with the secret MOTANKA_SIGNING_SUBKEY of the environment "release" (see
+# the header of ci.yml). GitHub disables scheduled workflows of a public
+# repository after 60 days without activity; then start this one by hand
+# (workflow_dispatch) within 14 days of the last signature.
+#
+# Actions: actions/checkout is pinned by commit; the Pages actions use
+# their major version tag.
+
+name: repo-resign
+
+on:
+  schedule:
+    - cron: '41 3 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  resign:
+    name: resign
+    if: vars.MOTANKA_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
+          if [[ ! $tag =~ ^v[0-9] ]]; then
+            echo "::error::no published release to sign again (latest release tag: '$tag')"
+            exit 1
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          persist-credentials: false
+      - name: The published .debs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p .cache/ci/release-debs
+          gh release download "$TAG" --repo "$REPO" --pattern '*.deb' --dir .cache/ci/release-debs
+          ls -l .cache/ci/release-debs
+      - name: Prepare the runner
+        run: bash ci/runner-setup
+      - name: Sign the repository again
+        env:
+          MOTANKA_SIGNING_KEY: ${{ secrets.MOTANKA_SIGNING_SUBKEY }}
+        run: bash ci/in-harness -- bash ci/publish-repo --debs .cache/ci/release-debs --out .cache/ci/site
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .cache/ci/site
+
+  deploy:
+    name: deploy
+    needs: resign
+    if: vars.MOTANKA_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: motanka-pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -14,3 +14,8 @@
 /compat/user-scripts.tsv
 /compat/inventory/
 keys/motanka-archive.asc
+# The man page, pre-built from docs/motanka.1.md by tools/mkman (the build
+# needs no pandoc), and the shell completions (task 24.5).
+/docs/motanka.1
+/completions/motanka.bash
+/completions/_motanka

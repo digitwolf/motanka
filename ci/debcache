@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# CI cache of built Motanka .debs, keyed by the inputs of their source
+# package (task 24.1). motanka-stack takes more than an hour to build and
+# motanka-qt6 20 to 30 minutes per release, so .github/workflows/ci.yml
+# rebuilds them only when their inputs change.
+#
+# Usage:
+#   ci/debcache [--repo DIR] key <package-dir> <suite>
+#   ci/debcache build <package-dir> <suite>
+#   ci/debcache restore [--to DIR] <suite> <package-name>...
+#
+# key      prints the cache key: motanka-debs-v1-<name>-<suite>-<40 hex>,
+#          where <name> is the package folder's name and the hex digits are
+#          the SHA-256 of these inputs:
+#            - every file below packaging/<name>/;
+#            - every file its build-imports names (for example
+#              stack/components.tsv), folders recursively;
+#            - packaging/version.sh and packaging/VERSION, and the version
+#              packaging/version.sh prints for the suite;
+#            - the key files its sbuild-repos names for the suite;
+#            - for each .deb its sbuild-local names for the suite, these
+#              inputs of the source package that builds it (so
+#              motanka-stack-shell is rebuilt when motanka-qt6 changes).
+#          Reads files only; runs anywhere. --repo DIR reads another
+#          repository tree (unit tests).
+# build    runs test/vm/build --suite <suite> <package-dir> (a build VM)
+#          and copies the .debs it printed, without -dbgsym packages, into
+#          ~/.cache/motanka-ci/debs/<name>-<suite>/, which the workflow
+#          saves with actions/cache under the key.
+# restore  copies ~/.cache/motanka-ci/debs/<name>-<suite>/*.deb of each
+#          named package folder into ~/.cache/motanka-vm/debs/<suite>/
+#          (or DIR), where test/vm/build, test/vm/local-repo.sh and the VM
+#          tests look for them.
+# build and restore run in the CI harness container only (ci/in-harness);
+# MOTANKA_CI_CACHE overrides ~/.cache/motanka-ci.
+# Exit codes: 0 done, 1 failure, 2 usage error.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$here/.." && pwd)
+usage="ci/debcache [--repo DIR] key <package-dir> <suite> | build <package-dir> <suite> | restore [--to DIR] <suite> <package-name>..."
+MAX_DEPTH=6
+
+log() {
+  printf 'debcache: %s\n' "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  exit 1
+}
+
+die_usage() {
+  log "$1"
+  printf 'usage: %s\n' "$usage" >&2
+  exit 2
+}
+
+check_suite() {
+  case $1 in
+    noble | resolute) ;;
+    *) die_usage "unknown suite '$1' (expected noble or resolute)" ;;
+  esac
+}
+
+# pkg_dir <dir>: the repository-relative package folder, or a usage error.
+pkg_dir() {
+  local abs
+  [[ -d $1 ]] || [[ -d $REPO/$1 ]] || die_usage "no such package folder: $1"
+  if [[ -d $REPO/$1 && $1 != /* ]]; then
+    abs=$(cd "$REPO/$1" && pwd)
+  else
+    abs=$(cd "$1" && pwd)
+  fi
+  [[ $abs == "$REPO"/packaging/* ]] || die_usage "$1 is not a folder under packaging/ of $REPO"
+  [[ -f $abs/debian/control || -f $abs/debian/control.in ]] || die_usage "$1 has no debian/control or debian/control.in"
+  printf '%s\n' "${abs#"$REPO"/}"
+}
+
+# hash_tree <repository-relative path>: "<sha256>  <path>" of every file.
+hash_tree() {
+  (cd "$REPO" && find "$1" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 |
+    sort -z | xargs -0 -r sha256sum)
+}
+
+# config_lines <file>: the lines of a config file without comments and
+# surrounding white space, empty lines dropped.
+config_lines() {
+  local line
+  [[ -f $1 ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    if [[ -n $line ]]; then
+      printf '%s\n' "$line"
+    fi
+  done <"$1"
+}
+
+# producer <binary-package>: the package folder whose control file builds
+# it, or nothing.
+producer() {
+  local f
+  for f in "$REPO"/packaging/*/debian/control "$REPO"/packaging/*/debian/control.in; do
+    [[ -f $f ]] || continue
+    if grep -qxF "Package: $1" "$f"; then
+      f=${f%/debian/*}
+      printf '%s\n' "${f#"$REPO"/}"
+      return 0
+    fi
+  done
+}
+
+# inputs <package-dir> <suite> <depth>: the lines the key hashes.
+inputs() {
+  local rel=$1 suite=$2 depth=$3 line path dep d s key words
+  local -a names
+  ((depth <= MAX_DEPTH)) || die "the sbuild-local dependencies of $rel nest deeper than $MAX_DEPTH"
+  printf 'source %s %s\n' "$rel" "$suite"
+  hash_tree "$rel"
+  while IFS= read -r line; do
+    if [[ $line == /* ]]; then
+      path=${line#/}
+    else
+      path=packaging/$line
+    fi
+    path=${path%/}
+    if [[ ! $path =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || $path == *..* ]]; then
+      die "$rel/build-imports: invalid path '$line'"
+    fi
+    if [[ -e $REPO/$path ]]; then
+      printf 'import %s\n' "$path"
+      hash_tree "$path"
+    else
+      printf 'import %s missing\n' "$path"
+    fi
+  done < <(config_lines "$REPO/$rel/build-imports")
+  while read -r s key _; do
+    if [[ $s == "$suite" && -n ${key:-} ]]; then
+      printf 'repo-key %s\n' "$key"
+      if [[ -f $REPO/packaging/$key ]]; then
+        hash_tree "packaging/$key"
+      fi
+    fi
+  done < <(config_lines "$REPO/$rel/sbuild-repos")
+  while read -r s words; do
+    [[ $s == "$suite" ]] || continue
+    read -r -a names <<<"$words"
+    for dep in "${names[@]}"; do
+      d=$(producer "$dep")
+      if [[ -z $d ]]; then
+        printf 'local %s external\n' "$dep"
+      elif [[ $d == "$rel" ]]; then
+        die "$rel/sbuild-local names $dep, which $rel builds itself"
+      else
+        printf 'local %s from %s\n' "$dep" "$d"
+        inputs "$d" "$suite" $((depth + 1))
+      fi
+    done
+  done < <(config_lines "$REPO/$rel/sbuild-local")
+}
+
+cmd_key() {
+  local rel suite name version digest
+  (($# == 2)) || die_usage "key needs a package folder and a suite"
+  check_suite "$2"
+  rel=$(pkg_dir "$1")
+  suite=$2
+  name=${rel##*/}
+  version=$(bash "$REPO/packaging/version.sh" "$suite")
+  digest=$({
+    printf 'motanka-debs v1\nversion %s\n' "$version"
+    (cd "$REPO" && sha256sum packaging/version.sh packaging/VERSION)
+    inputs "$rel" "$suite" 0
+  } | sha256sum)
+  printf 'motanka-debs-v1-%s-%s-%s\n' "$name" "$suite" "${digest:0:40}"
+}
+
+require_ci() {
+  if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+    die "'$1' runs in the CI harness container only (ci/in-harness); on a development machine use test/vm/build"
+  fi
+}
+
+cache_root() {
+  printf '%s\n' "${MOTANKA_CI_CACHE:-$HOME/.cache/motanka-ci}/debs"
+}
+
+cmd_build() {
+  local rel suite name dest tmp list f n=0
+  (($# == 2)) || die_usage "build needs a package folder and a suite"
+  require_ci build
+  check_suite "$2"
+  rel=$(pkg_dir "$1")
+  suite=$2
+  name=${rel##*/}
+  dest=$(cache_root)/$name-$suite
+  mkdir -p "$(cache_root)"
+  list=$(mktemp "$(cache_root)/.built.XXXXXX")
+  tmp=$(mktemp -d "$(cache_root)/.$name-$suite.XXXXXX")
+  # shellcheck disable=SC2064 # expand now
+  trap "rm -rf -- '$list' '$tmp'" EXIT
+  log "building $rel for $suite"
+  bash "$REPO/test/vm/build" --suite "$suite" "$REPO/$rel" >"$list"
+  while IFS= read -r f; do
+    [[ $f == *.deb ]] || continue
+    case ${f##*/} in
+      *-dbgsym_*) continue ;;
+    esac
+    [[ -f $f ]] || die "test/vm/build printed $f, which does not exist"
+    cp -f -- "$f" "$tmp/"
+    n=$((n + 1))
+  done <"$list"
+  ((n > 0)) || die "test/vm/build printed no .deb for $rel ($suite)"
+  rm -rf -- "$dest"
+  mv -T -- "$tmp" "$dest"
+  log "cached $n .debs of $rel for $suite in $dest: $(cd "$dest" && echo ./*.deb)"
+}
+
+cmd_restore() {
+  local to="" suite name src n f
+  require_ci restore
+  if [[ ${1:-} == --to ]]; then
+    (($# >= 2)) || die_usage "--to needs a folder"
+    to=$2
+    shift 2
+  fi
+  (($# >= 2)) || die_usage "restore needs a suite and at least one package name"
+  check_suite "$1"
+  suite=$1
+  shift
+  to=${to:-$HOME/.cache/motanka-vm/debs/$suite}
+  mkdir -p "$to"
+  for name in "$@"; do
+    [[ $name =~ ^motanka[a-z0-9+.-]*$ ]] || die_usage "invalid package name '$name'"
+    src=$(cache_root)/$name-$suite
+    [[ -d $src ]] || die "no cached .debs of $name for $suite in $src (did the cache restore step run?)"
+    n=0
+    for f in "$src"/*.deb; do
+      [[ -f $f ]] || continue
+      cp -f -- "$f" "$to/"
+      n=$((n + 1))
+    done
+    ((n > 0)) || die "$src holds no .deb"
+    log "restored $n .debs of $name for $suite into $to"
+  done
+}
+
+if [[ ${1:-} == --repo ]]; then
+  (($# >= 2)) || die_usage "--repo needs a folder"
+  [[ -d $2 ]] || die_usage "no such folder: $2"
+  REPO=$(cd "$2" && pwd)
+  shift 2
+fi
+case ${1:-} in
+  key)
+    shift
+    cmd_key "$@"
+    ;;
+  build)
+    shift
+    cmd_build "$@"
+    ;;
+  restore)
+    shift
+    cmd_restore "$@"
+    ;;
+  -h | --help)
+    printf 'usage: %s\n' "$usage"
+    ;;
+  *) die_usage "a command is required: key, build or restore" ;;
+esac

@@ -15,3 +15,5 @@ compat/home-paths.tsv opt/motanka/share/motanka/
 compat/migrations.tsv opt/motanka/share/motanka/
 compat/user-scripts.tsv opt/motanka/share/motanka/
 debian/build/package-map.tsv opt/motanka/share/motanka/
+completions/motanka.bash opt/motanka/share/motanka/completions/
+completions/_motanka usr/share/zsh/vendor-completions/
