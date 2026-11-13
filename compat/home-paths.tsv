@@ -1,16 +1,68 @@
 # home-paths.tsv: the Home_Path_Class of each home-folder target (design.md,
 # Data Models). Installed as /opt/motanka/share/motanka/home-paths.tsv; read
-# by per-user setup and printed by "motanka install --dry-run".
-#
-# PROVISIONAL: task 17.1 (per-user setup) defines this list. Until then it
-# holds the Namespaced_Paths, the Shared_Files of requirements.md and a
-# first class for each top-level entry of Upstream's config/ tree at the
-# stable pin. Per-user setup does not exist yet, so nothing reads it at
-# login.
+# by per-user setup (/opt/motanka/libexec/motanka/user-setup) and printed by
+# "motanka install --dry-run".
 #
 # Fields, separated by tabs:
 #   <glob>  namespaced|session|app|shared
-# A glob is relative to the home folder; "**" matches any depth.
+# A glob is relative to the home folder. "*" and "?" match within one path
+# component, "**" matches any number of them. The first line whose glob
+# matches a path decides its class. Per-user setup skips a target that no
+# line matches, and the motanka-core build fails on one ("user-setup
+# --plan").
+#
+# What per-user setup does with each class (design.md, "Per-user setup"):
+#   namespaced  only Motanka or vendored Upstream code uses the path:
+#               written (ledgered, write-then-rename)
+#   session     only the Motanka session reads it: ledgered, an existing
+#               file backed up, then replaced by write-then-rename
+#   app         an application config the user's other sessions may also
+#               use: as session, but an existing file is left alone
+#   shared      read outside the Motanka session (Shared_File): never
+#               written; shell integration may add one marked block to an
+#               rc file when the user accepts it (6.5, 6.6)
+#
+# Reviewed against Upstream's config/ tree at the stable pin (v4.5.0); each
+# config/<x> is copied to ~/.config/<x>. Upstream files per entry:
+#   alacritty/alacritty.toml                     app
+#   autostart/{limine-snapper-notify,org.fcitx.Fcitx5,print-applet}.desktop
+#                                                shared: every desktop
+#                                                starts ~/.config/autostart
+#   btop/btop.conf                               app
+#   chromium/Default/Preferences                 shared: the browser profile
+#   chromium-flags.conf                          app
+#   fcitx5/config, fcitx5/conf/*.conf            app
+#   foot/foot.ini                                app
+#   ghostty/config                               app
+#   git/config                                   shared: git reads it everywhere
+#   herdr/config.toml                            app
+#   hypr/*.lua, hypr/.luarc.json, hypr/hyprsunset.conf, hypr/xdph.conf
+#                                                session
+#   hyprland-mimeapps.list                       session (desktop-specific
+#                                                mimeapps for Hyprland)
+#   hyprland-preview-share-picker/config.yaml    session
+#   imv/config                                   app
+#   kitty/kitty.conf                             app
+#   lazygit/config.yml                           app
+#   obsidian/user-flags.conf                     app
+#   omarchy/** (defaults, extensions, hooks, themed, shell.json)
+#                                                namespaced
+#   opencode/{cli,opencode}.json                 app
+#   starship.toml                                app
+#   tmux/tmux.conf                               app
+#   wireplumber/wireplumber.conf.d/*.conf        shared: PipeWire serves
+#                                                every session of the user
+#   xdg-desktop-portal/hyprland-portals.conf     session
+# Other writes of per-user setup: the Hyprland fragment
+# .local/state/omarchy/toggles/hypr/motanka-session.lua (session), the
+# migration markers .local/state/omarchy/migrations/<id>.sh (namespaced) and
+# the dconf database .config/dconf/motanka (namespaced).
+
+# --- Motanka's own file inside Upstream's namespace: listed before the
+# namespace, so it is ledgered and backed up as a session file.
+.local/state/omarchy/toggles/hypr/motanka-session.lua	session
+
+# --- namespaced (Glossary: Namespaced_Path)
 .config/dconf/motanka	namespaced
 .config/omarchy/**	namespaced
 .local/share/omarchy/**	namespaced
@@ -18,10 +70,22 @@
 .local/state/motanka/**	namespaced
 .cache/omarchy/**	namespaced
 .cache/motanka/**	namespaced
+
+# --- session: read only by the Motanka session (Hyprland, uwsm and the
+# bar, launcher, notification and lock programs of Upstream's releases)
 .config/hypr/**	session
+.config/uwsm/**	session
 .config/hyprland-mimeapps.list	session
 .config/hyprland-preview-share-picker/**	session
 .config/xdg-desktop-portal/hyprland-portals.conf	session
+.config/waybar/**	session
+.config/walker/**	session
+.config/elephant/**	session
+.config/mako/**	session
+.config/swayosd/**	session
+.config/quickshell/**	session
+
+# --- app: application configs other sessions may use too
 .config/alacritty/**	app
 .config/btop/**	app
 .config/chromium-flags.conf	app
@@ -36,14 +100,31 @@
 .config/opencode/**	app
 .config/starship.toml	app
 .config/tmux/**	app
+.local/share/applications/**	app
+
+# --- shared: Shared_Files and other files every session reads
 .bashrc	shared
-.zshrc	shared
+.bash_profile	shared
+.bash_login	shared
+.bash_logout	shared
 .profile	shared
+.zshrc	shared
+.zshenv	shared
+.zprofile	shared
+.zlogin	shared
+.inputrc	shared
+.XCompose	shared
 .gitconfig	shared
 .config/git/**	shared
-.config/gtk-3.0/settings.ini	shared
-.config/gtk-4.0/settings.ini	shared
+.config/gtk-*/**	shared
 .config/mimeapps.list	shared
+.config/user-dirs.dirs	shared
 .config/autostart/**	shared
 .config/chromium/**	shared
 .config/wireplumber/**	shared
+.config/environment.d/**	shared
+.config/systemd/**	shared
+.config/fontconfig/**	shared
+.config/dconf/user	shared
+.local/share/keyrings/**	shared
+.local/state/wireplumber/**	shared

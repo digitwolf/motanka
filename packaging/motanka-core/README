@@ -41,3 +41,33 @@ gives the systemd user manager back its earlier environment when the
 session ends. Desktop settings of the session are in the dconf database
 "motanka" (/etc/dconf/profile/motanka; defaults in
 /etc/dconf/db/motanka.d/), which no other session reads.
+
+/usr/share/omarchy, where upstream Omarchy expects its files, links to
+/opt/motanka/share/omarchy-view: its bin is /opt/motanka/bin (the command
+wrappers) and its other entries link into the unmodified vendored tree.
+
+Per-user setup
+--------------
+
+Before the compositor starts, the launcher runs
+/opt/motanka/libexec/motanka/user-setup. At the first login it copies
+upstream's config/ tree into ~/.config according to
+/opt/motanka/share/motanka/home-paths.tsv, creates the dconf database
+~/.config/dconf/motanka and runs the upstream per-user scripts that
+/opt/motanka/share/motanka/user-scripts.tsv allows. Files that other
+sessions read, such as ~/.bashrc, ~/.gitconfig and the GTK settings, are
+left unchanged, and existing application configs are kept. Every write is
+recorded first in ~/.local/state/motanka/ledger, replaced files are backed
+up there, and an interrupted setup resumes at the next login. Later logins
+find the setup complete and skip it.
+
+Shell integration
+-----------------
+
+At the first login motanka-shell-integration.service shows one
+notification asking whether to load the Omarchy-compatible bash setup in
+terminals of the Motanka session. Only "Enable" changes a file: it adds
+one block between "# >>> motanka >>>" and "# <<< motanka <<<" to
+~/.bashrc. The question is not asked again; run
+/opt/motanka/libexec/motanka/shell-integration accept (or decline) to
+answer later.

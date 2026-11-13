@@ -1,0 +1,648 @@
+#!/bin/bash
+# user-setup: per-user setup of the Motanka session (design.md, "Per-user
+# setup"; requirement 6). Installed as /opt/motanka/libexec/motanka/user-setup;
+# the session launcher (/opt/motanka/libexec/motanka/session) runs it before
+# the compositor at every login (6.1), as the user who logs in.
+#
+# usage: user-setup                 run per-user setup, or resume it, or
+#                                   return at once when it is complete
+#        user-setup --plan [--upstream DIR] [--home-paths FILE]
+#                                   print every planned home-folder target
+#                                   and change nothing
+#
+# Run, in order (each home-folder write goes through the User_Ledger,
+# src/lib/userledger.sh: ledgered before it happens, an existing file backed
+# up first, written to a temporary file and renamed; 6.2, 6.3, 6.11):
+#   1. Protected_Host and Dev_Build guards (exit 7), refusal as root, the
+#      per-user lock $XDG_RUNTIME_DIR/motanka.lock (flock -n, exit 9). A
+#      User_Ledger whose last setup marker is setup-end means setup is
+#      complete: exit 0. Otherwise the time marker
+#      ~/.local/state/motanka/setup.marker is created (kept when resuming)
+#      and setup-begin is ledgered.
+#   2. Targets, each looked up in home-paths.tsv (first matching glob):
+#        - every file and link of the vendored config/ tree, as ~/.config/<x>;
+#        - the Hyprland fragment ~/.local/state/omarchy/toggles/hypr/
+#          motanka-session.lua (from /opt/motanka/share/motanka/hypr/), which
+#          Upstream's hyprland.lua loads last and which sets
+#          XDG_CURRENT_DESKTOP=Motanka:Hyprland and XDG_SESSION_DESKTOP=motanka
+#          again after Upstream's envs.lua;
+#        - an empty marker ~/.local/state/omarchy/migrations/<id>.sh for
+#          every migration of the vendored tree, in Upstream's state format,
+#          as Upstream's first install does, so a new user has no pending
+#          migration.
+#      namespaced and session targets are written; app targets too, unless
+#      the path already exists (kept, with a notice); shared targets are
+#      never written (6.5); a target no glob matches is skipped with a
+#      warning.
+#   3. The dconf user database ~/.config/dconf/motanka (DCONF_PROFILE=motanka
+#      reads it), compiled empty with "dconf compile" and written like a
+#      target. An existing database is kept.
+#   4. The Upstream per-user scripts marked "run" in user-scripts.tsv, in its
+#      order, unless the Call_Inventory (inventory.tsv) has an arch-tool,
+#      arch-path, privileged or user-unit finding for the script, or a
+#      home-write finding outside the Namespaced_Paths. They run as Upstream
+#      runs them (bash -eE -c 'source <script>'), with OMARCHY_PATH=
+#      /usr/share/omarchy, /opt/motanka/bin (the Wrappers) first on PATH,
+#      stdin from /dev/null and at most 120 s each. A failing script is
+#      logged and does not stop setup. Each result is recorded in
+#      ~/.local/state/motanka/setup-scripts, so a resumed setup does not run
+#      a finished script again.
+#   5. The scan (6.9, 6.10): every file, link and empty folder under
+#      ~/.config and ~/.local, and every top-level dot entry (and what is
+#      below it) except ~/.cache, that is newer than the time marker, absent
+#      from the User_Ledger and not a Namespaced_Path, is ledgered as
+#      unplanned and named in a warning. The Namespaced_Path folders, ~/.cache
+#      and ~/.local/state/motanka-removed-* are not searched.
+#   6. setup-end is ledgered.
+# A login that finds setup-begin without a later setup-end resumes (6.7):
+# step 1 keeps the first time marker, step 2 skips each target whose
+# current state is the ledgered "after" state and writes again one whose
+# state is still the ledgered "before" state (interrupted between ledger
+# line and rename); a target changed to anything else since is left alone
+# with a warning. Steps 3 to 6 follow the same rules.
+#
+# --plan prints one line per target, fields separated by tabs:
+#   <write|write-if-absent|skip|unclassified>  <class or ->  <path>
+# and exits 1 if a target is unclassified. --upstream and --home-paths
+# replace the installed vendored tree and home-paths.tsv; the motanka-core
+# build runs it on the tree it packages.
+#
+# Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of
+# /opt/motanka and /usr/share/omarchy. With MOTANKA_ROOT set,
+# MOTANKA_SETUP_INTERRUPT=<point> kills this process with SIGKILL at that
+# point: begin, target:<n> (after the n-th target), targets, dconf,
+# scripts, scan. dconf, flock, timeout and systemd-detect-virt are found
+# through PATH.
+#
+# Exit codes: 0 done or already complete; 1 error (the launcher then does
+# not start the compositor); 2 usage; 7 guard refused; 9 lock held.
+set -euo pipefail
+
+readonly US_PREFIX=/opt/motanka
+readonly US_OMARCHY_PATH=/usr/share/omarchy
+readonly US_FRAGMENT_REL=.local/state/omarchy/toggles/hypr/motanka-session.lua
+readonly US_DCONF_REL=.config/dconf/motanka
+readonly US_MIGRATIONS_REL=.local/state/omarchy/migrations
+readonly US_SCRIPT_TIMEOUT=120
+
+_us_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_us_base=${_us_self%/*}
+if [[ ! -r $_us_base/lib/common.sh ]]; then
+  _us_base=${_us_base%/*}
+fi
+MK_CMD=user-setup
+# shellcheck source=../lib/common.sh
+source "$_us_base/lib/common.sh"
+# shellcheck source=../lib/guard.sh
+source "$_us_base/lib/guard.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_us_base/lib/userledger.sh"
+
+US_VENDORED=$(mk_path "$US_PREFIX/share/omarchy")
+US_DATA=$(mk_path "$US_PREFIX/share/motanka")
+US_HOME_PATHS=$US_DATA/home-paths.tsv
+US_SCRIPTS=$US_DATA/user-scripts.tsv
+US_INVENTORY=$US_DATA/inventory.tsv
+US_FRAGMENT_SRC=$US_DATA/hypr/motanka-session.lua
+US_WRAPPERS=$(mk_path "$US_PREFIX/bin")
+US_VIEW=$(mk_path "$US_OMARCHY_PATH")
+
+HP_RE=()
+HP_CLASS=()
+declare -A US_LAST=()
+US_STATE=""
+US_EMPTY=""
+US_N_WRITTEN=0
+US_N_DONE=0
+US_N_KEPT=0
+US_N_SHARED=0
+US_N_UNCLASSIFIED=0
+
+_us_usage() {
+  cat <<'EOF'
+usage: user-setup                 run or resume per-user setup
+       user-setup --plan [--upstream DIR] [--home-paths FILE]
+                                  print the planned home-folder targets
+
+The Motanka session launcher runs per-user setup at every login; it does
+its work once and resumes an interrupted run. Files read by other sessions
+are left unchanged. Details: journalctl -t motanka
+EOF
+}
+
+# _us_interrupt_point <name>: the test hook described at the top.
+_us_interrupt_point() {
+  if [[ -n ${MOTANKA_ROOT:-} && ${MOTANKA_SETUP_INTERRUPT:-} == "$1" ]]; then
+    mk_log warning "test hook: interrupted at $1"
+    kill -KILL "$$"
+  fi
+}
+
+# --- path classes --------------------------------------------------------
+
+# _us_glob_re <glob>: the glob as an anchored extended regular expression.
+_us_glob_re() {
+  local g=$1 re="" c i
+  for ((i = 0; i < ${#g}; i++)); do
+    c=${g:i:1}
+    case $c in
+      '*')
+        if [[ ${g:i+1:1} == '*' ]]; then
+          re+='.*'
+          i=$((i + 1))
+        else
+          re+='[^/]*'
+        fi
+        ;;
+      '?') re+='[^/]' ;;
+      [A-Za-z0-9_/-]) re+=$c ;;
+      *) re+="\\$c" ;;
+    esac
+  done
+  printf '^%s$\n' "$re"
+}
+
+# _us_load_classes <home-paths.tsv>: fills HP_RE and HP_CLASS.
+_us_load_classes() {
+  local tsv=$1 glob class
+  HP_RE=()
+  HP_CLASS=()
+  if [[ ! -r $tsv ]]; then
+    mk_die "$MK_EXIT_ERROR" "cannot read $tsv; reinstall motanka-core"
+  fi
+  while IFS=$'\t' read -r glob class _ || [[ -n $glob ]]; do
+    if [[ -z $glob || $glob == \#* ]]; then
+      continue
+    fi
+    case $class in
+      namespaced | session | app | shared) ;;
+      *)
+        mk_warn "ignoring '$glob' in $tsv: unknown class '${class:-}'"
+        continue
+        ;;
+    esac
+    HP_RE+=("$(_us_glob_re "$glob")")
+    HP_CLASS+=("$class")
+  done <"$tsv"
+  if ((${#HP_RE[@]} == 0)); then
+    mk_die "$MK_EXIT_ERROR" "$tsv lists no path"
+  fi
+}
+
+# _us_class <path>: prints the Home_Path_Class of a home-relative path;
+# returns 1 if no glob matches.
+_us_class() {
+  local i
+  for i in "${!HP_RE[@]}"; do
+    if [[ $1 =~ ${HP_RE[i]} ]]; then
+      printf '%s\n' "${HP_CLASS[i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# --- targets -------------------------------------------------------------
+
+# _us_targets <upstream-tree> <fragment>: one line per target of step 2,
+# fields separated by tabs: <path> <file|link|marker> <source or ->.
+_us_targets() {
+  local up=$1 fragment=$2 p f
+  if [[ -d $up/config ]]; then
+    while IFS= read -r -d '' p; do
+      if ! mk_field_ok "$p"; then
+        mk_warn "skipping an Upstream config file whose name has control characters"
+        continue
+      fi
+      if [[ -L $up/config/$p ]]; then
+        printf '.config/%s\tlink\t%s\n' "$p" "$up/config/$p"
+      else
+        printf '.config/%s\tfile\t%s\n' "$p" "$up/config/$p"
+      fi
+    done < <(find "$up/config" -mindepth 1 \( -type f -o -type l \) -printf '%P\0' | LC_ALL=C sort -z)
+  fi
+  printf '%s\tfile\t%s\n' "$US_FRAGMENT_REL" "$fragment"
+  for f in "$up"/migrations/*.sh; do
+    if [[ -f $f ]] && mk_field_ok "${f##*/}"; then
+      printf '%s/%s\tmarker\t-\n' "$US_MIGRATIONS_REL" "${f##*/}"
+    fi
+  done
+}
+
+# --- plan ----------------------------------------------------------------
+
+_us_plan() {
+  local up=$US_VENDORED hp=$US_HOME_PATHS rel class action bad=0
+  while (($# > 0)); do
+    case $1 in
+      --upstream)
+        (($# >= 2)) || mk_usage_error "--upstream needs a folder"
+        up=$2
+        shift 2
+        ;;
+      --home-paths)
+        (($# >= 2)) || mk_usage_error "--home-paths needs a file"
+        hp=$2
+        shift 2
+        ;;
+      *) mk_usage_error "unknown argument '$1'" ;;
+    esac
+  done
+  if [[ ! -d $up/config ]]; then
+    mk_die "$MK_EXIT_ERROR" "$up has no config/ folder"
+  fi
+  _us_load_classes "$hp"
+  while IFS=$'\t' read -r rel _; do
+    if class=$(_us_class "$rel"); then
+      case $class in
+        namespaced | session) action="write" ;;
+        app) action=write-if-absent ;;
+        shared) action=skip ;;
+      esac
+    else
+      class=- action=unclassified bad=1
+    fi
+    printf '%s\t%s\t%s\n' "$action" "$class" "$rel"
+  done < <(
+    _us_targets "$up" "$US_FRAGMENT_SRC"
+    printf '%s\tdconf\t-\n' "$US_DCONF_REL"
+  )
+  if ((bad)); then
+    mk_error "some targets have no Home_Path_Class in $hp"
+    return 1
+  fi
+}
+
+# --- step 1 --------------------------------------------------------------
+
+_us_lock() {
+  local rt=${XDG_RUNTIME_DIR:-} fd
+  if [[ -z $rt || ! -d $rt ]]; then
+    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set or not a folder; per-user setup runs inside a login session"
+  fi
+  if ! exec {fd}>>"$rt/motanka.lock"; then
+    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $rt/motanka.lock"
+  fi
+  if ! flock -n "$fd"; then
+    mk_die "$MK_EXIT_LOCKED" "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock is held)"
+  fi
+}
+
+# _us_status: new, resume or done, from the last setup marker.
+_us_status() {
+  local verb last=""
+  while IFS=$'\t' read -r _ _ verb _; do
+    case $verb in
+      setup-begin | setup-end) last=$verb ;;
+    esac
+  done < <(mk_userledger_read)
+  case $last in
+    setup-end) printf 'done\n' ;;
+    setup-begin) printf 'resume\n' ;;
+    *) printf 'new\n' ;;
+  esac
+}
+
+# _us_load_ledger: US_LAST[<path>] = "<before> TAB <after>" of the last
+# create, replace or symlink entry of each file or link.
+_us_load_ledger() {
+  local verb path before after
+  US_LAST=()
+  while IFS=$'\t' read -r _ _ verb _ path before after _; do
+    case $verb in
+      create | replace | symlink)
+        if [[ $path != */ ]]; then
+          US_LAST["$path"]="$before"$'\t'"$after"
+        fi
+        ;;
+    esac
+  done < <(mk_userledger_read)
+}
+
+# --- step 2 --------------------------------------------------------------
+
+# _us_resume_state <path> <current-state>: for a ledgered path, 0 if it
+# must be written (again), 1 if it is done or must be left alone. 2 if the
+# path is not ledgered.
+_us_resume_state() {
+  local rel=$1 cur=$2 before after
+  if [[ -z ${US_LAST["$rel"]+x} ]]; then
+    return 2
+  fi
+  IFS=$'\t' read -r before after <<<"${US_LAST["$rel"]}"
+  if [[ $cur == "$after" ]]; then
+    US_N_DONE=$((US_N_DONE + 1))
+    return 1
+  fi
+  if [[ $cur == "$before" ]]; then
+    mk_log info "writing $rel again: an earlier run was interrupted before it was replaced"
+    return 0
+  fi
+  mk_warn "per-user setup leaves ~/$rel as it is: it changed after it was ledgered"
+  return 1
+}
+
+# _us_apply_one <path> <file|link|marker> <source>
+_us_apply_one() {
+  local rel=$1 kind=$2 src=$3 class cur rc=0
+  if ! class=$(_us_class "$rel"); then
+    mk_warn "not written: ~/$rel has no Home_Path_Class in $US_HOME_PATHS"
+    US_N_UNCLASSIFIED=$((US_N_UNCLASSIFIED + 1))
+    return 0
+  fi
+  if [[ $class == shared ]]; then
+    mk_log info "left ~/$rel unchanged: other sessions read it (shared)"
+    US_N_SHARED=$((US_N_SHARED + 1))
+    return 0
+  fi
+  cur=$(mk_userledger_state "$rel") || return 1
+  _us_resume_state "$rel" "$cur" || rc=$?
+  case $rc in
+    0) ;;
+    1) return 0 ;;
+    2)
+      if [[ $class == app && $cur != - ]]; then
+        mk_info "keeping your ~/$rel (other programs may use it); Motanka's default was not installed"
+        mk_log notice "kept the existing app config ~/$rel"
+        US_N_KEPT=$((US_N_KEPT + 1))
+        return 0
+      fi
+      ;;
+  esac
+  case $cur in
+    dir | other)
+      mk_warn "not written: ~/$rel is a folder or a special file"
+      return 0
+      ;;
+  esac
+  case $kind in
+    file) mk_userledger_write "$class" "$rel" "$src" || return 1 ;;
+    link) mk_userledger_symlink "$class" "$rel" "$(readlink -n -- "$src")" || return 1 ;;
+    marker) mk_userledger_write "$class" "$rel" "$US_EMPTY" || return 1 ;;
+    *)
+      mk_error "unknown target kind '$kind' for $rel"
+      return 1
+      ;;
+  esac
+  US_N_WRITTEN=$((US_N_WRITTEN + 1))
+}
+
+_us_apply_targets() {
+  local rel kind src n=0
+  local -a targets=()
+  if [[ ! -d $US_VENDORED/config ]]; then
+    mk_die "$MK_EXIT_ERROR" "$US_VENDORED/config is missing; reinstall motanka-core"
+  fi
+  if [[ ! -r $US_FRAGMENT_SRC ]]; then
+    mk_die "$MK_EXIT_ERROR" "$US_FRAGMENT_SRC is missing; reinstall motanka-core"
+  fi
+  mapfile -t targets < <(_us_targets "$US_VENDORED" "$US_FRAGMENT_SRC")
+  for n in "${!targets[@]}"; do
+    IFS=$'\t' read -r rel kind src <<<"${targets[n]}"
+    if ! _us_apply_one "$rel" "$kind" "$src"; then
+      mk_error "could not write ~/$rel"
+      return 1
+    fi
+    _us_interrupt_point "target:$((n + 1))"
+  done
+  mk_log info "targets: $US_N_WRITTEN written, $US_N_DONE already done, $US_N_KEPT existing app configs kept, $US_N_SHARED shared files left unchanged, $US_N_UNCLASSIFIED unclassified"
+}
+
+# --- step 3 --------------------------------------------------------------
+
+_us_dconf() {
+  local rel=$US_DCONF_REL class cur work rc=0
+  class=$(_us_class "$rel") || class=namespaced
+  cur=$(mk_userledger_state "$rel") || return 1
+  _us_resume_state "$rel" "$cur" || rc=$?
+  case $rc in
+    1) return 0 ;;
+    2)
+      if [[ $cur != - ]]; then
+        mk_log info "kept the existing dconf database ~/$rel"
+        return 0
+      fi
+      ;;
+  esac
+  rm -rf -- "$US_STATE"/dconf.* || return 1
+  work=$(mktemp -d -- "$US_STATE/dconf.XXXXXX") || return 1
+  if ! mkdir -- "$work/keyfiles"; then
+    rm -rf -- "$work"
+    return 1
+  fi
+  if ! dconf compile "$work/motanka" "$work/keyfiles" 2>"$work/error" || [[ ! -s $work/motanka ]]; then
+    mk_error "dconf compile could not create the database for ~/$rel: $(head -c 300 "$work/error" 2>/dev/null || true)"
+    rm -rf -- "$work"
+    return 1
+  fi
+  chmod 0644 -- "$work/motanka"
+  if ! mk_userledger_write "$class" "$rel" "$work/motanka"; then
+    rm -rf -- "$work"
+    return 1
+  fi
+  rm -rf -- "$work"
+  mk_log info "created the dconf database ~/$rel"
+}
+
+# --- step 4 --------------------------------------------------------------
+
+# _us_inventory_blocks <script>: prints the Call_Inventory findings that
+# keep the script from running; nothing if there are none.
+_us_inventory_blocks() {
+  if [[ ! -r $US_INVENTORY ]]; then
+    printf 'no Call_Inventory at %s\n' "$US_INVENTORY"
+    return 0
+  fi
+  awk -F'\t' -v f="$1" '
+    $1 != f { next }
+    $3 ~ /^(arch-tool|arch-path|privileged|user-unit)$/ { print "line " $2 ": " $3 " " $4; next }
+    $3 == "home-write" && index($4, "[namespaced]") == 0 { print "line " $2 ": " $3 " " $4 }
+  ' "$US_INVENTORY"
+}
+
+# _us_script_recorded <script>: 0 if an earlier run recorded its result.
+_us_script_recorded() {
+  local f=$US_STATE/setup-scripts
+  [[ -f $f ]] && awk -F'\t' -v s="$1" '$1 == s { found = 1 } END { exit !found }' "$f"
+}
+
+# _us_script_record <script> <ok|failed> <exit-code>
+_us_script_record() {
+  local f=$US_STATE/setup-scripts
+  mk_ledger_append "$f" "$1"$'\t'"$2"$'\t'"$3"$'\t'"$(mk_utc_now)"
+}
+
+_us_scripts() {
+  local line rel action reason blocks rc
+  local -a lines=()
+  if [[ ! -r $US_SCRIPTS ]]; then
+    mk_warn "$US_SCRIPTS is missing; no Upstream per-user script runs"
+    return 0
+  fi
+  mapfile -t lines <"$US_SCRIPTS"
+  for line in "${lines[@]}"; do
+    IFS=$'\t' read -r rel action reason <<<"$line"
+    if [[ -z $rel || $rel == \#* ]]; then
+      continue
+    fi
+    if [[ $action != run ]]; then
+      mk_log info "not running Upstream's $rel: ${reason:-no reason recorded}"
+      continue
+    fi
+    if _us_script_recorded "$rel"; then
+      continue
+    fi
+    blocks=$(_us_inventory_blocks "$rel")
+    if [[ -n $blocks ]]; then
+      mk_warn "not running Upstream's $rel: the Call_Inventory has $(wc -l <<<"$blocks") finding(s) per-user setup does not allow: $(head -n 3 <<<"$blocks" | tr '\n' ';')"
+      continue
+    fi
+    if [[ ! -f $US_VENDORED/$rel ]]; then
+      mk_warn "Upstream's $rel is not in $US_VENDORED; skipped"
+      continue
+    fi
+    mk_log info "running Upstream's $rel"
+    rc=0
+    (
+      cd -- "$HOME" || exit 1
+      # shellcheck disable=SC2016 # $1 is expanded by the inner bash, as Upstream runs it
+      OMARCHY_PATH=$US_VIEW OMARCHY_INSTALL=$US_VIEW/install OMARCHY_SETUP_CONTEXT=runtime \
+        PATH="$US_WRAPPERS:$PATH" timeout "$US_SCRIPT_TIMEOUT" \
+        bash -eE -c 'source "$1"' bash "$US_VENDORED/$rel" </dev/null >&2
+    ) || rc=$?
+    if ((rc == 0)); then
+      _us_script_record "$rel" ok 0 || return 1
+    else
+      mk_warn "Upstream's $rel failed (exit $rc); per-user setup continues without it"
+      _us_script_record "$rel" failed "$rc" || return 1
+    fi
+  done
+}
+
+# --- step 5 --------------------------------------------------------------
+
+# _us_scan_list <marker>: NUL-separated absolute paths changed since the
+# marker (see step 5 at the top).
+_us_scan_list() {
+  local marker=$1 p
+  local -a roots=()
+  for p in "$HOME/.config" "$HOME/.local"; do
+    if [[ -e $p || -L $p ]]; then
+      roots+=("$p")
+    fi
+  done
+  while IFS= read -r -d '' p; do
+    roots+=("$p")
+  done < <(find "$HOME" -mindepth 1 -maxdepth 1 -name '.*' ! -name .config ! -name .local ! -name .cache -print0)
+  if ((${#roots[@]} == 0)); then
+    return 0
+  fi
+  find "${roots[@]}" \
+    \( -path "$HOME/.config/omarchy" -o -path "$HOME/.local/share/omarchy" \
+    -o -path "$HOME/.local/state/omarchy" -o -path "$HOME/.local/state/motanka" \
+    -o -path "$HOME/.local/state/motanka-removed-*" -o -path "$HOME/.cache/omarchy" \
+    -o -path "$HOME/.cache/motanka" \) -prune \
+    -o -newer "$marker" \( -type f -o -type l -o \( -type d -empty \) \) -print0
+}
+
+_us_scan() {
+  local marker=$US_STATE/setup.marker p rel class verb n=0
+  local -A known=()
+  while IFS=$'\t' read -r _ _ verb _ p _; do
+    if [[ $verb != setup-* && $p != - ]]; then
+      known["${p%/}"]=1
+    fi
+  done < <(mk_userledger_read)
+  while IFS= read -r -d '' p; do
+    rel=${p#"$HOME"/}
+    if [[ -n ${known["$rel"]+x} ]]; then
+      continue
+    fi
+    if class=$(_us_class "$rel") && [[ $class == namespaced ]]; then
+      continue
+    fi
+    if ! mk_field_ok "$rel"; then
+      mk_warn "a path with control characters in its name changed during setup; it cannot be ledgered"
+      continue
+    fi
+    mk_userledger_record_unplanned "$rel" || return 1
+    known["$rel"]=1
+    n=$((n + 1))
+    mk_warn "unplanned change: ~/$rel changed during per-user setup without a ledger entry; ledgered as unplanned ('motanka doctor' lists it)"
+  done < <(_us_scan_list "$marker")
+  mk_log info "post-setup scan: $n unplanned path(s)"
+}
+
+# --- run -----------------------------------------------------------------
+
+# _us_run: steps 1 to 6. It runs as the condition of "if" in main, where
+# set -e does not apply, so every step checks its own result.
+_us_run() {
+  local status
+  if ((EUID == 0)); then
+    mk_die "$MK_EXIT_ERROR" "per-user setup runs as the user who logs in, not as root"
+  fi
+  mk_guard_protected_host
+  mk_guard_dev_build
+  _us_load_classes "$US_HOME_PATHS"
+  _us_lock
+  US_STATE=$(mk_userledger_state_dir) || return 1
+  status=$(_us_status) || return 1
+  if [[ $status == "done" ]]; then
+    mk_log info "per-user setup is complete"
+    return 0
+  fi
+  mk_userledger_init || return 1
+  if [[ $status == new ]]; then
+    rm -f -- "$US_STATE/setup.marker" || return 1
+  fi
+  if [[ ! -e $US_STATE/setup.marker ]]; then
+    : >"$US_STATE/setup.marker" || return 1
+    mk_fsync "$US_STATE/setup.marker" "$US_STATE" || return 1
+  fi
+  if [[ $status == resume ]]; then
+    mk_info "Motanka: resuming per-user setup"
+    mk_log notice "resuming an interrupted per-user setup"
+  else
+    mk_info "Motanka: setting up this account for the Motanka session"
+  fi
+  mk_userledger_setup_begin || return 1
+  _us_interrupt_point begin
+
+  _us_load_ledger
+  US_EMPTY=$US_STATE/empty
+  : >"$US_EMPTY" || return 1
+  chmod 0644 -- "$US_EMPTY" || return 1
+  _us_apply_targets || return 1
+  _us_interrupt_point targets
+  _us_dconf || return 1
+  _us_interrupt_point dconf
+  _us_scripts || return 1
+  _us_interrupt_point scripts
+  _us_scan || return 1
+  _us_interrupt_point scan
+  mk_userledger_setup_end || return 1
+  mk_log info "per-user setup complete"
+}
+
+main() {
+  case ${1:-} in
+    "")
+      if ! _us_run; then
+        mk_die "$MK_EXIT_ERROR" "per-user setup stopped; it resumes at the next login (details: journalctl -t motanka)"
+      fi
+      ;;
+    --plan)
+      shift
+      _us_plan "$@"
+      ;;
+    -h | --help)
+      _us_usage
+      ;;
+    *)
+      mk_usage_error "unknown argument '$1'"
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,20 @@
+# Installed as /usr/lib/systemd/user/motanka-shell-integration.service by
+# motanka-core and wanted by motanka-session.target through the link
+# motanka-session.target.wants/motanka-shell-integration.service, so it runs
+# only in the Motanka session.
+#
+# At each login it runs "shell-integration ask", which returns at once when
+# the user has already been asked. Otherwise it waits for the desktop
+# shell's notification server and shows one notification with the buttons
+# "Enable" and "No thanks" (requirement 6.12). Only "Enable" changes a
+# shell rc file (6.6).
+[Unit]
+Description=Motanka session: ask once whether to enable shell integration
+Documentation=file:///usr/share/doc/motanka-core/README
+PartOf=motanka-session.target
+
+[Service]
+Type=exec
+ExecStart=/opt/motanka/libexec/motanka/shell-integration ask
+TimeoutStartSec=30
+TimeoutStopSec=10

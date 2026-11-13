@@ -1,0 +1,35 @@
+# user-scripts.tsv: Upstream's per-user setup scripts and whether Motanka's
+# per-user setup runs them (design.md, "Per-user setup", step 4). Installed
+# as /opt/motanka/share/motanka/user-scripts.tsv.
+#
+# One line per script that Upstream's install/user/all.sh runs at the pin,
+# in the same order, fields separated by tabs:
+#   <script>  <run|skip>  <reason>
+# <script> is relative to the vendored tree. The motanka-core build fails
+# when all.sh names a script that has no line here.
+#
+# A "run" script also has to pass the Call_Inventory at run time
+# (/opt/motanka/share/motanka/inventory.tsv, from compat/inventory/<pin>.tsv):
+# user-setup skips it, with a journal entry, when the inventory has an
+# arch-tool, arch-path, privileged or user-unit finding for it, or a
+# home-write finding outside the Namespaced_Paths (such a write would be an
+# unplanned home-folder change, 6.4). "skip" also covers writes the
+# inventory cannot see, such as paths built in variables or by programs
+# outside Upstream.
+install/user/theme.sh	skip	links ~/.config/btop/themes/current.theme, may delete ~/.config/chromium/SingletonLock, and omarchy-theme-set needs the running desktop
+install/user/chromium.sh	skip	writes native messaging host manifests into twelve browser profile folders under ~/.config, which other sessions use
+install/user/xcompose.sh	skip	writes ~/.XCompose, which GTK and X programs read in every session
+install/user/language.sh	skip	reads /etc/omarchy/language, which Ubuntu does not have; omarchy-language seed calls sudo and writes ~/.config/uwsm/env.d
+install/user/input-method.sh	skip	default/input-methods/configure.py --seed writes fcitx5 and environment files that the inventory cannot see
+install/user/mise-work.sh	skip	creates ~/Work and ~/Work/tries, outside the Namespaced_Paths
+install/user/hardware/asus/fix-audio-mixer.sh	skip	writes ~/.config/wireplumber and ~/.local/state/wireplumber, which every session of the user shares
+install/user/hardware/asus/fix-mic.sh	skip	runs alsactl store through sudo, which changes system state
+install/user/hardware/framework/fix-f13-amd-audio-input.sh	skip	changes the audio card profile, which wireplumber stores for every session
+install/user/hardware/dell/xps13-text-scaling.sh	skip	omarchy-display-text-size rewrites terminal configs and GNOME settings
+install/user/hardware/qualcomm/video-decode.sh	skip	Snapdragon (aarch64) only; Motanka supports amd64
+install/user/hardware/qualcomm/camera.sh	skip	Snapdragon (aarch64) only; Motanka supports amd64
+install/user/hardware/fix-nouveau-cursor.sh	skip	appends to ~/.config/hypr/looknfeel.lua after per-user setup wrote it, so the ledgered file would count as edited by the user
+install/user/hardware/vm-no-animations.sh	run	in a virtual machine copies two Upstream toggles into ~/.local/state/omarchy/toggles/hypr (namespaced)
+install/user/default-keyring.sh	skip	creates a default keyring in ~/.local/share/keyrings, which GNOME and KDE also use
+install/user/mise.sh	skip	mise reshim writes shims under ~/.local/share/mise, outside the Namespaced_Paths
+install/user/platform-setup.sh	run	runs omarchy-lifecycle-dispatch setup-user, a no-op on Ubuntu amd64 through Motanka's override

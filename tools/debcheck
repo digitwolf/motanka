@@ -6,8 +6,9 @@ Usage: tools/debcheck <file.deb>...
 Fails on:
   - any path outside the File layout table of
     .kiro/specs/motanka-layer/design.md (LAYOUT below), apart from the
-    symbolic link /usr/share/omarchy to /opt/motanka/share/omarchy
-    (SYMLINKS below), which fails if it is anything else;
+    symbolic link /usr/share/omarchy to the overlay
+    /opt/motanka/share/omarchy-view (SYMLINKS below), which fails if it is
+    anything else;
   - any entry under /etc/ld.so.conf.d, /etc/sudoers.d, /etc/profile.d or
     /etc/sysctl.d (requirements 3.12, 5.3, 8.8);
   - any setuid or setgid entry (3.11);
@@ -56,9 +57,11 @@ LAYOUT = (
 
 # Symbolic links allowed outside LAYOUT, with the one target each must
 # resolve to. Upstream hardcodes /usr/share/omarchy (design.md, spike S2),
-# so motanka-core ships it as a link to the vendored tree, and nothing else.
+# so motanka-core ships it as a link to the overlay omarchy-view, whose bin
+# is the Wrappers and whose other entries link into the vendored tree
+# (design.md, "Session findings"), and nothing else.
 SYMLINKS = {
-    "/usr/share/omarchy": "/opt/motanka/share/omarchy",
+    "/usr/share/omarchy": "/opt/motanka/share/omarchy-view",
 }
 
 FORBIDDEN_DIRS = (

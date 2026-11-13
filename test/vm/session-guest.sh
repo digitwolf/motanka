@@ -14,8 +14,9 @@
 # Phases, in the order the host runs them:
 #   prepare  install grim (the screenshot tool) and record the package list.
 #   install  apt-get install the local .debs; tools/debcheck on motanka-core;
-#            the session entry; /usr/share/omarchy links to the vendored
-#            tree, which is root-owned and writable by nobody else; the
+#            the session entry; /usr/share/omarchy links to the overlay
+#            omarchy-view (bin: the Wrappers; the rest: the vendored tree,
+#            which is root-owned and writable by nobody else); the
 #            Wrappers; the dconf profile and the compiled database (read
 #            with DCONF_PROFILE=motanka; the default profile does not see
 #            it); the target's .wants link; the portal file; the DEV_BUILD
@@ -57,7 +58,7 @@ ENV_LIST=$PREFIX/share/motanka/session-env.list
 DROPIN_DIR=/etc/systemd/system/getty@tty1.service.d
 DROPIN=$DROPIN_DIR/autologin.conf
 PROFILE=$HOME/.bash_profile
-APT=(sudo -E apt-get -q -y -o DPkg::Lock::Timeout=300)
+APT=(sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300)
 MOTANKA_PKGS=(motanka-core motanka-stack motanka-stack-hyprland motanka-stack-tools motanka-stack-libs
   motanka-stack-shell motanka-qt6)
 UID_=$(id -u)
@@ -195,10 +196,12 @@ phase_install() {
   fi
 
   target=$(readlink -f /usr/share/omarchy 2>/dev/null || true)
-  if [[ -L /usr/share/omarchy && $target == "$PREFIX/share/omarchy" ]]; then
-    pass "/usr/share/omarchy links to $PREFIX/share/omarchy"
+  if [[ -L /usr/share/omarchy && $target == "$PREFIX/share/omarchy-view" &&
+    $(readlink -f /usr/share/omarchy/bin) == "$PREFIX/bin" &&
+    $(readlink -f /usr/share/omarchy/default) == "$PREFIX/share/omarchy/default" ]]; then
+    pass "/usr/share/omarchy links to the overlay $PREFIX/share/omarchy-view (bin: the Wrappers)"
   else
-    fail "/usr/share/omarchy is not a link to $PREFIX/share/omarchy (resolves to '${target:-nothing}')"
+    fail "/usr/share/omarchy is not a link to the overlay $PREFIX/share/omarchy-view (resolves to '${target:-nothing}')"
   fi
   bad=$(sudo find "$PREFIX/share/omarchy" ! -type l \( ! -user root -o ! -group root -o -perm /022 \) -print 2>/dev/null | head -n 5 || true)
   if [[ -d $PREFIX/share/omarchy/bin && -z $bad ]]; then

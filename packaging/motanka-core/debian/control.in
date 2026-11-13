@@ -16,9 +16,11 @@ Depends: dbus-user-session,
          dconf-cli,
 #if noble
          motanka-stack (>= 0.1.0-1~ubuntu24.04.1),
+         motanka-stack-shell (>= 0.1.0-1~ubuntu24.04.1),
 #endif
 #if resolute
          motanka-stack (>= 0.1.0-1~ubuntu26.04.1),
+         motanka-stack-shell (>= 0.1.0-1~ubuntu26.04.1),
 #endif
          pkexec,
          python3,

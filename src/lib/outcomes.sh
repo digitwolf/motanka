@@ -1,5 +1,6 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2329 # library: its variables and functions are used by the files that source it
+# shellcheck disable=SC2088 # "~/" patterns and messages are literal text
 # Package_Map outcomes and Helper calls of the Compat_Layer (design.md,
 # "Wrappers, shims and the Helper").
 #

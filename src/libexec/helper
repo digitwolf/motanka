@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2119 # the ledger and guard functions take only optional arguments
 # helper: Motanka's one privileged program (design.md, "Wrappers, shims and
 # the Helper"; DESIGN.md, "Linux practices: Privilege"). Installed as
 # /opt/motanka/libexec/motanka/helper. The polkit action
@@ -386,7 +387,7 @@ _h_install_binary() {
   fi
   path=$(mk_path "$dest")
   dir=${path%/*}
-  mkdir -p -m 0755 -- "$dir" || return 1
+  (umask 022 && mkdir -p -- "$dir") || return 1
   tmp=$(mktemp "$dir/.motanka-binary.XXXXXX") || return 1
   if ! cat -- "$file" >"$tmp"; then
     rm -f -- "$tmp"

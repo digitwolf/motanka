@@ -184,6 +184,35 @@ echo "config=$XDG_CONFIG_HOME"
   assert_output ''
 }
 
+@test "omarchy-webapp-install takes Upstream's script from the vendored tree, not the Wrappers of /usr/share/omarchy" {
+  run grep -c '^  omarchy=/opt/motanka/share/omarchy$' "$O/omarchy-webapp-install"
+  assert_output 1
+}
+
+# --- omarchy-version --------------------------------------------------------
+
+@test "omarchy-version prints the stable pin's tag, else Upstream's version file" {
+  local up pin=$MOTANKA_ROOT/opt/motanka/share/motanka/upstream.pin
+  up=$(fake_upstream)
+  printf '4.0.0.alpha\n' >"$up/version"
+  export OMARCHY_PATH=$up
+  mkdir -p "${pin%/*}"
+  printf '# pin\nstable\t%s\tv4.5.0\t%064d\n' "$PIN" 0 >"$pin"
+  run bash "$O/omarchy-version"
+  assert_success
+  assert_output '4.5.0'
+  printf 'stable\t%s\t-\t%064d\n' "$PIN" 0 >"$pin"
+  run bash "$O/omarchy-version"
+  assert_success
+  assert_output '4.0.0.alpha'
+  rm "$pin" "$up/version"
+  run bash "$O/omarchy-version"
+  assert_failure 1
+  assert_output ''
+  run grep -v '^#' "$O/omarchy-version"
+  refute_output --partial pacman
+}
+
 # --- overrides for Arch tools and paths --------------------------------------
 
 @test "every unsupported override prints why, logs and exits 64" {

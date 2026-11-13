@@ -41,5 +41,6 @@ bin/omarchy-update-available	implemented	lists installed Motanka packages whose 
 bin/omarchy-update-keyring	implemented	checks that motanka-archive-keyring and its key file are installed; apt keeps the key current
 bin/omarchy-update-pkg-prune	implemented	no change: apt manages its own package cache on Ubuntu
 bin/omarchy-upgrade-to-quattro	unsupported	migrates an Arch installation to a new Upstream major version
+bin/omarchy-version	implemented	prints the vendored Upstream version: the stable pin's release tag without its "v", else Upstream's version file; never calls pacman
 bin/omarchy-version-channel	implemented	prints stable or edge from the suite of /etc/apt/sources.list.d/motanka.sources, or unknown
 bin/omarchy-webapp-install	implemented	runs Upstream's script with a staging home, adds OnlyShowIn=Motanka; to its desktop entry and writes the entry and icon through the User_Ledger

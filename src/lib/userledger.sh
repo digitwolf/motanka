@@ -151,6 +151,20 @@ _mk_ul_state() {
   fi
 }
 
+# mk_userledger_state <path>: the current state of a home-folder path, in
+# the ledger's notation: - (absent), a SHA-256, l:<SHA-256> for a link; or
+# dir or other, which never appear in the ledger. Per-user setup compares
+# it with a ledgered entry to resume (6.7).
+mk_userledger_state() {
+  local home
+  if ! _mk_ul_path_syntax_ok "$1" || [[ $1 == */ ]]; then
+    mk_error "invalid home-folder path '$1'"
+    return 1
+  fi
+  home=$(_mk_ul_home) || return 1
+  _mk_ul_state "$home/$1"
+}
+
 # _mk_ul_tmp <absolute-path>: the temporary name used to replace it.
 _mk_ul_tmp() {
   printf '%s/.%s.motanka-tmp\n' "${1%/*}" "${1##*/}"

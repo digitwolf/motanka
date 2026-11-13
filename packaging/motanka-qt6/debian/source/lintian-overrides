@@ -17,3 +17,5 @@ very-long-line-length-in-source-file
 # Qt's network tests quote RFC text as fixtures.
 license-problem-non-free-RFC
 license-problem-non-free-RFC-BCP78
+# qtbase's plugin-loader tests carry deliberately broken ELF objects.
+binary-with-bad-dynamic-table [qtbase/tests/*]

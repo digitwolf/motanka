@@ -48,7 +48,7 @@ SYSTEM_LIB_DIRS=(/lib /lib64 /usr/lib /usr/lib64 /lib/x86_64-linux-gnu /usr/lib/
 DROPIN_DIR=/etc/systemd/system/getty@tty1.service.d
 DROPIN=$DROPIN_DIR/autologin.conf
 PROFILE=$HOME/.bash_profile
-APT=(sudo -E apt-get -q -y -o DPkg::Lock::Timeout=300)
+APT=(sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300)
 
 # Quickshell test: a PanelWindow across the top of Virtual-1 (1280x800).
 # The pixel is sampled well below the top edge, where Hyprland draws its
@@ -114,10 +114,16 @@ is_elf() {
   [[ $(head -c 4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n') == 7f454c46 ]]
 }
 
+# A library in a subfolder of a system folder counts too when a package owns
+# it: Ubuntu's own libraries load private helpers from there through their
+# own RUNPATH (libproxy loads libproxy/libpxbackend-1.0.so).
 in_system_dir() {
   local d=${1%/*} s
   for s in "${SYSTEM_LIB_DIRS[@]}"; do
     [[ $d == "$s" ]] && return 0
+    if [[ $d == "$s"/* ]] && dpkg-query -S "$1" >/dev/null 2>&1; then
+      return 0
+    fi
   done
   return 1
 }

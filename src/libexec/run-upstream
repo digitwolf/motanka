@@ -7,29 +7,36 @@
 # usage: run-upstream <name> [arguments...]
 #
 # Sets, for the command and everything it starts:
-#   OMARCHY_PATH          /usr/share/omarchy (package-owned symlink to the vendored
-#                         Upstream in /opt/motanka/share/omarchy; Upstream treats any
-#                         other path as a development checkout)
+#   OMARCHY_PATH          /usr/share/omarchy, the package-owned link to the
+#                         overlay /opt/motanka/share/omarchy-view, whose bin is
+#                         /opt/motanka/bin (the Wrappers) and whose other
+#                         entries link into the vendored tree; Upstream
+#                         treats any other path as a development checkout
 #   PATH                  <overrides>:<shims>:<compat-bin>:<Upstream bin>:$PATH,
 #                         with earlier copies of these four folders removed
-#                         from $PATH, so nested calls do not grow it
+#                         from $PATH, so nested calls do not grow it.
+#                         <Upstream bin> is the vendored
+#                         /opt/motanka/share/omarchy/bin, not
+#                         $OMARCHY_PATH/bin, which holds the Wrappers.
 #   MOTANKA_UPSTREAM_CMD  <name>, the fallback the sudo dispatcher uses to
 #                         find its caller
-# and then runs overrides/<name> if it exists, otherwise Upstream's
-# bin/<name>, unchanged. The shims are therefore on PATH only below a
-# Wrapper; the session PATH has only /opt/motanka/bin (5.9, 7.14).
+# and then runs overrides/<name> if it exists, otherwise the vendored
+# Upstream bin/<name>, unchanged. The shims are therefore on PATH only below
+# a Wrapper; the session PATH has only /opt/motanka/bin (5.9, 7.14).
 #
 # Folders, next to this file when installed (/opt/motanka/libexec/motanka/)
 # or one level up in a source tree (src/): overrides/, shims/, compat-bin/
 # (bat runs batcat, fd runs fdfind: Ubuntu renames both commands).
 #
-# Test hook: MOTANKA_OMARCHY_PATH replaces /opt/motanka/share/omarchy.
+# Test hook: MOTANKA_OMARCHY_PATH replaces both the vendored tree and
+# OMARCHY_PATH (a tree without the overlay).
 #
 # Exit codes: the command's own; 2 usage; 126 not executable; 127 no such
 # Upstream command.
 set -euo pipefail
 
 readonly OMARCHY_DEFAULT=/usr/share/omarchy
+readonly VENDORED_DEFAULT=/opt/motanka/share/omarchy
 
 die() {
   local code=$1
@@ -53,10 +60,12 @@ shift
 
 omarchy=${MOTANKA_OMARCHY_PATH:-$OMARCHY_DEFAULT}
 omarchy=${omarchy%/}
+vendored=${MOTANKA_OMARCHY_PATH:-$VENDORED_DEFAULT}
+vendored=${vendored%/}
 overrides=$base/overrides
 shims=$base/shims
 compat=$base/compat-bin
-upstream_bin=$omarchy/bin
+upstream_bin=$vendored/bin
 
 # path_without <dir>...: $PATH without the entries equal to any argument.
 path_without() {

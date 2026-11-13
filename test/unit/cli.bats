@@ -76,9 +76,18 @@ motanka() {
   [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
 }
 
+@test "remove parses its options, then refuses to run without root with exit 11" {
+  if [[ $(id -u) -eq 0 ]]; then
+    skip "the tests run as root"
+  fi
+  motanka remove --purge --dry-run --yes
+  assert_failure 11
+  assert_output --partial 'must run as root'
+  [[ ! -e $MOTANKA_ROOT/var/lib/motanka && ! -e $MOTANKA_ROOT/run/motanka ]]
+}
+
 @test "valid options parse and the unfinished subcommands exit 2 'not implemented yet'" {
   local -a cmds=(
-    'remove --purge --dry-run --yes'
     'update --system --dry-run -y'
     'rollback --dry-run --yes'
     'doctor --json --fix'

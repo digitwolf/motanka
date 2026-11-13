@@ -1,0 +1,46 @@
+#!/bin/bash
+# omarchy-version: Motanka override of Upstream bin/omarchy-version.
+#
+# usage (as Upstream): omarchy-version
+#
+# Upstream prints the version of the installed omarchy package from
+# "pacman -Q omarchy", which has no counterpart on Ubuntu (design.md,
+# "Session findings"). This prints the version of the vendored Upstream
+# tree instead, without calling pacman:
+#   1. the release tag of the stable line of
+#      /opt/motanka/share/motanka/upstream.pin, without its leading "v"
+#      (the vendored tree is the stable pin; v4.5.0 prints 4.5.0);
+#   2. otherwise the first line of $OMARCHY_PATH/version (default
+#      /usr/share/omarchy), Upstream's own version file;
+#   3. otherwise nothing, and exit 1, as Upstream does when no package is
+#      installed.
+# The tag comes first because Upstream's version file lags its release
+# tags (it reads 4.0.0.alpha at v4.5.0).
+#
+# Test hook: MOTANKA_ROOT (src/lib/common.sh) is put in front of
+# /opt/motanka.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+pin=$(mk_path /opt/motanka/share/motanka/upstream.pin)
+if [[ -r $pin ]]; then
+  tag=$(awk -F'\t' '$1 == "stable" { print $3; exit }' "$pin")
+  if [[ -n $tag && $tag != - ]]; then
+    printf '%s\n' "${tag#v}"
+    exit 0
+  fi
+fi
+
+omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+version=""
+if [[ -r ${omarchy%/}/version ]]; then
+  IFS= read -r version <"${omarchy%/}/version" || true
+fi
+version=${version//[[:space:]]/}
+[[ -n $version ]] || exit 1
+printf '%s\n' "$version"

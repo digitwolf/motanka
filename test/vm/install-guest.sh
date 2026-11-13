@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2024 # redirects write the test logs as tester on purpose
 # Guest half of test/vm/tests/install.sh (task 11.4). Runs INSIDE a
 # throwaway test VM as user tester, who has passwordless sudo there. Never
 # run it on a real machine: it installs Motanka.

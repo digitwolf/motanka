@@ -32,7 +32,15 @@ source "$_base/lib/userledger.sh"
 # shellcheck source=../lib/outcomes.sh
 source "$_base/lib/outcomes.sh"
 
-upstream=${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-webapp-install
+# /usr/share/omarchy/bin holds the Wrappers (the overlay
+# /opt/motanka/share/omarchy-view), and the Wrapper of this command runs
+# this override, so Upstream's script is taken from the vendored tree.
+omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
+omarchy=${omarchy%/}
+if [[ $omarchy == /usr/share/omarchy ]]; then
+  omarchy=/opt/motanka/share/omarchy
+fi
+upstream=$omarchy/bin/omarchy-webapp-install
 if [[ ! -x $upstream ]]; then
   mk_error "Upstream's omarchy-webapp-install is missing at $upstream"
   exit 1

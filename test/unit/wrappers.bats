@@ -232,6 +232,15 @@ env_script() {
   assert_line "CMD=omarchy-env"
 }
 
+@test "run-upstream takes Upstream's bin from the vendored tree, since /usr/share/omarchy/bin is the Wrappers" {
+  run grep -x 'readonly VENDORED_DEFAULT=/opt/motanka/share/omarchy' "$SRC/libexec/run-upstream"
+  assert_success
+  run grep -x 'upstream_bin=$vendored/bin' "$SRC/libexec/run-upstream"
+  assert_success
+  run grep -x 'readonly OMARCHY_DEFAULT=/usr/share/omarchy' "$SRC/libexec/run-upstream"
+  assert_success
+}
+
 @test "bat and fd inside the Wrapper scope run batcat and fdfind" {
   local up
   up=$(fake_upstream)
@@ -246,7 +255,7 @@ env_script() {
 @test "the Compat_Layer's programs are executable in the repository" {
   local f
   local -a bad=()
-  for f in "$REPO"/tools/{vendor,genwrappers,checkoverrides} "$SRC"/libexec/{run-upstream,helper} \
+  for f in "$REPO"/tools/{vendor,genwrappers,checkoverrides} "$SRC"/libexec/{run-upstream,helper,user-setup,shell-integration} \
     "$SRC"/shims/* "$SRC"/overrides/* "$SRC"/compat-bin/*; do
     if [[ ! -x $f ]]; then
       bad+=("${f#"$REPO"/}")

@@ -1,0 +1,294 @@
+#!/bin/bash
+# shell-integration: the one-time question whether to enable shell
+# integration, and its answer (requirements 6.6, 6.12; design.md, owner
+# decision 4). Installed as /opt/motanka/libexec/motanka/shell-integration.
+#
+# usage: shell-integration ask       ask once (run at login by
+#                                    motanka-shell-integration.service)
+#        shell-integration accept    add the marked block to the rc file
+#        shell-integration decline   record the refusal; no file changes
+#        shell-integration status    print the recorded decision
+#
+# How the question is asked: motanka-shell-integration.service, wanted by
+# motanka-session.target, runs "ask" once the Motanka session has started.
+# "ask" waits up to 60 s for Upstream's notification server (the desktop
+# shell, through the Wrapper omarchy-notification-wait) and then shows one
+# notification through the Wrapper omarchy-notification-send with two
+# buttons: "Enable" runs "shell-integration accept", "No thanks" runs
+# "shell-integration decline". The notification stays until the user
+# answers or dismisses it. Once it was shown, "asked" is recorded and no
+# later login asks again (6.12); dismissing it leaves every rc file as it
+# is. When the notification server does not answer, nothing is recorded and
+# the next login asks. The same commands can be run in a terminal.
+#
+# The rc file is the one of the user's login shell (getent passwd): ~/.bashrc
+# for bash. Upstream's shell configuration exists for bash only, so other
+# login shells are recorded as "unsupported" and never asked.
+#
+# "accept" adds, through the User_Ledger (ledgered and backed up first,
+# replaced by write-then-rename; class shared), one block between
+# "# >>> motanka >>>" and "# <<< motanka <<<" to the rc file (6.6). The
+# block loads Upstream's bash configuration (/usr/share/omarchy/default/
+# bash/rc) only in interactive shells of the Motanka session
+# (XDG_CURRENT_DESKTOP=Motanka:Hyprland), so other sessions and SSH logins
+# are unaffected (DESIGN.md rule 3). "decline" changes no rc file. Neither
+# changes a decision already recorded as accepted.
+#
+# The decision is ~/.local/state/motanka/shell-integration, one line of
+# tab-separated fields:
+#   <asked|accepted|declined|unsupported>  <utc-time>  <rc file or ->
+# written to a temporary file and renamed.
+#
+# Test hooks: MOTANKA_ROOT (src/lib/common.sh) is put in front of
+# /opt/motanka. With MOTANKA_ROOT set, MOTANKA_LOGIN_SHELL replaces the
+# login shell from getent. flock and systemd-detect-virt are found through
+# PATH.
+#
+# Exit codes: 0 done (also when nothing was asked); 1 error or unsupported
+# shell for accept; 2 usage; 7 guard refused; 9 lock held for 30 s.
+set -euo pipefail
+
+readonly SI_PREFIX=/opt/motanka
+readonly SI_NOTIFY_WAIT=60
+readonly SI_LOCK_WAIT=30
+readonly SI_BLOCK_RC=/usr/share/omarchy/default/bash/rc
+
+_si_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_si_base=${_si_self%/*}
+if [[ ! -r $_si_base/lib/common.sh ]]; then
+  _si_base=${_si_base%/*}
+fi
+MK_CMD=shell-integration
+# shellcheck source=../lib/common.sh
+source "$_si_base/lib/common.sh"
+# shellcheck source=../lib/guard.sh
+source "$_si_base/lib/guard.sh"
+# shellcheck source=../lib/userledger.sh
+source "$_si_base/lib/userledger.sh"
+
+SI_WRAPPERS=$(mk_path "$SI_PREFIX/bin")
+# The installed path the notification buttons run.
+SI_PROGRAM=$(mk_path "$SI_PREFIX/libexec/motanka/shell-integration")
+if [[ ! -x $SI_PROGRAM ]]; then
+  SI_PROGRAM=$_si_self
+fi
+
+_si_usage() {
+  cat <<'EOF'
+usage: shell-integration ask       ask once whether to enable shell integration
+       shell-integration accept    enable it: one marked block in ~/.bashrc
+       shell-integration decline   do not enable it; no file changes
+       shell-integration status    print the recorded decision
+
+Shell integration loads the Omarchy-compatible bash configuration in
+terminals of the Motanka session only. To turn it off later, delete the
+lines from "# >>> motanka >>>" to "# <<< motanka <<<" in ~/.bashrc.
+EOF
+}
+
+# --- state -----------------------------------------------------------------
+
+_si_state_file() {
+  local state
+  state=$(mk_userledger_state_dir) || return 1
+  printf '%s/shell-integration\n' "$state"
+}
+
+# _si_decision: prints the recorded decision word, or nothing.
+_si_decision() {
+  local f line
+  f=$(_si_state_file) || return 1
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    printf '%s\n' "${line%%$'\t'*}"
+  fi
+}
+
+# _si_record <decision> <rc-file-or->
+_si_record() {
+  local f tmp
+  mk_userledger_init || return 1
+  f=$(_si_state_file) || return 1
+  tmp=$f.tmp
+  printf '%s\t%s\t%s\n' "$1" "$(mk_utc_now)" "$2" >"$tmp" || return 1
+  mk_fsync "$tmp" || return 1
+  mv -f -- "$tmp" "$f" || return 1
+  mk_fsync "${f%/*}" || return 1
+  mk_log info "shell integration: $1 (${2})"
+}
+
+# _si_login_shell: the user's login shell.
+_si_login_shell() {
+  local sh=""
+  if [[ -n ${MOTANKA_ROOT:-} && -n ${MOTANKA_LOGIN_SHELL:-} ]]; then
+    printf '%s\n' "$MOTANKA_LOGIN_SHELL"
+    return 0
+  fi
+  sh=$(getent passwd -- "$(id -un)" 2>/dev/null | awk -F: 'NF >= 7 { print $7; exit }') || sh=""
+  printf '%s\n' "${sh:-${SHELL:-}}"
+}
+
+# _si_rc_file: the home-relative rc file for the login shell; returns 1
+# for a shell without Upstream configuration.
+_si_rc_file() {
+  local sh
+  sh=$(_si_login_shell)
+  case ${sh##*/} in
+    bash)
+      printf '.bashrc\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_si_lock() {
+  local rt=${XDG_RUNTIME_DIR:-} fd
+  if [[ -z $rt || ! -d $rt ]]; then
+    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set or not a folder; run this inside your login session"
+  fi
+  if ! exec {fd}>>"$rt/motanka.lock"; then
+    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $rt/motanka.lock"
+  fi
+  if ! flock -w "$SI_LOCK_WAIT" "$fd"; then
+    mk_die "$MK_EXIT_LOCKED" "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock)"
+  fi
+}
+
+_si_guards() {
+  if ((EUID == 0)); then
+    mk_die "$MK_EXIT_ERROR" "shell integration is set up by the user it is for, not by root"
+  fi
+  mk_guard_protected_host
+  mk_guard_dev_build
+}
+
+# _si_notify <summary> <body>: a best-effort notification without buttons.
+_si_notify() {
+  if [[ -x $SI_WRAPPERS/omarchy-notification-send && -n ${WAYLAND_DISPLAY:-} ]]; then
+    "$SI_WRAPPERS/omarchy-notification-send" -u low "$1" "$2" >/dev/null 2>&1 || true
+  fi
+}
+
+# --- commands --------------------------------------------------------------
+
+_si_block_body() {
+  cat <<EOF
+# Motanka shell integration: Omarchy-compatible aliases, functions and
+# prompt in terminals of the Motanka session only. Delete this block to
+# turn it off.
+if [ "\${XDG_CURRENT_DESKTOP-}" = "Motanka:Hyprland" ] && [ -r $SI_BLOCK_RC ]; then
+  case \$- in
+    *i*) . $SI_BLOCK_RC ;;
+  esac
+fi
+EOF
+}
+
+_si_ask() {
+  local decision rc_rel
+  _si_guards
+  _si_lock
+  decision=$(_si_decision) || return 1
+  if [[ -n $decision ]]; then
+    mk_log info "shell integration was already decided ($decision); not asking again"
+    return 0
+  fi
+  if ! rc_rel=$(_si_rc_file); then
+    _si_record unsupported - || return 1
+    mk_log notice "shell integration is not offered for the login shell '$(_si_login_shell)': Upstream configures bash only"
+    return 0
+  fi
+  if [[ ! -x $SI_WRAPPERS/omarchy-notification-wait || ! -x $SI_WRAPPERS/omarchy-notification-send ]]; then
+    mk_warn "the notification Wrappers are missing in $SI_WRAPPERS; shell integration is asked at the next login"
+    return 0
+  fi
+  if ! "$SI_WRAPPERS/omarchy-notification-wait" "$SI_NOTIFY_WAIT" >/dev/null 2>&1; then
+    mk_log notice "the notification server did not answer within $SI_NOTIFY_WAIT s; shell integration is asked at the next login"
+    return 0
+  fi
+  if ! "$SI_WRAPPERS/omarchy-notification-send" -u critical \
+    "Shell integration" \
+    "Load the Omarchy-compatible bash setup in Motanka terminals? This adds one marked block to ~/$rc_rel; other sessions are not affected." \
+    --action "Enable" "$SI_PROGRAM" accept \
+    --action "No thanks" "$SI_PROGRAM" decline >/dev/null 2>&1; then
+    mk_log notice "the shell integration notification could not be sent; it is asked at the next login"
+    return 0
+  fi
+  _si_record asked "$rc_rel"
+}
+
+_si_accept() {
+  local decision rc_rel body home
+  _si_guards
+  _si_lock
+  if ! rc_rel=$(_si_rc_file); then
+    mk_error "shell integration needs bash as the login shell (yours is '$(_si_login_shell)'); Upstream configures bash only"
+    return 1
+  fi
+  decision=$(_si_decision) || return 1
+  home=${MK_HOME:-$HOME}
+  if [[ $decision == accepted ]] && grep -qxF -- "$MK_UL_BLOCK_BEGIN" "$home/$rc_rel" 2>/dev/null; then
+    mk_info "shell integration is already enabled in ~/$rc_rel"
+    return 0
+  fi
+  mk_userledger_init || return 1
+  body=$(mktemp -- "$(mk_userledger_state_dir)/shell-block.XXXXXX") || return 1
+  if ! _si_block_body >"$body"; then
+    rm -f -- "$body"
+    return 1
+  fi
+  if ! mk_userledger_block shared "$rc_rel" "$body"; then
+    rm -f -- "$body"
+    mk_error "could not add the shell integration block to ~/$rc_rel"
+    return 1
+  fi
+  rm -f -- "$body"
+  _si_record accepted "$rc_rel" || return 1
+  mk_info "shell integration enabled in ~/$rc_rel; it applies to new terminals"
+  _si_notify "Shell integration enabled" "New terminals in the Motanka session load it from ~/$rc_rel."
+}
+
+_si_decline() {
+  local decision rc_rel
+  _si_guards
+  _si_lock
+  decision=$(_si_decision) || return 1
+  if [[ $decision == accepted ]]; then
+    mk_info "shell integration stays enabled; to turn it off, delete the marked motanka block in your rc file"
+    return 0
+  fi
+  rc_rel=$(_si_rc_file) || rc_rel=-
+  _si_record declined "$rc_rel" || return 1
+  mk_info "shell integration not enabled; no shell rc file was changed"
+}
+
+_si_status() {
+  local f line
+  f=$(_si_state_file) || return 1
+  if [[ -r $f ]]; then
+    IFS= read -r line <"$f" || true
+    printf '%s\n' "$line"
+  else
+    printf 'not asked\n'
+  fi
+}
+
+main() {
+  local cmd=${1:-}
+  if (($# > 1)); then
+    mk_usage_error "unexpected argument '$2'"
+  fi
+  case $cmd in
+    ask) _si_ask || exit "$MK_EXIT_ERROR" ;;
+    accept) _si_accept || exit "$MK_EXIT_ERROR" ;;
+    decline) _si_decline || exit "$MK_EXIT_ERROR" ;;
+    status) _si_status || exit "$MK_EXIT_ERROR" ;;
+    -h | --help) _si_usage ;;
+    "") mk_usage_error "a command is required: ask, accept, decline or status" ;;
+    *) mk_usage_error "unknown command '$cmd'" ;;
+  esac
+}
+
+main "$@"

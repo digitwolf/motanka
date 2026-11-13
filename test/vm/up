@@ -7,6 +7,9 @@
 # SSH answers and cloud-init has finished, at most 600 s. Prints the VM name
 # as the last line on stdout; everything else goes to stderr. On failure the
 # serial console tail is printed and the overlay is deleted.
+#
+# Then brings the VM up to date with apt-get full-upgrade, unless
+# MOTANKA_VM_UPGRADE=0 (build and unit-test VMs need no current host).
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -34,6 +37,25 @@ if [[ ! -f $backing ]]; then
 fi
 
 mv_boot "$release" "$variant" "$backing"
+# Tests compare Fingerprints and the Installer refuses to upgrade a host
+# package (exit 5), so a test VM starts as an up-to-date host: the base
+# images are cloud images of their release day plus provisioning, and an
+# install from a stale image pulls archive updates (seen: libpcre2-8-0).
+if [[ ${MOTANKA_VM_UPGRADE:-1} == 1 ]]; then
+  mv_log "bringing $MV_BOOTED up to date (apt-get full-upgrade; MOTANKA_VM_UPGRADE=0 skips it)"
+  mv_ssh_args "$MV_BOOTED"
+  # sudo-rs (26.04) ignores sudo -E, so the variable goes through env.
+  if ! "${MV_SSH[@]}" 'sudo env DEBIAN_FRONTEND=noninteractive apt-get -q update &&
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y \
+      -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade' \
+    </dev/null >"$MV_VMS/$MV_BOOTED/upgrade.log" 2>&1; then
+    tail -n 20 "$MV_VMS/$MV_BOOTED/upgrade.log" >&2 || true
+    mv_die "apt-get full-upgrade failed in $MV_BOOTED"
+  fi
+  if [[ -n ${MOTANKA_VM_RESULTS:-} && -d ${MOTANKA_VM_RESULTS:-} ]]; then
+    cp -f "$MV_VMS/$MV_BOOTED/upgrade.log" "$MOTANKA_VM_RESULTS/$MV_BOOTED.upgrade.log" || true
+  fi
+fi
 mv_unregister "$MV_BOOTED"
 mv_log "ready: $MV_BOOTED (SSH on 127.0.0.1:$(<"$MV_VMS/$MV_BOOTED/ssh.port"))"
 printf '%s\n' "$MV_BOOTED"

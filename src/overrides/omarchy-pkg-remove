@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2119 # mk_sysledger_menu_installs takes only optional arguments
 # omarchy-pkg-remove: Motanka override of Upstream bin/omarchy-pkg-remove.
 #
 # usage (as Upstream): omarchy-pkg-remove

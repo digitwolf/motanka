@@ -9,4 +9,6 @@
 /compat/privileged.tsv
 /compat/home-paths.tsv
 /compat/migrations.tsv
+/compat/user-scripts.tsv
+/compat/inventory/
 keys/motanka-archive.asc

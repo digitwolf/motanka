@@ -310,24 +310,37 @@ PY
   refute_output --partial "$good:"
 }
 
-@test "the link /usr/share/omarchy to /opt/motanka/share/omarchy passes" {
+@test "the link /usr/share/omarchy to the overlay /opt/motanka/share/omarchy-view passes" {
   new_pkg motanka-core
   add /opt/motanka/share/omarchy/bin/omarchy-menu 0755
-  mkdir -p "$PKG/usr/share"
-  ln -s ../../opt/motanka/share/omarchy "$PKG/usr/share/omarchy"
+  add /opt/motanka/bin/omarchy-menu 0755
+  mkdir -p "$PKG/opt/motanka/share/omarchy-view" "$PKG/usr/share"
+  ln -s ../../bin "$PKG/opt/motanka/share/omarchy-view/bin"
+  ln -s ../omarchy/default "$PKG/opt/motanka/share/omarchy-view/default"
+  ln -s ../../opt/motanka/share/omarchy-view "$PKG/usr/share/omarchy"
   build
   debcheck "$DEB"
   assert_success
   assert_output ''
 }
 
-@test "an absolute link /usr/share/omarchy to /opt/motanka/share/omarchy passes" {
+@test "an absolute link /usr/share/omarchy to /opt/motanka/share/omarchy-view passes" {
   new_pkg motanka-core
   mkdir -p "$PKG/usr/share"
-  ln -s /opt/motanka/share/omarchy "$PKG/usr/share/omarchy"
+  ln -s /opt/motanka/share/omarchy-view "$PKG/usr/share/omarchy"
   build
   debcheck "$DEB"
   assert_success
+}
+
+@test "/usr/share/omarchy linking straight to the vendored tree fails" {
+  new_pkg motanka-core
+  mkdir -p "$PKG/usr/share"
+  ln -s ../../opt/motanka/share/omarchy "$PKG/usr/share/omarchy"
+  build
+  debcheck "$DEB"
+  assert_failure 1
+  assert_output --partial '/usr/share/omarchy: links to ../../opt/motanka/share/omarchy, not to /opt/motanka/share/omarchy-view'
 }
 
 @test "/usr/share/omarchy linking elsewhere fails" {
@@ -337,7 +350,7 @@ PY
   build
   debcheck "$DEB"
   assert_failure 1
-  assert_output --partial '/usr/share/omarchy: links to ../../opt/other, not to /opt/motanka/share/omarchy'
+  assert_output --partial '/usr/share/omarchy: links to ../../opt/other, not to /opt/motanka/share/omarchy-view'
 }
 
 @test "/usr/share/omarchy as a folder fails" {
@@ -346,7 +359,7 @@ PY
   build
   debcheck "$DEB"
   assert_failure 1
-  assert_output --partial '/usr/share/omarchy: must be a symbolic link to /opt/motanka/share/omarchy'
+  assert_output --partial '/usr/share/omarchy: must be a symbolic link to /opt/motanka/share/omarchy-view'
   assert_output --partial '/usr/share/omarchy/bin/omarchy-menu: outside the file layout'
 }
 
