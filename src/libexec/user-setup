@@ -14,12 +14,19 @@
 # src/lib/userledger.sh: ledgered before it happens, an existing file backed
 # up first, written to a temporary file and renamed; 6.2, 6.3, 6.11):
 #   1. Protected_Host and Dev_Build guards (exit 7), refusal as root, the
-#      per-user lock $XDG_RUNTIME_DIR/motanka.lock (flock -n, exit 9). A
+#      per-user lock $XDG_RUNTIME_DIR/motanka.lock (flock -n, exit 9), held
+#      until the run ends; the Remover's user phase takes the same lock
+#      (mk_userledger_lock), so the two never run at the same time. A
 #      User_Ledger whose last setup marker is setup-end means setup is
 #      complete: exit 0. Otherwise the time marker
 #      ~/.local/state/motanka/setup.marker is created (kept when resuming)
 #      and setup-begin is ledgered.
-#   2. Targets, each looked up in home-paths.tsv (first matching glob):
+#   2. The folders that hold the Namespaced_Paths (~/.config,
+#      ~/.config/dconf, ~/.local/share, ~/.local/state, ~/.cache) are
+#      created through the User_Ledger (mk_userledger_mkdir) where they are
+#      missing, so that a removal, which deletes the Namespaced_Paths,
+#      leaves no empty folder Motanka created. Then the targets, each
+#      looked up in home-paths.tsv (first matching glob):
 #        - every file and link of the vendored config/ tree, as ~/.config/<x>;
 #        - the Hyprland fragment ~/.local/state/omarchy/toggles/hypr/
 #          motanka-session.lua (from /opt/motanka/share/motanka/hypr/), which
@@ -43,7 +50,8 @@
 #      home-write finding outside the Namespaced_Paths. They run as Upstream
 #      runs them (bash -eE -c 'source <script>'), with OMARCHY_PATH=
 #      /usr/share/omarchy, /opt/motanka/bin (the Wrappers) first on PATH,
-#      stdin from /dev/null and at most 120 s each. A failing script is
+#      stdin from /dev/null, without the lock's descriptor and at most
+#      120 s each. A failing script is
 #      logged and does not stop setup. Each result is recorded in
 #      ~/.local/state/motanka/setup-scripts, so a resumed setup does not run
 #      a finished script again.
@@ -275,16 +283,14 @@ _us_plan() {
 
 # --- step 1 --------------------------------------------------------------
 
+# _us_lock: the per-user lock $XDG_RUNTIME_DIR/motanka.lock, held until
+# this process exits; the Remover's user phase takes the same lock
+# (mk_userledger_lock). Exits 9 when it is held, 1 when it cannot be taken.
 _us_lock() {
-  local rt=${XDG_RUNTIME_DIR:-} fd
-  if [[ -z $rt || ! -d $rt ]]; then
-    mk_die "$MK_EXIT_ERROR" "XDG_RUNTIME_DIR is not set or not a folder; per-user setup runs inside a login session"
-  fi
-  if ! exec {fd}>>"$rt/motanka.lock"; then
-    mk_die "$MK_EXIT_ERROR" "cannot open the lock file $rt/motanka.lock"
-  fi
-  if ! flock -n "$fd"; then
-    mk_die "$MK_EXIT_LOCKED" "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock is held)"
+  local rc=0
+  mk_userledger_lock || rc=$?
+  if ((rc != 0)); then
+    exit "$rc"
   fi
 }
 
@@ -320,6 +326,24 @@ _us_load_ledger() {
 }
 
 # --- step 2 --------------------------------------------------------------
+
+# _us_namespace_parents: the folders that hold the Namespaced_Paths
+# (~/.config, ~/.config/dconf, ~/.local/share, ~/.local/state, ~/.cache),
+# created through the User_Ledger when they are missing, before a target,
+# dconf or an Upstream script can create them unledgered. The Remover then
+# removes them again when they are empty once the Namespaced_Paths are gone.
+_us_namespace_parents() {
+  local root parent
+  local -A seen=()
+  for root in "${MK_UL_NAMESPACED[@]}"; do
+    parent=${root%/*}
+    if [[ -n ${seen["$parent"]+x} ]]; then
+      continue
+    fi
+    seen["$parent"]=1
+    mk_userledger_mkdir namespaced "$parent/" || return 1
+  done
+}
 
 # _us_resume_state <path> <current-state>: for a ledgered path, 0 if it
 # must be written (again), 1 if it is done or must be left alone. 2 if the
@@ -503,12 +527,14 @@ _us_scripts() {
     fi
     mk_log info "running Upstream's $rel"
     rc=0
+    # The script does not get the lock's descriptor, so a program it leaves
+    # running cannot keep the per-user lock after setup has ended.
     (
       cd -- "$HOME" || exit 1
       # shellcheck disable=SC2016 # $1 is expanded by the inner bash, as Upstream runs it
       OMARCHY_PATH=$US_VIEW OMARCHY_INSTALL=$US_VIEW/install OMARCHY_SETUP_CONTEXT=runtime \
         PATH="$US_WRAPPERS:$PATH" timeout "$US_SCRIPT_TIMEOUT" \
-        bash -eE -c 'source "$1"' bash "$US_VENDORED/$rel" </dev/null >&2
+        bash -eE -c 'source "$1"' bash "$US_VENDORED/$rel" </dev/null >&2 {MK_UL_LOCK_FD}>&-
     ) || rc=$?
     if ((rc == 0)); then
       _us_script_record "$rel" ok 0 || return 1
@@ -613,6 +639,7 @@ _us_run() {
   US_EMPTY=$US_STATE/empty
   : >"$US_EMPTY" || return 1
   chmod 0644 -- "$US_EMPTY" || return 1
+  _us_namespace_parents || return 1
   _us_apply_targets || return 1
   _us_interrupt_point targets
   _us_dconf || return 1

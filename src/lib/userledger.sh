@@ -21,13 +21,26 @@
 # into a backup and fsyncs it, then appends and fsyncs the ledger line, and
 # only then writes the new file to a temporary name next to the target
 # (.<name>.motanka-tmp) and renames it over the target (6.11).
+# mk_userledger_mkdir creates folders the same way, without a file.
 #
 # mk_userledger_revert walks the ledger in reverse (10.2) and restores the
 # earlier state (10.3). A path whose state is neither the "after" nor the
 # "before" state was edited by the user and moves to
 # ~/.local/state/motanka-removed-<date>/ first (10.4); for a marked block,
-# the block is cut out of the edited file instead (10.5). Every step checks
-# the current state, so a revert can be interrupted and run again.
+# the block is cut out of the edited file instead (10.5). An entry inside a
+# Namespaced_Path (other than the state folder) is deleted whatever its
+# state, never moved aside or restored: the Remover deletes those folders
+# whole (10.5), and programs of the session rewrite files in them (the
+# dconf database ~/.config/dconf/motanka is rewritten by dconf-service,
+# files under ~/.config/omarchy and ~/.local/state/omarchy by Upstream's
+# commands), which is no edit by the user. Every step checks the current
+# state, so a revert can be interrupted and run again.
+# mk_userledger_revert_plan takes the same decisions without changing
+# anything (the Remover's --dry-run).
+#
+# mk_userledger_lock takes the per-user lock $XDG_RUNTIME_DIR/motanka.lock
+# that per-user setup and the Remover's user phase share (exit code 9 when
+# it is held).
 #
 # The functions run as the user who owns the home folder. Home folder:
 # MK_HOME, or HOME. Requires common.sh.
@@ -40,11 +53,27 @@ MK_USERLEDGER_LOADED=1
 readonly MK_UL_STATE_REL=.local/state/motanka
 readonly MK_UL_BLOCK_BEGIN='# >>> motanka >>>'
 readonly MK_UL_BLOCK_END='# <<< motanka <<<'
+# Namespaced_Paths (requirements.md, Glossary), relative to the home folder.
+readonly -a MK_UL_NAMESPACED=(.config/dconf/motanka .config/omarchy .local/share/omarchy
+  .local/state/omarchy .local/state/motanka .cache/omarchy .cache/motanka)
 
 # Set by the _mk_ul_stage_* functions for the commit step.
 _MK_UL_ABS=""
 _MK_UL_SRC=""
 _MK_UL_TARGET=""
+
+# The descriptor of the per-user lock once mk_userledger_lock holds it.
+MK_UL_LOCK_FD=""
+
+# State of one reverse walk (_mk_ul_walk): the mode (apply or plan), the
+# home and state folders, and, in a plan, the simulated effect of the steps
+# so far: _MK_UL_SIM maps a path a step touched to "<state> TAB <content
+# file>", _MK_UL_TAKEN holds the motanka-removed-<date> destinations the
+# plan used, _MK_UL_TRIED the folders it listed.
+_MK_UL_MODE=apply
+_MK_UL_HOME=""
+_MK_UL_STATEDIR=""
+declare -gA _MK_UL_SIM=() _MK_UL_TAKEN=() _MK_UL_TRIED=()
 
 # --- paths and states ---------------------------------------------------
 
@@ -101,6 +130,18 @@ _mk_ul_in_state() {
 _mk_ul_is_state_ancestor() {
   local p=${1%/}
   [[ $p == .local || $p == .local/state || $p == "$MK_UL_STATE_REL" ]]
+}
+
+# _mk_ul_in_namespaced <path>: 0 if the path is a Namespaced_Path other
+# than the state folder, or inside one.
+_mk_ul_in_namespaced() {
+  local p=${1%/} root
+  for root in "${MK_UL_NAMESPACED[@]}"; do
+    if [[ $root != "$MK_UL_STATE_REL" ]] && [[ $p == "$root" || $p == "$root"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # _mk_ul_path_ok <path>: a path that an action may change.
@@ -355,10 +396,16 @@ _mk_ul_mkdir_private() {
 # _mk_ul_ensure_parents <class> <path>: creates missing parent folders of
 # <path>, each ledgered as "create <class> <folder>/" before its mkdir.
 _mk_ul_ensure_parents() {
-  local class=$1 rel=$2 home rest part prefix="" abs
+  [[ $2 == */* ]] || return 0
+  _mk_ul_ensure_dirs "$1" "${2%/*}"
+}
+
+# _mk_ul_ensure_dirs <class> <folder>: creates each missing folder of the
+# home-relative <folder> (no trailing /), from the top down, each ledgered
+# as "create <class> <folder>/" before its mkdir.
+_mk_ul_ensure_dirs() {
+  local class=$1 rest=$2 home part prefix="" abs
   home=$(_mk_ul_home) || return 1
-  [[ $rel == */* ]] || return 0
-  rest=${rel%/*}
   while [[ -n $rest ]]; do
     part=${rest%%/*}
     if [[ $rest == */* ]]; then
@@ -597,135 +644,270 @@ mk_userledger_block() {
   rm -f -- "$_MK_UL_SRC"
 }
 
-# --- revert -------------------------------------------------------------
-
-# _mk_ul_report <action> <path> [detail]: one line on stdout and in the
-# journal.
-_mk_ul_report() {
-  local IFS=$'\t'
-  printf '%s\n' "$*"
-  mk_log info "user ledger revert: $*"
+# mk_userledger_mkdir <class> <folder/>: creates the folder and each of its
+# missing parents inside the home folder. Every folder it creates is
+# ledgered as "create <class> <folder>/" before its mkdir, so a revert
+# removes it again when it is empty; folders that exist are not ledgered.
+mk_userledger_mkdir() {
+  local class=${1:-} rel=${2:-}
+  _mk_ul_class_ok "$class" || return 1
+  if ! _mk_ul_path_syntax_ok "$rel" || _mk_ul_in_state "$rel"; then
+    mk_error "invalid home-folder path '$rel'"
+    return 1
+  fi
+  mk_userledger_init || return 1
+  _mk_ul_ensure_dirs "$class" "${rel%/}"
 }
 
-# _mk_ul_move_aside <home> <path>: moves an edited path to
-# ~/.local/state/motanka-removed-<date>/<path>.
-_mk_ul_move_aside() {
-  local home=$1 rel=$2 root dest n=1
-  root=$home/.local/state/motanka-removed-$(date -u +%Y-%m-%d)
+# --- per-user lock ------------------------------------------------------
+
+# mk_userledger_lock: takes flock on $XDG_RUNTIME_DIR/motanka.lock without
+# waiting and keeps it until the process exits (MK_UL_LOCK_FD). Per-user
+# setup and the Remover's user phase take it for their whole run. Returns
+# 0; 9 (MK_EXIT_LOCKED) when another process holds it; 1 when
+# XDG_RUNTIME_DIR is not a folder or the lock file cannot be opened.
+mk_userledger_lock() {
+  local rt=${XDG_RUNTIME_DIR:-} fd
+  if [[ -n $MK_UL_LOCK_FD ]]; then
+    return 0
+  fi
+  if [[ -z $rt || ! -d $rt ]]; then
+    mk_error "XDG_RUNTIME_DIR is not set or not a folder; per-user Motanka operations run inside a login session"
+    return 1
+  fi
+  if ! exec {fd}>>"$rt/motanka.lock"; then
+    mk_error "cannot open the per-user lock $rt/motanka.lock"
+    return 1
+  fi
+  if ! flock -n "$fd"; then
+    exec {fd}>&-
+    mk_error "another per-user Motanka operation of $(id -un) is running (lock $rt/motanka.lock is held); try again when it has finished"
+    return "$MK_EXIT_LOCKED"
+  fi
+  MK_UL_LOCK_FD=$fd
+}
+
+# --- revert -------------------------------------------------------------
+
+# mk_userledger_revert and mk_userledger_revert_plan share one walk,
+# _mk_ul_walk, so a plan takes exactly the decisions a revert takes. The
+# step functions below act in apply mode; in plan mode they change nothing
+# and record their effect in _MK_UL_SIM and _MK_UL_TAKEN instead (see the
+# top), so later steps on the same paths see the simulated state.
+
+# _mk_ul_say <action> <path> [detail]: one result line on stdout; a revert
+# also writes it to the journal.
+_mk_ul_say() {
+  local IFS=$'\t'
+  printf '%s\n' "$*"
+  if [[ $_MK_UL_MODE == apply ]]; then
+    mk_log info "user ledger revert: $*"
+  fi
+}
+
+# _mk_ul_sim_get <path>: in a plan, prints the simulated entry of a path a
+# step touched. A path below one a step touched is absent: that path is no
+# folder any more. Returns 1 if no step touched the path or its ancestors.
+_mk_ul_sim_get() {
+  local p=$1
+  if [[ -n ${_MK_UL_SIM[$p]+x} ]]; then
+    printf '%s\n' "${_MK_UL_SIM[$p]}"
+    return 0
+  fi
+  while [[ $p == */* ]]; do
+    p=${p%/*}
+    if [[ -n ${_MK_UL_SIM[$p]+x} ]]; then
+      printf -- '-\t\n'
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _mk_ul_sim_set <path> <state> [content-file]
+_mk_ul_sim_set() {
+  _MK_UL_SIM[$1]="$2"$'\t'"${3:-}"
+}
+
+# _mk_ul_cur <path>: the state of a home-relative path; in a plan, after
+# the steps simulated so far.
+_mk_ul_cur() {
+  local e
+  if [[ $_MK_UL_MODE == plan ]] && e=$(_mk_ul_sim_get "$1"); then
+    printf '%s\n' "${e%%$'\t'*}"
+  else
+    _mk_ul_state "$_MK_UL_HOME/$1"
+  fi
+}
+
+# _mk_ul_sim_dir <path>: 0 if the home-relative path is a folder after the
+# steps simulated so far.
+_mk_ul_sim_dir() {
+  local abs=$_MK_UL_HOME/$1
+  [[ -d $abs && ! -L $abs ]] || return 1
+  [[ $_MK_UL_MODE == apply ]] || ! _mk_ul_sim_get "$1" >/dev/null
+}
+
+# _mk_ul_step_delete <path>: deletes a path that is there.
+_mk_ul_step_delete() {
+  if [[ $_MK_UL_MODE == apply ]]; then
+    rm -rf --one-file-system -- "${_MK_UL_HOME:?}/$1" || return 1
+  else
+    _mk_ul_sim_set "$1" -
+  fi
+  _mk_ul_say deleted "$1"
+}
+
+# _mk_ul_step_move_aside <path>: moves an edited path to
+# ~/.local/state/motanka-removed-<date>/<path> (.1, .2 ... when taken).
+_mk_ul_step_move_aside() {
+  local rel=$1 root dest n=1
+  root=$_MK_UL_HOME/.local/state/motanka-removed-$(date -u +%Y-%m-%d)
   dest=$root/$rel
-  while [[ -e $dest || -L $dest ]]; do
+  while [[ -e $dest || -L $dest || -n ${_MK_UL_TAKEN[$dest]+x} ]]; do
     dest=$root/$rel.$n
     n=$((n + 1))
   done
-  mkdir -p -- "${dest%/*}" || return 1
-  mv -T -- "$home/$rel" "$dest" || return 1
-  _mk_ul_report moved "$rel" "${dest#"$home"/}"
+  if [[ $_MK_UL_MODE == apply ]]; then
+    mkdir -p -- "${dest%/*}" || return 1
+    mv -T -- "$_MK_UL_HOME/$rel" "$dest" || return 1
+  else
+    _MK_UL_TAKEN[$dest]=1
+    _mk_ul_sim_set "$rel" -
+  fi
+  _mk_ul_say moved "$rel" "${dest#"$_MK_UL_HOME"/}"
 }
 
-# _mk_ul_restore <home> <state> <path> <before> <backup>: puts the earlier
-# state back: deletes the path, or copies the backup over it.
-_mk_ul_restore() {
-  local home=$1 state=$2 rel=$3 before=$4 backup=$5 abs tmp copy
-  abs=$home/$rel
+# _mk_ul_step_restore <path> <before> <backup>: puts the earlier state
+# back: deletes the path, or copies the backup over it.
+_mk_ul_step_restore() {
+  local rel=$1 before=$2 backup=$3 abs tmp copy cur
+  abs=$_MK_UL_HOME/$rel
   if [[ $before == - ]]; then
-    if [[ -e $abs || -L $abs ]]; then
-      rm -f -- "$abs" || return 1
-      _mk_ul_report deleted "$rel"
+    cur=$(_mk_ul_cur "$rel") || return 1
+    if [[ $cur != - ]]; then
+      _mk_ul_step_delete "$rel" || return 1
     fi
     return 0
   fi
-  copy=$state/backups/$backup/$rel
+  copy=$_MK_UL_STATEDIR/backups/$backup/$rel
   if [[ $backup == - || (! -e $copy && ! -L $copy) ]]; then
-    mk_error "backup of $rel is missing; left as it is"
+    if [[ $_MK_UL_MODE == apply ]]; then
+      mk_error "backup of $rel is missing; left as it is"
+    else
+      mk_warn "the backup of ~/$rel is missing; restoring the home folder will stop with an error"
+    fi
     return 1
   fi
-  mkdir -p -- "${abs%/*}" || return 1
-  tmp=$(_mk_ul_tmp "$abs")
-  rm -f -- "$tmp" || return 1
-  cp -P --preserve=mode,timestamps -- "$copy" "$tmp" || return 1
-  mv -fT -- "$tmp" "$abs" || return 1
-  _mk_ul_report restored "$rel"
+  if [[ $_MK_UL_MODE == apply ]]; then
+    mkdir -p -- "${abs%/*}" || return 1
+    tmp=$(_mk_ul_tmp "$abs")
+    rm -f -- "$tmp" || return 1
+    cp -P --preserve=mode,timestamps -- "$copy" "$tmp" || return 1
+    mv -fT -- "$tmp" "$abs" || return 1
+  else
+    _mk_ul_sim_set "$rel" "$before" "$copy"
+  fi
+  _mk_ul_say restored "$rel"
 }
 
-# _mk_ul_revert_object <home> <state> <path> <before> <after> <backup>
-_mk_ul_revert_object() {
-  local home=$1 state=$2 rel=$3 before=$4 after=$5 backup=$6 cur
-  cur=$(_mk_ul_state "$home/$rel") || return 1
+# _mk_ul_step_object <path> <before> <after> <backup>: a file or link.
+_mk_ul_step_object() {
+  local rel=$1 before=$2 after=$3 backup=$4 cur
+  cur=$(_mk_ul_cur "$rel") || return 1
   if [[ $cur == "$after" ]]; then
-    _mk_ul_restore "$home" "$state" "$rel" "$before" "$backup"
+    _mk_ul_step_restore "$rel" "$before" "$backup"
   elif [[ $cur == "$before" ]]; then
     return 0
   else
     if [[ $cur != - ]]; then
-      _mk_ul_move_aside "$home" "$rel" || return 1
+      _mk_ul_step_move_aside "$rel" || return 1
     fi
-    _mk_ul_restore "$home" "$state" "$rel" "$before" "$backup"
+    _mk_ul_step_restore "$rel" "$before" "$backup"
   fi
 }
 
-# _mk_ul_revert_block <home> <state> <path> <before> <after> <backup>
-_mk_ul_revert_block() {
-  local home=$1 state=$2 rel=$3 before=$4 after=$5 backup=$6 abs cur tmp
-  abs=$home/$rel
-  cur=$(_mk_ul_state "$abs") || return 1
+# _mk_ul_step_block <path> <before> <after> <backup>: a file with a marked
+# block. An edited file keeps the user's edits and loses the block.
+_mk_ul_step_block() {
+  local rel=$1 before=$2 after=$3 backup=$4 abs cur tmp e src sum
+  abs=$_MK_UL_HOME/$rel
+  cur=$(_mk_ul_cur "$rel") || return 1
   if [[ $cur == "$after" || $cur == - ]]; then
     if [[ $cur == - && $before == - ]]; then
       return 0
     fi
-    _mk_ul_restore "$home" "$state" "$rel" "$before" "$backup"
+    _mk_ul_step_restore "$rel" "$before" "$backup"
   elif [[ $cur == "$before" ]]; then
     return 0
-  elif [[ -f $abs && ! -L $abs ]]; then
-    tmp=$(_mk_ul_tmp "$abs")
-    rm -f -- "$tmp" || return 1
-    _mk_ul_strip_block "$abs" >"$tmp" || return 1
-    chmod --reference="$abs" -- "$tmp" || return 1
-    mv -fT -- "$tmp" "$abs" || return 1
-    _mk_ul_report block-removed "$rel"
+  elif [[ $cur =~ ^[0-9a-f]{64}$ ]]; then
+    # A regular file: only those have a bare SHA-256 as their state.
+    if [[ $_MK_UL_MODE == apply ]]; then
+      tmp=$(_mk_ul_tmp "$abs")
+      rm -f -- "$tmp" || return 1
+      _mk_ul_strip_block "$abs" >"$tmp" || return 1
+      chmod --reference="$abs" -- "$tmp" || return 1
+      mv -fT -- "$tmp" "$abs" || return 1
+    else
+      src=$abs
+      if e=$(_mk_ul_sim_get "$rel"); then
+        src=${e#*$'\t'}
+      fi
+      # The simulated content is <src> without its block: cutting the block
+      # again changes nothing, so <src> stays the content file.
+      sum=$(_mk_ul_strip_block "$src" | sha256sum) || return 1
+      _mk_ul_sim_set "$rel" "${sum:0:64}" "$src"
+    fi
+    _mk_ul_say block-removed "$rel"
   else
-    _mk_ul_report kept "$rel"
+    _mk_ul_say kept "$rel"
   fi
 }
 
-# _mk_ul_revert_dir <home> <path/>: removes a folder Motanka created if it
-# is empty; keeps it otherwise.
-_mk_ul_revert_dir() {
-  local home=$1 rel=$2 abs
-  abs=$home/${rel%/}
-  if [[ -d $abs && ! -L $abs ]]; then
-    if rmdir -- "$abs" 2>/dev/null; then
-      _mk_ul_report deleted "$rel"
-    else
-      _mk_ul_report kept "$rel"
+# _mk_ul_step_namespaced <path>: an entry inside a Namespaced_Path is
+# deleted if it is there, whatever its state (see the top).
+_mk_ul_step_namespaced() {
+  local cur
+  cur=$(_mk_ul_cur "$1") || return 1
+  if [[ $cur != - ]]; then
+    _mk_ul_step_delete "$1"
+  fi
+}
+
+# _mk_ul_step_dir <path/>: removes a folder Motanka created if it is empty
+# and keeps it otherwise. A plan cannot know whether the folder will be
+# empty then: it prints "rmdir <path/>" once for each folder there.
+_mk_ul_step_dir() {
+  local rel=$1 abs
+  abs=$_MK_UL_HOME/${rel%/}
+  if ! _mk_ul_sim_dir "${rel%/}"; then
+    return 0
+  fi
+  if [[ $_MK_UL_MODE == plan ]]; then
+    if [[ -z ${_MK_UL_TRIED[$rel]+x} ]]; then
+      _MK_UL_TRIED[$rel]=1
+      _mk_ul_say rmdir "$rel"
     fi
+  elif rmdir -- "$abs" 2>/dev/null; then
+    _mk_ul_say deleted "$rel"
+  else
+    _mk_ul_say kept "$rel"
   fi
   return 0
 }
 
-# mk_userledger_revert [--purge]: walks the User_Ledger in reverse and
-# restores every ledgered path. Prints one line per action on stdout:
-#   restored|deleted|kept|block-removed|unplanned <path>
-#   moved <path> <new path>
-# menu-desktop entries are kept and listed unless --purge is given (10.9);
-# unplanned entries are listed and left. When every entry was handled, the
-# state folder (ledger and backups) is deleted, then the folders on the way
-# to it that the ledger records as created. Returns 1 and keeps the ledger
-# if any entry failed, so the revert can be run again.
-mk_userledger_revert() {
-  local purge=0 home state ledger i failed=0 d
-  local verb rel before after backup
+# _mk_ul_walk <apply|plan> <purge:0|1>: the reverse walk of the
+# User_Ledger (see mk_userledger_revert and mk_userledger_revert_plan).
+_mk_ul_walk() {
+  local purge=$2 ledger i failed=0 d verb rel before after backup
   local -a lines=() deferred=()
-  case ${1:-} in
-    --purge) purge=1 ;;
-    "") ;;
-    *)
-      mk_error "mk_userledger_revert: unknown option '$1'"
-      return 1
-      ;;
-  esac
-  home=$(_mk_ul_home) || return 1
-  state=$home/$MK_UL_STATE_REL
-  ledger=$state/ledger
+  _MK_UL_MODE=$1
+  _MK_UL_SIM=()
+  _MK_UL_TAKEN=()
+  _MK_UL_TRIED=()
+  _MK_UL_HOME=$(_mk_ul_home) || return 1
+  _MK_UL_STATEDIR=$_MK_UL_HOME/$MK_UL_STATE_REL
+  ledger=$_MK_UL_STATEDIR/ledger
   if [[ -f $ledger ]]; then
     mapfile -t lines < <(mk_userledger_read "$ledger")
   fi
@@ -736,12 +918,12 @@ mk_userledger_revert() {
         continue
         ;;
       unplanned)
-        _mk_ul_report unplanned "$rel"
+        _mk_ul_say unplanned "$rel"
         continue
         ;;
       menu-desktop)
         if ((!purge)); then
-          _mk_ul_report kept "$rel"
+          _mk_ul_say kept "$rel"
           continue
         fi
         ;;
@@ -750,28 +932,91 @@ mk_userledger_revert() {
       if _mk_ul_is_state_ancestor "$rel"; then
         deferred+=("${rel%/}")
       else
-        _mk_ul_revert_dir "$home" "$rel" || failed=1
+        _mk_ul_step_dir "$rel" || failed=1
       fi
       continue
     fi
-    rm -f -- "$(_mk_ul_tmp "$home/$rel")" 2>/dev/null || true
-    if [[ $verb == block ]]; then
-      _mk_ul_revert_block "$home" "$state" "$rel" "$before" "$after" "$backup" || failed=1
+    if [[ $_MK_UL_MODE == apply ]]; then
+      rm -f -- "$(_mk_ul_tmp "$_MK_UL_HOME/$rel")" 2>/dev/null || true
+    fi
+    if _mk_ul_in_namespaced "$rel"; then
+      _mk_ul_step_namespaced "$rel" || failed=1
+    elif [[ $verb == block ]]; then
+      _mk_ul_step_block "$rel" "$before" "$after" "$backup" || failed=1
     else
-      _mk_ul_revert_object "$home" "$state" "$rel" "$before" "$after" "$backup" || failed=1
+      _mk_ul_step_object "$rel" "$before" "$after" "$backup" || failed=1
     fi
   done
   if ((failed)); then
-    mk_error "some ledgered paths could not be restored; the User_Ledger is kept in $state"
+    if [[ $_MK_UL_MODE == apply ]]; then
+      mk_error "some ledgered paths could not be restored; the User_Ledger is kept in $_MK_UL_STATEDIR"
+    fi
     return 1
   fi
-  if [[ -e $state || -L $state ]]; then
-    rm -rf -- "$state" || return 1
+  if [[ $_MK_UL_MODE == plan ]]; then
+    for d in "${deferred[@]}"; do
+      if [[ $d != "$MK_UL_STATE_REL" ]]; then
+        _mk_ul_step_dir "$d/"
+      fi
+    done
+    return 0
+  fi
+  if [[ -e $_MK_UL_STATEDIR || -L $_MK_UL_STATEDIR ]]; then
+    rm -rf -- "$_MK_UL_STATEDIR" || return 1
   fi
   for d in "${deferred[@]}"; do
-    if [[ -d $home/$d ]]; then
-      rmdir -- "$home/$d" 2>/dev/null || true
+    if [[ -d $_MK_UL_HOME/$d ]]; then
+      rmdir -- "$_MK_UL_HOME/$d" 2>/dev/null || true
     fi
   done
   return 0
+}
+
+# _mk_ul_purge_opt <function> [--purge]: prints 1 for --purge, 0 without.
+_mk_ul_purge_opt() {
+  local fn=$1
+  shift
+  if (($# > 1)); then
+    mk_error "$fn: unexpected argument '$2'"
+    return 1
+  fi
+  case ${1:-} in
+    --purge) printf '1\n' ;;
+    "") printf '0\n' ;;
+    *)
+      mk_error "$fn: unknown option '$1'"
+      return 1
+      ;;
+  esac
+}
+
+# mk_userledger_revert [--purge]: walks the User_Ledger in reverse and
+# restores every ledgered path. Prints one line per action on stdout,
+# fields separated by tabs:
+#   restored|deleted|kept|block-removed|unplanned <path>
+#   moved <path> <new path>
+# menu-desktop entries are kept and listed unless --purge is given (10.9);
+# unplanned entries are listed and left; entries inside a Namespaced_Path
+# are deleted. When every entry was handled, the state folder (ledger and
+# backups) is deleted, then the folders on the way to it that the ledger
+# records as created, if they are empty (no line for these). Returns 1 and
+# keeps the ledger if any entry failed, so the revert can be run again.
+mk_userledger_revert() {
+  local purge
+  purge=$(_mk_ul_purge_opt mk_userledger_revert "$@") || return 1
+  _mk_ul_walk apply "$purge"
+}
+
+# mk_userledger_revert_plan [--purge]: prints the lines
+# "mk_userledger_revert [--purge]" would print now, in the same order and
+# format, except that a folder Motanka created is printed once as
+# "rmdir <path/>" (where the revert prints deleted or kept, depending on
+# whether the folder is empty by then), and that the folders on the way to
+# the state folder are printed as "rmdir <path/>" too. Changes nothing: no
+# file, no ledger line, no temporary file. Returns 1, after a warning on
+# stderr, when the revert would fail (a missing backup).
+mk_userledger_revert_plan() {
+  local purge
+  purge=$(_mk_ul_purge_opt mk_userledger_revert_plan "$@") || return 1
+  _mk_ul_walk plan "$purge"
 }

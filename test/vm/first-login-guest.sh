@@ -245,6 +245,8 @@ phase_install() {
 
 # start_alice_session: tty1 autologin of alice, which runs the launcher once.
 start_alice_session() {
+  # $T arrives with the staging folder's mode 0700; alice must reach $AT.
+  chmod 0711 "$T"
   sudo install -d -o alice -g alice -m 0755 "$AT"
   sudo -u alice touch "$AT/launch"
   sudo mkdir -p "$DROPIN_DIR"

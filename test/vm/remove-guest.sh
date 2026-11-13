@@ -30,8 +30,11 @@
 #                         kill leaves them, and unledgered files inside the
 #                         Namespaced_Paths
 #   ledger-start          setup-begin and setup-end through the same
-#                         library, standing in for a first login when the
-#                         login is skipped
+#                         library, standing in for a first login only when
+#                         the login is skipped (the fallback of
+#                         roundtrip.sh); it fails when tester already has
+#                         a User_Ledger, for example from a real first
+#                         login
 #   other-ledger <user>   a User_Ledger in another user's home folder,
 #                         written as that user
 #   login                 automatic login of tester into the Motanka
@@ -359,8 +362,16 @@ phase_partial_setup() {
 # phase_ledger_start: when the first login is skipped, the User_Ledger that
 # per-user setup starts with (setup-begin and setup-end, through the same
 # library), so that Upstream commands run later find the folders it
-# records as created, as they would after a real first login.
+# records as created, as they would after a real first login. After a
+# real first login it would only add a second, empty setup run, and before
+# one it would make the real per-user setup find itself complete, so it
+# refuses when a User_Ledger exists.
 phase_ledger_start() {
+  local ul=$HOME/.local/state/motanka/ledger
+  if [[ -e $ul ]]; then
+    fail "ledger-start stands in for a skipped first login, but $ul exists already (a real per-user setup ran)"
+    return 0
+  fi
   # shellcheck disable=SC2016 # expanded by the inner shell
   if bash -c 'set -euo pipefail; source "$1/common.sh"; source "$1/userledger.sh"
     mk_userledger_setup_begin; mk_userledger_setup_end' _ "$HOME/motanka/src/lib" >"$L/ledger-start.log" 2>&1; then

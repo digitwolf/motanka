@@ -20,11 +20,16 @@
 # working tree (and reuses an earlier build of the same tree), so all
 # variants install the same .debs.
 #
-# The first login needs per-user setup (src/libexec/user-setup, shipped in
-# motanka-core) and a virgl GPU (MOTANKA_VM_GPU=gl, spike S3). Without
-# either, the login is skipped with a SKIP line saying why, per-user setup
-# is stood in for by starting the User_Ledger through its library, and the
-# theme switch runs without a session (OMARCHY_THEME_HEADLESS=1).
+# The round trip does the real first login (guest phase "login": the
+# session launcher runs per-user setup, then the theme switch runs inside
+# the session) whenever the installed motanka-core ships
+# /opt/motanka/libexec/motanka/user-setup, checked in each VM after the
+# install, and a virgl GPU is available (MOTANKA_VM_GPU=gl, spike S3).
+# Only as a fallback, when one of these is missing or with
+# MOTANKA_ROUNDTRIP_LOGIN=0, the login is skipped with SKIP lines saying
+# why, per-user setup is stood in for by starting the User_Ledger through
+# its library (guest phase "ledger-start", never used after a real login)
+# and the theme switch runs without a session (OMARCHY_THEME_HEADLESS=1).
 #
 # Per variant, from a fresh overlay:
 #   serve, snapshot "before", Fingerprint "before", install, (multiuser:
@@ -88,18 +93,27 @@ if [[ -n ${MOTANKA_ROUNDTRIP_VARIANTS:-} ]]; then
   done
 fi
 
+GUEST_USER_SETUP=/opt/motanka/libexec/motanka/user-setup
+
+# The real first login runs unless it cannot: these reasons apply to every
+# variant; run_variant also checks, after the install, that motanka-core
+# ships per-user setup ($GUEST_USER_SETUP).
 login=1
 reason=""
 if [[ ${MOTANKA_ROUNDTRIP_LOGIN:-1} == 0 ]]; then
   login=0 reason="MOTANKA_ROUNDTRIP_LOGIN=0"
-elif [[ ! -f $MV_REPO/src/libexec/user-setup ]]; then
-  login=0 reason="per-user setup (src/libexec/user-setup) is not part of motanka-core yet"
 elif [[ ! -r $MV_GL_RENDER_NODE || ! -w $MV_GL_RENDER_NODE ]]; then
   login=0 reason="MOTANKA_VM_GPU=gl needs read and write access to $MV_GL_RENDER_NODE"
 fi
-if ((login == 0)); then
-  mv_log "SKIP: first login into the Motanka session: $reason."
+
+# skip_login <why>: the SKIP lines of the fallback without a login.
+skip_login() {
+  mv_log "SKIP: first login into the Motanka session: $1."
   mv_log "SKIP: the round trip runs without a login: the User_Ledger is started through its library and the theme switch runs headless."
+}
+
+if ((login == 0)); then
+  skip_login "$reason"
 fi
 
 # --- packages and repository ----------------------------------------------------
@@ -181,14 +195,14 @@ fp_equal() {
 }
 
 run_variant() {
-  local variant=$1 label tvm fp_before fp_pre fp_after logged_in=0
+  local variant=$1 label tvm fp_before fp_pre fp_after logged_in=0 do_login=$login rc=0
   local -a others=()
   label=$release-$variant
   if [[ $variant == multiuser ]]; then
     others=(alice)
   fi
   if ((login)); then
-    mv_log "=== $label (with the first login)"
+    mv_log "=== $label (with the first login, if motanka-core ships per-user setup)"
   else
     mv_log "=== $label (first login skipped)"
   fi
@@ -220,7 +234,19 @@ run_variant() {
   if ((${#others[@]} > 0)); then
     guest_phase "$tvm" "$label" other-ledger "${others[@]}" || true
   fi
-  if ((login)); then
+  if ((do_login)); then
+    "$MV_LIB_DIR/run" "$tvm" -- test -x "$GUEST_USER_SETUP" </dev/null >/dev/null 2>&1 || rc=$?
+    if ((rc == 0)); then
+      pass "$label: the installed motanka-core ships $GUEST_USER_SETUP; the round trip logs in for real"
+    elif ((rc == 1)); then
+      do_login=0
+      skip_login "$label: the installed motanka-core does not ship $GUEST_USER_SETUP"
+    else
+      do_login=0
+      fail "$label: cannot check for $GUEST_USER_SETUP in the VM (test/vm/run exit $rc)"
+    fi
+  fi
+  if ((do_login)); then
     if guest_phase "$tvm" "$label" login; then
       logged_in=1
     fi
@@ -230,7 +256,7 @@ run_variant() {
   fi
   guest_phase "$tvm" "$label" menu-install || true
   guest_phase "$tvm" "$label" webapp || true
-  if ((login)); then
+  if ((do_login)); then
     guest_phase "$tvm" "$label" logout || true
     if ((!logged_in)); then
       mv_log "note: $label: the login phase failed; the round trip continues after logout"

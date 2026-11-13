@@ -50,28 +50,28 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [x] 4. Checkpoint — review spike results; stop for the owner's decision if S1 found no approach that keeps the rules
   - _Requirements: 1.1, 8.1_
 
-- [ ] 5. Packaging foundations
-- [ ] 5.1 Build VM with per-release chroots
+- [x] 5. Packaging foundations
+- [x] 5.1 Build VM with per-release chroots
   - Create `test/vm/build` and `packaging/build.sh`: a build VM with `sbuild` chroots for `noble` and `resolute`, `dpkg-buildflags` hardening, `SOURCE_DATE_EPOCH`, `lintian`
   - _Requirements: 1.2, 14.1_
-- [ ] 5.2 Package content check
+- [x] 5.2 Package content check
   - Create `tools/debcheck` and `test/unit/debcheck.bats`: fail on paths outside the design's file layout, setuid, setgid, capabilities, and files under `/etc/ld.so.conf.d`, `/etc/sudoers.d`, `/etc/profile.d`, `/etc/sysctl.d`
   - _Requirements: 3.3, 3.4, 3.11, 3.12, 5.3, 8.8_
-- [ ] 5.3 Keyring and source packages
+- [x] 5.3 Keyring and source packages
   - Create `packaging/motanka-archive-keyring/` (key, apt pin) and `packaging/motanka-source/` (four suites, deb822, `Signed-By`, mutual conflicts)
   - Build in the build VM with a test key
   - _Requirements: 4.3, 4.4, 4.6_
-- [ ] 5.4 Local repo tooling
+- [x] 5.4 Local repo tooling
   - Create `chumak/build-repo`: `dists/` with `by-hash`, signed `InRelease`, `Valid-Until` 14 days, Origin `Motanka`, four suites; `test/vm/tests/repo.sh` installs the keyring from it in a 26.04 VM
   - _Requirements: 4.2, 4.7, 3.6, 9.3_
-- [ ] 5.5 Metapackage and version scheme
+- [x] 5.5 Metapackage and version scheme
   - Create `packaging/motanka/`, `packaging/version.sh` and `test/unit/version.bats` comparing `noble` and `resolute` versions with `dpkg --compare-versions`
   - _Requirements: 1.2, 11.6_
 
 - [ ] 6. Checkpoint — run `test/run-all`, stop for questions
   - _Requirements: 13.1_
 
-- [ ] 7. Stack packages (approach from S1)
+- [x] 7. Stack packages (approach from S1)
 - [x] 7.1 `motanka-stack-libs`
   - Create `packaging/motanka-stack-libs/` and `stack/versions.tsv`; build for both releases in the build VM; RUNPATH only
   - _Requirements: 3.4, 3.5, 8.1, 8.2_
@@ -81,14 +81,14 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [x] 7.3 `motanka-stack-tools`, AppArmor profiles and `motanka-stack`
   - Create `packaging/motanka-stack-tools/`, `packaging/motanka-stack/`, profiles under `packaging/*/apparmor/`
   - _Requirements: 8.7, 8.8_
-- [ ] 7.4 Stack test on both releases
+- [x] 7.4 Stack test on both releases
   - Create `test/vm/tests/stack.sh`: start the Stack compositor in 26.04 and 24.04 VMs, check library paths resolve under `/opt/motanka` and `LD_LIBRARY_PATH` is unset
   - _Requirements: 1.3, 5.14, 8.2, 8.5_
 
-- [ ] 7.5 `motanka-qt6` for 24.04 (added after spike S1)
+- [x] 7.5 `motanka-qt6` for 24.04 (added after spike S1)
   - Create `packaging/motanka-qt6/` and its component list: Qt 6.10.2 qtbase, qtshadertools, qtsvg, qtdeclarative, qtwayland built with GCC 16 under `/opt/motanka`, noble only; build in the build VM (noble chroot)
   - _Requirements: 3.4, 3.5, 8.1, 8.2_
-- [ ] 7.6 `motanka-stack-shell` (Quickshell) for both releases (added after spike S1)
+- [x] 7.6 `motanka-stack-shell` (Quickshell) for both releases (added after spike S1)
   - Create `packaging/motanka-stack-shell/`: cpptrace 1.0.4 with libunwind and libdwarf-lite as an orig component, Quickshell 0.3.2; against `motanka-qt6` on noble and the archive Qt on resolute; extend `test/vm/tests/stack.sh` to start `quickshell --version` and a trivial shell config in the session
   - _Requirements: 1.3, 3.4, 8.1, 8.2_
 

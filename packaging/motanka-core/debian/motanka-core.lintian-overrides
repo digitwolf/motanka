@@ -6,7 +6,6 @@ dir-or-file-in-opt
 breakout-link
 # The CLI's manual page is task 24.5.
 no-manual-page
-binary-without-manpage
 # Everything below concerns /opt/motanka/share/omarchy: upstream Omarchy,
 # shipped byte for byte at the pinned commit (requirement 7.1). Motanka does
 # not change its shebangs, modes, scripts or bundled assets. Upstream

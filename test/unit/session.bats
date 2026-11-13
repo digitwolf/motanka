@@ -281,6 +281,25 @@ env_now() {
   assert_success
 }
 
+@test "a virtio GPU on its PCI function (kernel 7.0 layout) is supported" {
+  rm -rf "$MOTANKA_ROOT/sys/class/drm/card0"
+  gpu card0 virtio-pci
+  mkdir -p "$MOTANKA_ROOT/sys/class/drm/card0/device/virtio2"
+  ln -sfn ../../../../bus/virtio/drivers/virtio_gpu "$MOTANKA_ROOT/sys/class/drm/card0/device/virtio2/driver"
+  session
+  assert_success
+  run grep -F 'GPU: card0 (virtio_gpu)' "$S/journal"
+  assert_success
+}
+
+@test "a PCI virtio device without a virtio GPU driver is not supported" {
+  rm -rf "$MOTANKA_ROOT/sys/class/drm/card0"
+  gpu card0 virtio-pci
+  session
+  assert_failure 12
+  assert_output --partial 'the GPU driver of card0 (virtio-pci) is not supported'
+}
+
 @test "every supported driver starts the session" {
   local d
   for d in i915 xe amdgpu radeon nouveau virtio_gpu; do

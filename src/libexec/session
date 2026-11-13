@@ -484,6 +484,28 @@ _s_nvidia_version() {
   fi
 }
 
+# _s_card_driver <card>: the kernel driver that runs a DRM card, or "none".
+# Usually the card's parent device carries it. With kernel 7.0 a virtio GPU
+# card hangs off the PCI function (driver virtio-pci), and virtio_gpu is
+# bound to the virtio device below it (.../0000:00:03.0/virtio2).
+_s_card_driver() {
+  local card=$1 drv=none link v
+  if [[ -L $card/device/driver ]]; then
+    link=$(readlink -- "$card/device/driver") || link=""
+    drv=${link##*/}
+    drv=${drv:-none}
+  fi
+  if [[ $drv == virtio-pci ]]; then
+    for v in "$card"/device/virtio*/driver; do
+      if [[ -L $v ]] && link=$(readlink -- "$v"); then
+        drv=${link##*/}
+        break
+      fi
+    done
+  fi
+  printf '%s\n' "$drv"
+}
+
 # _s_check_gpu: step 3.
 _s_check_gpu() {
   local drm card name drv ver major
@@ -494,11 +516,7 @@ _s_check_gpu() {
     if [[ ! $name =~ ^card[0-9]+$ ]]; then
       continue
     fi
-    drv=none
-    if [[ -L $card/device/driver ]]; then
-      drv=$(readlink -- "$card/device/driver") || drv=none
-      drv=${drv##*/}
-    fi
+    drv=$(_s_card_driver "$card")
     if [[ " $S_DRIVERS " == *" $drv "* ]]; then
       supported+=("$name ($drv)")
     elif [[ $drv == nvidia ]]; then

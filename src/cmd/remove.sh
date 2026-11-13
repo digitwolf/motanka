@@ -42,13 +42,17 @@
 #   8. a real run asks for confirmation (or --yes), creates
 #      /run/motanka/remover.active and writes run-begin remove and one plan
 #      line per package to the System_Ledger (when it exists)
-#   9. user phase, as the invoking user (setpriv): Flatpak apps from menus
+#   9. user phase, as the invoking user (setpriv), holding the per-user
+#      lock $XDG_RUNTIME_DIR/motanka.lock that per-user setup holds while
+#      it runs (exit 9 when it is held): Flatpak apps from menus
 #      (uninstalled only with --purge), the User_Ledger walked in reverse
 #      (mk_userledger_revert: unchanged files restored or deleted, edited
 #      files moved to ~/.local/state/motanka-removed-<date>/, marked blocks
-#      removed, created folders removed when empty), then the
+#      removed, entries inside Namespaced_Paths deleted whatever their
+#      state, created folders removed when empty), then the
 #      Namespaced_Paths, empty folders the ledger records as created, and
-#      complete marked blocks left in shell rc files (10.2-10.5). If it
+#      complete marked blocks left in shell rc files (10.2-10.5). The dry
+#      run lists the same walk through mk_userledger_revert_plan. If it
 #      fails, the Remover stops (exit 1) before any package changes.
 #  10. dpkg --configure for unconfigured motanka-* packages only;
 #      dpkg --purge --force-remove-reinstreq for half-installed ones
@@ -60,13 +64,14 @@
 # Other users' home folders are listed and never touched (10.13). The
 # Remover never runs apt-get update and downloads nothing (10.11).
 #
-# /var/lib/motanka and motanka-core's postrm: the Remover reads a copy of
-# the System_Ledger taken in step 6 and keeps that copy up to date, so it
-# works whether or not "postrm purge" deletes /var/lib/motanka. The postrm
-# behaviour requested from the owner of packaging/motanka-core is: leave
-# /var/lib/motanka alone while /run/motanka/remover.active exists (the
-# Remover archives and deletes it itself), otherwise archive the ledger to
-# /var/log/motanka-ledger-<date> and delete the folder.
+# /var/lib/motanka and motanka-core's postrm: from step 8 until it exits,
+# the Remover keeps /run/motanka/remover.active (holding its PID), and
+# motanka-core's "postrm purge" leaves /var/lib/motanka alone while that
+# file exists; the Remover archives and deletes the folder itself in step
+# 13. Without the file (motanka-core purged with apt directly) the postrm
+# archives the ledger to /var/log/motanka-ledger-<date> and deletes the
+# folder. The Remover also reads a copy of the System_Ledger taken in step
+# 6 and keeps that copy up to date, so it works in either case.
 #
 # Exit codes: 0 removed (or dry run); 1 error; 2 usage; 5 purging the
 # Motanka packages would remove a package Motanka does not own, or the
@@ -105,9 +110,9 @@ readonly MK_RM_PREFIX=/opt/motanka
 readonly MK_RM_UL_STATE=.local/state/motanka
 readonly MK_RM_USER_PATH=/usr/sbin:/usr/bin:/sbin:/bin
 readonly MK_RM_FLATPAK_RE='^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$'
-# Namespaced_Paths (requirements.md, Glossary).
-readonly -a MK_RM_NAMESPACED=(.config/dconf/motanka .config/omarchy .local/share/omarchy
-  .local/state/omarchy .local/state/motanka .cache/omarchy .cache/motanka)
+# Namespaced_Paths (requirements.md, Glossary), as the User_Ledger library
+# lists them.
+readonly -a MK_RM_NAMESPACED=("${MK_UL_NAMESPACED[@]}")
 # Shell rc files that may hold a marked block (6.6).
 readonly -a MK_RM_RC_FILES=(.bashrc .zshrc .profile .bash_profile .zprofile .config/fish/config.fish)
 
@@ -124,6 +129,8 @@ MK_RM_MOTANKA=() MK_RM_CONFIGURE=() MK_RM_FORCE=()
 MK_RM_FOREIGN=() MK_RM_CHECKED=() MK_RM_KEPT=() MK_RM_BINARIES=() MK_RM_OTHERS=()
 # Filled by _mk_rm_user_read in the user phase.
 _MK_RM_U_MENU=() _MK_RM_U_DIRS=() _MK_RM_U_FLATPAKS=() _MK_RM_U_BLOCKS=()
+# Paths the planned User_Ledger walk deletes or moves (_mk_rm_user_plan).
+declare -gA _MK_RM_U_GONE=()
 MK_RM_U_PURGE=0
 
 mk_remove_usage() {
@@ -843,100 +850,6 @@ _mk_rm_user_read() {
   done < <(mk_userledger_read "$ledger")
 }
 
-# --- adapter: User_Ledger plan ----------------------------------------------
-# REQUESTED from the owner of src/lib/userledger.sh:
-#   mk_userledger_revert_plan [--purge]
-#     prints on stdout the lines "mk_userledger_revert [--purge]" would
-#     print, in the same order and format, plus "rmdir <path/>" for a
-#     created folder it would try to remove, and changes nothing.
-# Until the library has it, _mk_rm_ul_plan_fallback mirrors the reverse
-# walk of mk_userledger_revert with the library's own state helpers
-# (_mk_ul_state, _mk_ul_is_state_ancestor, MK_UL_STATE_REL).
-
-_mk_rm_ul_plan() {
-  if declare -F mk_userledger_revert_plan >/dev/null; then
-    mk_userledger_revert_plan "$@"
-  else
-    _mk_rm_ul_plan_fallback "$@"
-  fi
-}
-
-# _mk_rm_ul_plan_restore <home> <path> <before>
-_mk_rm_ul_plan_restore() {
-  if [[ $3 == - ]]; then
-    if [[ -e $1/$2 || -L $1/$2 ]]; then
-      printf 'deleted\t%s\n' "$2"
-    fi
-  else
-    printf 'restored\t%s\n' "$2"
-  fi
-}
-
-_mk_rm_ul_plan_fallback() {
-  local purge=0 home ledger i verb rel before after cur abs day
-  local -a lines=()
-  if [[ ${1:-} == --purge ]]; then
-    purge=1
-  fi
-  home=${MK_HOME:-${HOME:-}}
-  home=${home%/}
-  ledger=$home/$MK_UL_STATE_REL/ledger
-  if [[ -f $ledger ]]; then
-    mapfile -t lines < <(mk_userledger_read "$ledger" 2>/dev/null)
-  fi
-  day=$(date -u +%Y-%m-%d)
-  for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
-    IFS=$'\t' read -r _ _ verb _ rel before after _ <<<"${lines[i]}"
-    case $verb in
-      setup-begin | setup-end)
-        continue
-        ;;
-      unplanned)
-        printf 'unplanned\t%s\n' "$rel"
-        continue
-        ;;
-      menu-desktop)
-        if ((!purge)); then
-          printf 'kept\t%s\n' "$rel"
-          continue
-        fi
-        ;;
-    esac
-    if [[ $rel == */ ]]; then
-      if ! _mk_ul_is_state_ancestor "$rel" && [[ -d $home/${rel%/} ]]; then
-        printf 'rmdir\t%s\n' "$rel"
-      fi
-      continue
-    fi
-    abs=$home/$rel
-    cur=$(_mk_ul_state "$abs") || continue
-    if [[ $verb == block ]]; then
-      if [[ $cur == "$after" || $cur == - ]]; then
-        if [[ $cur == - && $before == - ]]; then
-          continue
-        fi
-        _mk_rm_ul_plan_restore "$home" "$rel" "$before"
-      elif [[ $cur == "$before" ]]; then
-        continue
-      elif [[ -f $abs && ! -L $abs ]]; then
-        printf 'block-removed\t%s\n' "$rel"
-      else
-        printf 'kept\t%s\n' "$rel"
-      fi
-    elif [[ $cur == "$after" ]]; then
-      _mk_rm_ul_plan_restore "$home" "$rel" "$before"
-    elif [[ $cur != "$before" ]]; then
-      if [[ $cur != - ]]; then
-        printf 'moved\t%s\t%s\n' "$rel" ".local/state/motanka-removed-$day/$rel"
-      fi
-      if [[ $before != - ]]; then
-        printf 'restored\t%s\n' "$rel"
-      fi
-    fi
-  done
-}
-# --- end of adapter -----------------------------------------------------------
-
 # _mk_rm_user_line <plan|apply> <verb> <path> [detail]: one report line for
 # a line of the User_Ledger walk.
 _mk_rm_user_line() {
@@ -1029,7 +942,10 @@ _mk_rm_rc_blocks() {
 
 # _mk_rm_namespaced <home> <plan|apply> <purge>: deletes the
 # Namespaced_Paths except ~/.local/state/motanka (the ledger walk deletes
-# it). Without --purge, files installed from menus inside them stay.
+# it). Without --purge, files installed from menus inside them stay. It
+# runs after the ledger walk, which deletes the ledgered entries inside
+# them already; a plan leaves out a Namespaced_Path that the planned walk
+# deletes (_MK_RM_U_GONE), as the real run finds it gone.
 _mk_rm_namespaced() {
   local home=$1 mode=$2 purge=$3 root abs k p rel n
   local -A keep=() anc=()
@@ -1055,6 +971,9 @@ _mk_rm_namespaced() {
       fi
     done
     if [[ $mode == plan ]]; then
+      if [[ -n ${_MK_RM_U_GONE[$root]:-} ]]; then
+        continue
+      fi
       if ((n > 0)); then
         _mk_rm_say delete "~/$root" "Namespaced_Path; keeps $n file(s) installed from menus"
       else
@@ -1086,10 +1005,14 @@ _mk_rm_namespaced() {
   done
 }
 
-# _mk_rm_user_plan <home> <purge>
+# _mk_rm_user_plan <home> <purge>: the home-folder part of the Plan, in
+# the order the real run acts: Flatpak apps, the User_Ledger walk
+# (mk_userledger_revert_plan), the Namespaced_Paths, the state folder,
+# marked blocks the ledger does not know.
 _mk_rm_user_plan() {
   local home=$1 purge=$2 id line verb rel detail out
   local -a opts=() lines=()
+  _MK_RM_U_GONE=()
   for id in "${_MK_RM_U_FLATPAKS[@]}"; do
     if ((purge)); then
       _mk_rm_say uninstall "Flatpak $id" "installed from an Omarchy menu"
@@ -1100,10 +1023,13 @@ _mk_rm_user_plan() {
   if ((purge)); then
     opts=(--purge)
   fi
-  mapfile -t lines < <(_mk_rm_ul_plan "${opts[@]}")
+  mapfile -t lines < <(mk_userledger_revert_plan "${opts[@]}")
   for line in "${lines[@]}"; do
     IFS=$'\t' read -r verb rel detail <<<"$line"
     if [[ -n $verb && -n $rel ]]; then
+      if [[ $verb == deleted || $verb == moved ]]; then
+        _MK_RM_U_GONE[$rel]=1
+      fi
       _mk_rm_user_line plan "$verb" "$rel" "$detail"
     fi
   done
@@ -1132,11 +1058,15 @@ _mk_rm_any_namespaced() {
   return 1
 }
 
-# _mk_rm_user_apply <home> <purge>
+# _mk_rm_user_apply <home> <purge>: Flatpak apps from menus (--purge
+# only), the User_Ledger walk (mk_userledger_revert; it deletes the
+# ledgered entries inside the Namespaced_Paths, never moving them aside),
+# the rest of the Namespaced_Paths, the empty folders the ledger records as
+# created, and marked blocks the ledger does not know.
 _mk_rm_user_apply() {
-  local home=$1 purge=$2 id out rc=0 line verb rel detail i abs
+  local home=$1 purge=$2 id out rc=0 line verb rel detail i abs state_there=0
   local -a opts=() lines=()
-  local -A gone=() reported=()
+  local -A existed=() reported=()
   for id in "${_MK_RM_U_FLATPAKS[@]}"; do
     if ((!purge)); then
       _mk_rm_say kept "Flatpak $id" "installed from an Omarchy menu"
@@ -1153,6 +1083,15 @@ _mk_rm_user_apply() {
       return 1
     fi
   done
+  for rel in "${_MK_RM_U_DIRS[@]}"; do
+    abs=$home/${rel%/}
+    if [[ -d $abs && ! -L $abs ]]; then
+      existed[$rel]=1
+    fi
+  done
+  if [[ -e $home/$MK_RM_UL_STATE || -L $home/$MK_RM_UL_STATE ]]; then
+    state_there=1
+  fi
   if ((purge)); then
     opts=(--purge)
   fi
@@ -1172,7 +1111,6 @@ _mk_rm_user_apply() {
     rel=${_MK_RM_U_DIRS[i]}
     abs=$home/${rel%/}
     if [[ -d $abs && ! -L $abs ]] && rmdir -- "$abs" 2>/dev/null; then
-      gone[$rel]=1
       mk_log info "deleted the empty folder ~/$rel"
     fi
   done
@@ -1181,16 +1119,26 @@ _mk_rm_user_apply() {
     if [[ -z $verb || -z $rel ]]; then
       continue
     fi
-    if [[ $verb == kept && -n ${gone[$rel]:-} ]]; then
-      verb=deleted
-    fi
     if [[ $rel == */ ]]; then
       reported[$rel]=1
+      # Kept by the walk because Upstream's files were still in it, then
+      # emptied by the deletion of the Namespaced_Paths.
+      if [[ $verb == kept && ! -e $home/${rel%/} ]]; then
+        verb=deleted
+      fi
     fi
     _mk_rm_user_line apply "$verb" "$rel" "$detail"
   done
+  if ((state_there)) && [[ ! -e $home/$MK_RM_UL_STATE && ! -L $home/$MK_RM_UL_STATE ]]; then
+    reported[$MK_RM_UL_STATE/]=1
+    _mk_rm_say deleted "~/$MK_RM_UL_STATE/" "User_Ledger and backups"
+  fi
+  # Created folders the walk did not report: the ones on the way to the
+  # state folder, and the ones only the steps above emptied.
   for rel in "${_MK_RM_U_DIRS[@]}"; do
-    if [[ -n ${gone[$rel]:-} && -z ${reported[$rel]:-} ]]; then
+    abs=$home/${rel%/}
+    if [[ -n ${existed[$rel]:-} && -z ${reported[$rel]:-} && ! -e $abs && ! -L $abs ]]; then
+      reported[$rel]=1
       _mk_rm_user_line apply deleted "$rel"
     fi
   done
@@ -1202,7 +1150,7 @@ _mk_rm_user_apply() {
 # never as root. Exit codes: 0, 1 error, 9 the per-user lock
 # ($XDG_RUNTIME_DIR/motanka.lock) is held.
 mk_remove_user_phase() {
-  local mode=$1 purge=$2 home rt fd
+  local mode=$1 purge=$2 home rt rc=0
   MK_RM_U_PURGE=$purge
   if ((EUID == 0)); then
     mk_error "the user phase of motanka remove does not run as root"
@@ -1214,15 +1162,14 @@ mk_remove_user_phase() {
     mk_error "home folder '${home:-unset}' is not an existing absolute path"
     return 1
   fi
+  # The lock per-user setup holds for its whole run (mk_userledger_lock).
+  # Without a runtime folder the user has no session, so no per-user setup
+  # can run either.
   rt=${XDG_RUNTIME_DIR:-}
   if [[ -n $rt && -d $rt && -w $rt ]]; then
-    if ! exec {fd}>>"$rt/motanka.lock"; then
-      mk_error "cannot open the per-user lock $rt/motanka.lock"
-      return 1
-    fi
-    if ! flock -n "$fd"; then
-      mk_error "another Motanka process of this user holds $rt/motanka.lock (per-user setup?); try again when it has finished"
-      return "$MK_EXIT_LOCKED"
+    mk_userledger_lock || rc=$?
+    if ((rc != 0)); then
+      return "$rc"
     fi
   fi
   _mk_rm_user_read "$home"

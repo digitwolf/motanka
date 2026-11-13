@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2329 # setup is called by bats
+# shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; per-test changes are intended
 # Unit tests for src/lib/userledger.sh: entry format, write-ahead order,
 # write-then-rename, backups, marked blocks, the reverse walk (6.2, 6.3,
 # 6.11, 10.2-10.4), and the property test of task 9.5: for any generated
@@ -359,6 +360,167 @@ EOF
   [[ $stderr == *'skipped 1'* ]]
 }
 
+# --- mkdir, Namespaced_Paths and the plan ------------------------------
+
+# no_dirs: result lines without folder lines (a revert's deleted or kept
+# <folder/>, a plan's rmdir <folder/>).
+no_dirs() {
+  awk -F'\t' '$1 != "rmdir" && $2 !~ /\/$/'
+}
+
+# dir_lines <rmdir|done>: the folder paths of result lines on stdin.
+dir_lines() {
+  if [[ $1 == rmdir ]]; then
+    awk -F'\t' '$1 == "rmdir" { print $2 }' | LC_ALL=C sort -u
+  else
+    awk -F'\t' '$1 != "rmdir" && $2 ~ /\/$/ { print $2 }' | LC_ALL=C sort -u
+  fi
+}
+
+@test "mkdir creates the missing folders and ledgers only the ones it created" {
+  mkdir -p "$H/.config"
+  mk_userledger_mkdir namespaced .config/dconf/sub/
+  [[ -d $H/.config/dconf/sub ]]
+  run entries
+  assert_line "$(printf 'create\tnamespaced\t.config/dconf/\t-\t-\t-')"
+  assert_line "$(printf 'create\tnamespaced\t.config/dconf/sub/\t-\t-\t-')"
+  refute_line --partial $'\t.config/\t'
+  local n
+  n=$(wc -l <"$L")
+  mk_userledger_mkdir session .config/dconf/
+  mk_userledger_mkdir session .config/dconf/sub
+  assert_equal "$(wc -l <"$L")" "$n"
+  mk_userledger_mkdir app .local/state/
+  assert_equal "$(wc -l <"$L")" "$n"
+}
+
+@test "mkdir refuses invalid folders, the state folder and a file in the way" {
+  local p
+  printf 'x\n' >"$H/file"
+  for p in /tmp/x/ ../x/ a/../b/ .local/state/motanka/ .local/state/motanka/x/ "" "$(printf 'a\tb/')"; do
+    run mk_userledger_mkdir session "$p"
+    assert_failure
+  done
+  run mk_userledger_mkdir bogus .config/x/
+  assert_failure
+  run mk_userledger_mkdir session file/sub/
+  assert_failure
+  assert_output --partial 'exists and is not a folder'
+  [[ -f $H/file && ! -e $H/.config ]]
+}
+
+@test "revert removes the folders mkdir created when they are empty and keeps the others" {
+  mkdir -p "$H/.config"
+  local before
+  before=$(manifest "$H")
+  mk_userledger_mkdir namespaced .config/dconf/
+  mk_userledger_mkdir namespaced .local/share/
+  mk_userledger_mkdir session .config/kept/
+  printf 'mine\n' >"$H/.config/kept/file"
+  run mk_userledger_revert
+  assert_success
+  assert_line "$(printf 'deleted\t.config/dconf/')"
+  assert_line "$(printf 'deleted\t.local/share/')"
+  assert_line "$(printf 'kept\t.config/kept/')"
+  rm -r "$H/.config/kept"
+  assert_equal "$(manifest "$H")" "$before"
+}
+
+@test "an entry inside a Namespaced_Path is deleted, never moved aside or restored" {
+  mkdir -p "$H/.config/omarchy"
+  printf 'from before\n' >"$H/.config/omarchy/shell.json"
+  mk_userledger_setup_begin
+  mk_userledger_write namespaced .config/dconf/motanka "$(src db 'db\n')"
+  mk_userledger_write namespaced .config/omarchy/shell.json "$(src shell '{}\n')"
+  mk_userledger_write session .local/state/omarchy/toggles/hypr/motanka-session.lua "$(src frag 'x\n')"
+  mk_userledger_symlink namespaced .local/share/omarchy/current ../themes/a
+  mk_userledger_write session .config/omarchy-like/conf "$(src like 'x\n')"
+  mk_userledger_setup_end
+  printf 'rewritten by dconf-service\n' >"$H/.config/dconf/motanka"
+  printf 'rewritten by Upstream\n' >"$H/.config/omarchy/shell.json"
+  printf 'edited\n' >"$H/.config/omarchy-like/conf"
+  run mk_userledger_revert_plan
+  assert_success
+  local plan=$output
+  run mk_userledger_revert
+  assert_success
+  assert_line "$(printf 'deleted\t.config/dconf/motanka')"
+  assert_line "$(printf 'deleted\t.config/omarchy/shell.json')"
+  assert_line "$(printf 'deleted\t.local/state/omarchy/toggles/hypr/motanka-session.lua')"
+  assert_line "$(printf 'deleted\t.local/share/omarchy/current')"
+  assert_line --regexp $'^moved\t\\.config/omarchy-like/conf\t\\.local/state/motanka-removed-'
+  refute_line --regexp $'^moved\t\\.(config/dconf|config/omarchy/|local/(state|share)/omarchy)'
+  refute_line --partial $'restored\t.config/omarchy/shell.json'
+  assert_equal "$(no_dirs <<<"$output")" "$(no_dirs <<<"$plan")"
+  [[ ! -e $H/.config/dconf/motanka && ! -e $H/.config/omarchy/shell.json && ! -L $H/.local/share/omarchy/current ]]
+  run find "$H/.local/state" -path '*motanka-removed-*' -type f
+  assert_output --regexp '/\.config/omarchy-like/conf$'
+}
+
+@test "revert_plan prints the lines revert prints and changes nothing; revert then does what it planned" {
+  mkdir -p "$H/.config/hypr" "$H/.config/alacritty"
+  printf 'mine\n' >"$H/.config/hypr/hyprland.lua"
+  printf 'orig\n' >"$H/.config/alacritty/alacritty.toml"
+  printf 'rc\n' >"$H/.bashrc"
+  printf 'z\n' >"$H/.zshrc"
+  local before plan_out mid day
+  before=$(manifest "$H")
+  mk_userledger_setup_begin
+  mk_userledger_mkdir namespaced .local/share/
+  mk_userledger_write session .config/hypr/hyprland.lua "$(src a 'new\n')"
+  mk_userledger_write session .config/waybar/config.jsonc "$(src b '{}\n')"
+  mk_userledger_symlink session .config/hypr/theme ../themes/x
+  mk_userledger_write app .config/alacritty/alacritty.toml "$(src c 'motanka\n')"
+  mk_userledger_write app .config/alacritty/alacritty.toml "$(src c2 'motanka 2\n')"
+  mk_userledger_block shared .bashrc "$(src d 'x=1\n')"
+  mk_userledger_block shared .zshrc "$(src e 'y=1\n')"
+  mk_userledger_write namespaced .config/dconf/motanka "$(src f 'db\n')"
+  mk_userledger_record_unplanned .config/hypr/hyprland.lua
+  mk_userledger_setup_end
+  mk_userledger_menu_desktop .local/share/applications/w.desktop "$(src g '[Desktop Entry]\n')"
+  # Edits after setup: an edited file, an edited rc file, a link turned
+  # into a file, a deleted file, a rewritten dconf database.
+  printf 'user edit\n' >>"$H/.config/alacritty/alacritty.toml"
+  printf 'more\n' >>"$H/.bashrc"
+  rm "$H/.config/hypr/theme"
+  printf 'now a file\n' >"$H/.config/hypr/theme"
+  rm "$H/.config/waybar/config.jsonc"
+  printf 'rewritten\n' >"$H/.config/dconf/motanka"
+  cp "$L" "$BATS_TEST_TMPDIR/ledger.before"
+  mid=$(manifest "$H")
+
+  run --separate-stderr mk_userledger_revert_plan --purge
+  assert_success
+  plan_out=$output
+  assert_equal "$(manifest "$H")" "$mid"
+  cmp "$L" "$BATS_TEST_TMPDIR/ledger.before"
+  day=$(date -u +%Y-%m-%d)
+  assert_line "$(printf 'moved\t.config/alacritty/alacritty.toml\t.local/state/motanka-removed-%s/.config/alacritty/alacritty.toml' "$day")"
+  assert_line "$(printf 'restored\t.config/alacritty/alacritty.toml')"
+  assert_line "$(printf 'block-removed\t.bashrc')"
+  assert_line "$(printf 'restored\t.zshrc')"
+  assert_line "$(printf 'moved\t.config/hypr/theme\t.local/state/motanka-removed-%s/.config/hypr/theme' "$day")"
+  assert_line "$(printf 'deleted\t.config/dconf/motanka')"
+  assert_line "$(printf 'deleted\t.local/share/applications/w.desktop')"
+  assert_line "$(printf 'unplanned\t.config/hypr/hyprland.lua')"
+  assert_line "$(printf 'rmdir\t.config/waybar/')"
+  assert_line "$(printf 'rmdir\t.local/share/')"
+  assert_line "$(printf 'rmdir\t.local/')"
+  refute_line --partial $'rmdir\t.local/state/motanka/'
+
+  run --separate-stderr mk_userledger_revert --purge
+  assert_success
+  assert_equal "$(no_dirs <<<"$output")" "$(no_dirs <<<"$plan_out")"
+  assert_equal "$(comm -23 <(dir_lines "done" <<<"$output") <(dir_lines rmdir <<<"$plan_out"))" ""
+  run cat "$H/.bashrc"
+  assert_output $'rc\nmore'
+  # The edit stays in ~/.bashrc; without it the home folder is the one
+  # before setup, apart from motanka-removed-<date> and its parents.
+  printf 'rc\n' >"$H/.bashrc"
+  assert_equal "$(manifest "$H" | grep -v 'motanka-removed' | grep -vE $'^\\.local(/state)?\t')" \
+    "$(grep -vE $'^\\.local(/state)?\t' <<<"$before")"
+}
+
 # --- property test ------------------------------------------------------
 
 POOL=(.bashrc .zshrc .config/app1/conf .config/app1/extra.ini
@@ -530,6 +692,190 @@ tear_last_line() {
     after=$(manifest "$MK_HOME")
     if [[ $after != "$before" ]]; then
       fail "run $run (seed $seed): tree differs after revert; actions: $(printf '[%s] ' "${ACTIONS[@]}")
+$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+    fi
+  done
+}
+
+# --- property test: the plan and the folders Motanka creates -------------
+
+PPOOL=(.bashrc .config/app1/conf ".config/sp ace/f g" .config/app2/deep/settings.json
+  .local/share/thing/data top.txt .config/dconf/motanka .config/omarchy/current/theme.name
+  .local/state/omarchy/migrations/1.sh)
+DPOOL=(.config/app1/ ".config/sp ace/" .config/app3/sub/ .local/share/ .local/share/thing/
+  .cache/ .config/dconf/ .config/omarchy/x/ .local/state/omarchy/)
+
+# gen_start <home>: a random home folder with some of the PPOOL files that
+# are not inside a Namespaced_Path (a removal deletes those whole).
+gen_start() {
+  local home=$1 p
+  mkdir -p "$home"
+  rnd 3
+  case $R in
+    0) mkdir -p "$home/.local/state" ;;
+    1) mkdir -p "$home/.local" ;;
+  esac
+  rnd 2
+  if ((R)); then
+    mkdir -p "$home/.config/app2"
+  fi
+  for p in "${PPOOL[@]}"; do
+    rnd 3
+    if ((R > 0)) || _mk_ul_in_namespaced "$p"; then
+      continue
+    fi
+    mkdir -p "$(dirname "$home/$p")"
+    gen_content "$home/$p"
+  done
+}
+
+# setup_action <index>: one random ledgered change: a folder through
+# mk_userledger_mkdir, a file, a link or a marked block. TOUCHED collects
+# the files and links, BLOCKED the paths a block was written to.
+setup_action() {
+  local i=$1 kind p class s abs
+  rnd ${#CLASSES[@]}
+  class=${CLASSES[R]}
+  rnd 4
+  kind=$R
+  if ((kind == 0)); then
+    rnd ${#DPOOL[@]}
+    p=${DPOOL[R]}
+    ACTIONS+=("$i mkdir $class $p")
+    mk_userledger_mkdir "$class" "$p" || return 1
+    return 0
+  fi
+  rnd ${#PPOOL[@]}
+  p=${PPOOL[R]}
+  # shellcheck disable=SC2031 # MK_HOME is set by the calling test in the same subshell
+  abs=$MK_HOME/$p
+  if ((kind == 3)) && [[ -L $abs ]]; then
+    kind=1
+  fi
+  s=$BATS_TEST_TMPDIR/plan-src-$i
+  case $kind in
+    1)
+      gen_content "$s"
+      ACTIONS+=("$i write $class $p")
+      mk_userledger_write "$class" "$p" "$s" || return 1
+      ;;
+    2)
+      ACTIONS+=("$i symlink $class $p")
+      mk_userledger_symlink "$class" "$p" "t-$RANDOM" || return 1
+      ;;
+    3)
+      gen_content "$s"
+      grep -vxF -e '# >>> motanka >>>' -e '# <<< motanka <<<' "$s" >"$s.body" || true
+      ACTIONS+=("$i block $class $p")
+      BLOCKED[$p]=1
+      mk_userledger_block "$class" "$p" "$s.body" || return 1
+      ;;
+  esac
+  TOUCHED[$p]=1
+}
+
+# edit_path <path>: what the user or a program may do to a ledgered path
+# after setup: nothing, rewrite it, append to it, or delete it. A file
+# outside the Namespaced_Paths that holds a marked block is only deleted or
+# left, because a revert keeps the user's edits in it (10.5).
+edit_path() {
+  local p=$1 abs e
+  # shellcheck disable=SC2031 # MK_HOME is set by the calling test in the same subshell
+  abs=$MK_HOME/$p
+  rnd 4
+  e=$R
+  if [[ -n ${BLOCKED[$p]:-} ]] && ((e == 1 || e == 2)) && ! _mk_ul_in_namespaced "$p"; then
+    e=0
+  fi
+  case $e in
+    1)
+      rm -f -- "$abs"
+      printf 'rewritten %s\n' "$RANDOM" >"$abs"
+      ACTIONS+=("rewrite $p")
+      ;;
+    2)
+      if [[ -L $abs ]]; then
+        rm -f -- "$abs"
+      fi
+      printf 'appended %s\n' "$RANDOM" >>"$abs"
+      ACTIONS+=("append $p")
+      ;;
+    3)
+      rm -f -- "$abs"
+      ACTIONS+=("delete $p")
+      ;;
+  esac
+}
+
+# without_removed: a manifest without motanka-removed-<date> and the
+# folders that hold it.
+without_removed() {
+  grep -v 'motanka-removed' | grep -vE $'^\\.local(/state)?\t' || true
+}
+
+@test "property: for any tree of created folders and files, the plan prints what the revert does, and the revert restores the home folder" {
+  local runs=${MK_PROP_RUNS:-100} seed=${MK_PROP_SEED:-20261113}
+  local run n i p before mid after plan out
+  local -a paths=()
+  local -A BLOCKED=() TOUCHED=()
+  RANDOM=$((seed + 1))
+  for ((run = 0; run < runs; run++)); do
+    # shellcheck disable=SC2030 # bats runs each test in its own subshell; the home is meant for this test only
+    MK_HOME="$BATS_TEST_TMPDIR/plan-home"
+    L="$MK_HOME/.local/state/motanka/ledger"
+    rm -rf "$MK_HOME"
+    gen_start "$MK_HOME"
+    before=$(manifest "$MK_HOME")
+    ACTIONS=()
+    BLOCKED=()
+    TOUCHED=()
+    rnd 10
+    n=$((R + 1))
+    mk_userledger_setup_begin
+    for ((i = 0; i < n; i++)); do
+      if ! setup_action "$i" >/dev/null 2>"$BATS_TEST_TMPDIR/action.err"; then
+        fail "run $run (seed $seed): setup action failed: ${ACTIONS[*]: -1}: $(cat "$BATS_TEST_TMPDIR/action.err")"
+      fi
+    done
+    mk_userledger_setup_end
+    mapfile -t paths < <(printf '%s\n' "${!TOUCHED[@]}" | LC_ALL=C sort)
+    for p in "${paths[@]}"; do
+      if [[ -n $p ]]; then
+        edit_path "$p"
+      fi
+    done
+    cp "$L" "$BATS_TEST_TMPDIR/plan-ledger"
+    mid=$(manifest "$MK_HOME")
+
+    # shellcheck disable=SC2119 # the optional --purge is deliberately not passed
+    if ! plan=$(mk_userledger_revert_plan 2>"$BATS_TEST_TMPDIR/plan.err"); then
+      fail "run $run (seed $seed): the plan failed: $(cat "$BATS_TEST_TMPDIR/plan.err"); actions: $(printf '[%s] ' "${ACTIONS[@]}")"
+    fi
+    if [[ $(manifest "$MK_HOME") != "$mid" ]] || ! cmp -s "$L" "$BATS_TEST_TMPDIR/plan-ledger"; then
+      fail "run $run (seed $seed): the plan changed the home folder or the ledger; actions: $(printf '[%s] ' "${ACTIONS[@]}")"
+    fi
+    # shellcheck disable=SC2119 # the optional --purge is deliberately not passed
+    if ! out=$(mk_userledger_revert 2>"$BATS_TEST_TMPDIR/revert.err"); then
+      fail "run $run (seed $seed): revert failed: $(cat "$BATS_TEST_TMPDIR/revert.err"); actions: $(printf '[%s] ' "${ACTIONS[@]}")"
+    fi
+    if [[ $(no_dirs <<<"$plan") != "$(no_dirs <<<"$out")" ]]; then
+      fail "run $run (seed $seed): the plan differs from what the revert did; actions: $(printf '[%s] ' "${ACTIONS[@]}")
+$(diff <(no_dirs <<<"$plan") <(no_dirs <<<"$out"))"
+    fi
+    if [[ -n $(comm -23 <(dir_lines "done" <<<"$out") <(dir_lines rmdir <<<"$plan")) ]]; then
+      fail "run $run (seed $seed): the revert handled folders the plan did not list; actions: $(printf '[%s] ' "${ACTIONS[@]}")
+plan:
+$plan
+revert:
+$out"
+    fi
+    after=$(manifest "$MK_HOME")
+    if grep -q $'^moved\t' <<<"$out"; then
+      before=$(without_removed <<<"$before")
+      after=$(without_removed <<<"$after")
+    fi
+    if [[ $after != "$before" ]]; then
+      fail "run $run (seed $seed): the home folder differs after revert; actions: $(printf '[%s] ' "${ACTIONS[@]}")
 $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
     fi
   done

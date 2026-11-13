@@ -90,19 +90,25 @@ case "$1" in
 esac
 exit 0
 EOF
-  cat >"$STUBS/flatpak" <<'EOF'
-#!/bin/sh
-printf 'flatpak %s\n' "$*" >>"$FAKE_LOG"
+  # The user phase runs under "env -i" (only HOME, PATH and a few more are
+  # kept), so this stub has its paths written in instead of reading
+  # FAKE_LOG and FAKE_STATE from the environment.
+  {
+    printf '#!/bin/sh\n'
+    printf 'log=%q\nstate=%q\n' "$FAKE_LOG" "$FAKE_STATE"
+    cat <<'EOF'
+printf 'flatpak %s\n' "$*" >>"$log"
 for a in "$@"; do id=$a; done
 case "$1" in
-  info) grep -qxF "$id" "$FAKE_STATE/flatpaks" ;;
+  info) grep -qxF "$id" "$state/flatpaks" ;;
   uninstall)
-    grep -vxF "$id" "$FAKE_STATE/flatpaks" >"$FAKE_STATE/flatpaks.new" || true
-    mv "$FAKE_STATE/flatpaks.new" "$FAKE_STATE/flatpaks"
+    grep -vxF "$id" "$state/flatpaks" >"$state/flatpaks.new" || true
+    mv "$state/flatpaks.new" "$state/flatpaks"
     ;;
   *) exit 1 ;;
 esac
 EOF
+  } >"$STUBS/flatpak"
   for t in curl wget; do
     printf '#!/bin/sh\necho "network: %s $*" >>"$FAKE_LOG"\nexit 7\n' "$t" >"$STUBS/$t"
   done
@@ -378,6 +384,60 @@ no_network_no_install() {
   assert_output 600
   run cat "$H/.profile"
   assert_output $'c\n# >>> motanka >>>\nd'
+}
+
+@test "a rewritten dconf database in ~/.config/dconf/motanka is deleted, not moved aside; the dry run lists it as delete" {
+  standard_db
+  mkdir -p "$H/.config"
+  HOME_BEFORE=$(manifest "$H")
+  ul mk_userledger_setup_begin
+  ul mk_userledger_write namespaced .config/dconf/motanka "$(src db 'compiled by per-user setup\n')"
+  ul mk_userledger_write namespaced .config/omarchy/current/theme.name "$(src theme 'tokyo-night\n')"
+  ul mk_userledger_write session .local/state/omarchy/toggles/hypr/motanka-session.lua "$(src frag 'x\n')"
+  ul mk_userledger_setup_end
+  # dconf-service and Upstream's commands rewrite these files in the session.
+  printf 'written by dconf-service\n' >"$H/.config/dconf/motanka"
+  printf 'catppuccin\n' >"$H/.config/omarchy/current/theme.name"
+  printf 'y\n' >"$H/.local/state/omarchy/toggles/hypr/motanka-session.lua"
+
+  remove --dry-run
+  assert_success
+  assert_line --regexp '^  delete +~/\.config/dconf/motanka$'
+  assert_line --regexp '^  delete +~/\.config/omarchy/current/theme\.name$'
+  assert_line --regexp '^  delete +~/\.local/state/omarchy/toggles/hypr/motanka-session\.lua$'
+  assert_line --regexp '^  delete +~/\.config/dconf/  \(folder Motanka created, if empty\)$'
+  refute_line --regexp '^  delete +~/\.config/dconf/motanka  \(Namespaced_Path\)$'
+  refute_line --regexp '^  (move|restore) '
+  refute_output --partial 'motanka-removed'
+
+  remove --yes
+  assert_success
+  assert_line --regexp '^  deleted +~/\.config/dconf/motanka$'
+  assert_line --regexp '^  deleted +~/\.config/omarchy/current/theme\.name$'
+  assert_line --regexp '^  deleted +~/\.config/dconf/$'
+  refute_line --regexp '^  (moved|restored) '
+  [[ ! -e $H/.config/dconf && ! -e $H/.config/omarchy && ! -e $H/.local ]]
+  assert_equal "$(manifest "$H")" "$HOME_BEFORE"
+}
+
+@test "a menu entry inside a Namespaced_Path is kept without --purge; the rest of that path is deleted" {
+  standard_db
+  ul mk_userledger_setup_begin
+  ul mk_userledger_write namespaced .local/share/omarchy/README "$(src readme 'r\n')"
+  ul mk_userledger_setup_end
+  printf '[Desktop Entry]\nOnlyShowIn=Motanka;\nName=W\n' >"$SRC/w.desktop"
+  ul mk_userledger_menu_desktop .local/share/omarchy/applications/W.desktop "$SRC/w.desktop"
+  printf 'upstream\n' >"$H/.local/share/omarchy/other"
+  remove --dry-run
+  assert_success
+  assert_line --regexp '^  keep +~/\.local/share/omarchy/applications/W\.desktop  \(installed from an Omarchy menu; --purge removes it\)$'
+  assert_line --regexp '^  delete +~/\.local/share/omarchy/README$'
+  assert_line --regexp '^  delete +~/\.local/share/omarchy  \(Namespaced_Path; keeps 1 file\(s\) installed from menus\)$'
+  remove --yes
+  assert_success
+  [[ -f $H/.local/share/omarchy/applications/W.desktop ]]
+  [[ ! -e $H/.local/share/omarchy/README && ! -e $H/.local/share/omarchy/other ]]
+  [[ ! -e $H/.local/state/motanka ]]
 }
 
 @test "other users with a User_Ledger are listed and their home folders are not touched" {

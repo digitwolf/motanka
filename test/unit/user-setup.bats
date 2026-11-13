@@ -376,6 +376,75 @@ shared_sums() {
   [[ ! -e $HOME/.local/state/motanka ]]
 }
 
+@test "the per-user lock is held for the whole run, and Upstream scripts do not inherit it" {
+  write_script "$UP/install/user/lockcheck.sh" 'lock=$(readlink -f "$XDG_RUNTIME_DIR/motanka.lock")
+out=$HOME/.local/state/omarchy/lock.txt
+mkdir -p "${out%/*}"
+if flock -n "$lock" true; then echo free >"$out"; else echo held >"$out"; fi
+for f in /proc/$$/fd/*; do
+  if [ "$(readlink "$f")" = "$lock" ]; then echo inherited >>"$out"; fi
+done'
+  write_user_scripts $'install/user/lockcheck.sh\trun\tfixture'
+  run bash "$US"
+  assert_success
+  run cat "$HOME/.local/state/omarchy/lock.txt"
+  assert_output 'held'
+  # Released when per-user setup has ended.
+  run flock -n "$XDG_RUNTIME_DIR/motanka.lock" true
+  assert_success
+}
+
+@test "a lock held by the Remover's user phase makes per-user setup exit 9" {
+  run bash -c 'set -euo pipefail
+    source "$1/src/lib/common.sh"; source "$1/src/lib/userledger.sh"
+    mk_userledger_lock
+    bash "$2"' _ "$REPO" "$US"
+  assert_failure 9
+  assert_output --partial "lock $XDG_RUNTIME_DIR/motanka.lock is held"
+  [[ ! -e $HOME/.local/state/motanka ]]
+}
+
+@test "the folders that hold the Namespaced_Paths are created through the ledger and removed by revert" {
+  local before
+  write_script "$UP/install/user/nswrite.sh" 'mkdir -p "$HOME/.local/share/omarchy/x" "$HOME/.cache/omarchy"
+printf "upstream\n" >"$HOME/.local/share/omarchy/x/file"
+printf "upstream\n" >"$HOME/.cache/omarchy/file"'
+  write_user_scripts $'install/user/nswrite.sh\trun\tfixture'
+  [[ ! -e $HOME/.local && ! -e $HOME/.cache && ! -e $HOME/.config/dconf ]]
+  before=$(manifest "$HOME")
+  run bash "$US"
+  assert_success
+  [[ -f $HOME/.local/share/omarchy/x/file && -f $HOME/.cache/omarchy/file ]]
+  run ledger
+  assert_line $'create\tnamespaced\t.config/dconf/\t-\t-\t-'
+  assert_line $'create\tnamespaced\t.local/share/\t-\t-\t-'
+  assert_line $'create\tnamespaced\t.cache/\t-\t-\t-'
+  refute_line --partial $'\t.config/\t'
+  refute_line --partial unplanned
+  # What the Remover does: the Namespaced_Paths go, the ledger is walked
+  # back, and the folders above become empty and go too.
+  rm -rf "$HOME/.config/omarchy" "$HOME/.local/share/omarchy" "$HOME/.local/state/omarchy" \
+    "$HOME/.cache/omarchy" "$HOME/.config/dconf/motanka"
+  (
+    # shellcheck source=../../src/lib/common.sh
+    source "$REPO/src/lib/common.sh"
+    # shellcheck source=../../src/lib/userledger.sh
+    source "$REPO/src/lib/userledger.sh"
+    mk_userledger_revert >/dev/null
+  )
+  [[ ! -e $HOME/.local && ! -e $HOME/.cache && ! -e $HOME/.config/dconf ]]
+  assert_equal "$(manifest "$HOME")" "$before"
+}
+
+@test "a resumed setup does not ledger the folders that hold the Namespaced_Paths again" {
+  MOTANKA_SETUP_INTERRUPT=targets run bash "$US"
+  assert_equal "$status" 137
+  run bash "$US"
+  assert_success
+  assert_equal "$(ledger | grep -c $'^create\t[a-z]*\t\\.local/share/\t')" 1
+  assert_equal "$(ledger | grep -c $'^create\t[a-z]*\t\\.cache/\t')" 1
+}
+
 @test "a Protected_Host exits 7 without writing" {
   touch "$MOTANKA_ROOT/etc/motanka-protected"
   run bash "$US"

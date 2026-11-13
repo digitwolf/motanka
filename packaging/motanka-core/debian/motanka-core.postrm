@@ -1,19 +1,78 @@
 #!/bin/sh
-# postrm of motanka-core: removes the files the postinst generated (3.13):
-# the compiled dconf database /etc/dconf/db/motanka and a temporary file a
-# failed compile may have left.
+# postrm of motanka-core.
 #
-# They go on remove as well as on purge. dpkg removes the conffiles in
+# On remove and on purge: removes the files the postinst generated (3.13):
+# the compiled dconf database /etc/dconf/db/motanka and a temporary file a
+# failed compile may have left. dpkg removes the conffiles in
 # /etc/dconf/db/motanka.d/ and /etc/dconf/profile/ before "postrm purge"
 # runs, and it removes their folders only if they are empty by then; a
 # compiled database still in /etc/dconf/db would keep that folder. Without
 # the package nothing reads the database, and the postinst compiles it
 # again on reinstall.
+#
+# On purge only: /var/lib/motanka, which holds the System_Ledger and which
+# no package owns (design.md, File layout).
+#   - While /run/motanka/remover.active exists, "motanka remove" is
+#     purging the packages; it archives the System_Ledger and deletes the
+#     folder itself afterwards, so the folder is left alone here.
+#   - Otherwise (motanka-core purged with apt or dpkg directly) the ledger
+#     is archived to /var/log/motanka-ledger-<UTC date>, or <name>.1, .2 ...
+#     when that name is taken, and the folder is deleted. If the archive
+#     cannot be written, the folder is kept, with a warning.
+# On remove and upgrade /var/lib/motanka stays.
+#
+# Every path is below $DPKG_ROOT, which dpkg sets for maintainer scripts
+# (empty for the running system); test/unit/postrm.bats sets it to a fake
+# root.
 set -e
+
+root=${DPKG_ROOT:-}
+
+# archive_ledger: copies the System_Ledger, if there is one, to a new file
+# in /var/log, written to a temporary name and renamed. Returns 1 when the
+# copy cannot be made.
+archive_ledger() {
+  ledger=$root/var/lib/motanka/ledger
+  if [ ! -f "$ledger" ]; then
+    return 0
+  fi
+  base=$root/var/log/motanka-ledger-$(date -u +%Y-%m-%d)
+  dest=$base
+  n=1
+  while [ -e "$dest" ] || [ -L "$dest" ]; do
+    dest=$base.$n
+    n=$((n + 1))
+  done
+  mkdir -p "$root/var/log" || return 1
+  tmp=$(mktemp "$dest.XXXXXX") || return 1
+  if cat "$ledger" >"$tmp" && chmod 0644 "$tmp" && sync "$tmp" && mv "$tmp" "$dest"; then
+    echo "motanka-core: archived the System_Ledger to ${dest#"$root"}" >&2
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+purge_state() {
+  if [ -e "$root/run/motanka/remover.active" ]; then
+    return 0
+  fi
+  if [ ! -e "$root/var/lib/motanka" ] && [ ! -L "$root/var/lib/motanka" ]; then
+    return 0
+  fi
+  if archive_ledger; then
+    rm -rf "$root/var/lib/motanka"
+  else
+    echo "motanka-core: warning: could not archive the System_Ledger to $root/var/log; /var/lib/motanka is kept" >&2
+  fi
+}
 
 case "$1" in
   remove | purge)
-    rm -f /etc/dconf/db/motanka /etc/dconf/db/motanka.tmp
+    rm -f "$root/etc/dconf/db/motanka" "$root/etc/dconf/db/motanka.tmp"
+    if [ "$1" = purge ]; then
+      purge_state
+    fi
     ;;
   upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
   *)
