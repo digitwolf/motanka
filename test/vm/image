@@ -193,6 +193,16 @@ print("".join(alphabet[(bits >> (155 - 5 * i)) & 31] for i in range(32)))'
 # the images checked on 2026-11-13. MOTANKA_VM_ARCH_KEY_FPR replaces it.
 MV_ARCH_KEY_FPR=1B9A16984A4E8CB448712D2AE0B78BF4326C6F8F
 
+# dearmor_key <file>: replaces an ASCII-armoured OpenPGP key with its
+# binary form, using a throw-away GnuPG home.
+dearmor_key() {
+  local f=$1 home
+  home=$(mktemp -d "$MV_BASE/.gnupg.XXXXXX")
+  MV_CLEANUP_PATHS+=("$home")
+  gpg --homedir "$home" --batch --quiet --dearmor -o "$f.bin" "$f" 2>/dev/null &&
+    [[ -s $f.bin ]] && mv -f -- "$f.bin" "$f"
+}
+
 # arch_signing_key <out>: writes the arch-boxes signing key to <out> and sets
 # ARCH_KEY_SOURCE to where it came from.
 ARCH_KEY_SOURCE=""
@@ -215,6 +225,12 @@ arch_signing_key() {
     "https://archlinux.org/.well-known/openpgpkey/hu/$hash?l=arch-boxes" \
     "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$MV_ARCH_KEY_FPR"; do
     if python3 -c "$FETCH_PY" "$url" "$out" 2>/dev/null && [[ -s $out ]]; then
+      # gpgv reads binary keyrings only; the keyserver answers in armour.
+      if head -c 10 "$out" | grep -q -- '-----BEGIN'; then
+        if ! dearmor_key "$out"; then
+          continue
+        fi
+      fi
       ARCH_KEY_SOURCE=$url
       return 0
     fi
@@ -364,7 +380,7 @@ fi
 release=$1
 variant=$2
 mv_check_image_target "$release" "$variant"
-mv_need gpgv sha256sum awk flock python3
+mv_need gpg gpgv sha256sum awk flock python3
 
 if [[ $release == "$MV_ARCH_RELEASE" ]]; then
   arch_omarchy_image
