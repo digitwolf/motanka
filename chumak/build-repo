@@ -17,10 +17,19 @@
 #   dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
 #   dists/<suite>/main/binary-amd64/by-hash/<hash>/<digest>
 #   dists/<suite>/{Release,InRelease,Release.gpg}
+#   install.sh            the bootstrap from the repository root, with the
+#                         signing key's public half embedded at its
+#                         "# @archive-key@" line
+#   motanka-cli.tar.gz    the CLI (src/motanka, src/lib/*.sh, src/cmd/*.sh
+#                         and keys/motanka-archive.asc) in motanka-cli/
+#   SHA256SUMS            SHA-256 of every .deb under pool/, install.sh and
+#                         motanka-cli.tar.gz, paths relative to <out-dir>
+#   SHA256SUMS.gpg        detached binary signature of SHA256SUMS
 # Release carries Origin and Label "Motanka", Suite and Codename <suite>,
 # Architectures amd64, Components main, Acquire-By-Hash yes, and a
 # Valid-Until 14 days after its Date, which is set just before signing
-# (requirements 4.2, 4.7). Index checksums are SHA256 only.
+# (requirements 4.2, 4.7). Index checksums are SHA256 only. The Installer
+# verifies the keyring and source packages through SHA256SUMS (4.1).
 #
 # Runs inside a test VM (needs apt-ftparchive from apt-utils, dpkg-deb and
 # gpg). The key is imported into a temporary GNUPGHOME that is deleted at
@@ -243,6 +252,53 @@ for suite in "${suites[@]}"; do
     die "Release.gpg of $suite does not verify"
   log "$suite: signed, valid until $until_str"
 done
+
+# Bootstrap, CLI tarball and the signed checksum list.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+for f in install.sh src/motanka; do
+  [[ -f $repo_root/$f ]] || die "$repo_root/$f is missing"
+done
+pub=$GNUPGHOME/archive-public.asc
+gpg --batch --armor --export "$fpr" >"$pub"
+grep -q '^-----BEGIN PGP PUBLIC KEY BLOCK-----$' "$pub" || die "could not export the public key $fpr"
+if ! awk -v keyfile="$pub" '
+  $0 == "# @archive-key@" {
+    while ((getline line < keyfile) > 0) print line
+    close(keyfile)
+    n++
+    next
+  }
+  { print }
+  END { if (n != 1) exit 1 }
+' "$repo_root/install.sh" >"$out/install.sh"; then
+  die "$repo_root/install.sh must have exactly one '# @archive-key@' line"
+fi
+log "install.sh: embedded the public key $fpr"
+
+stage=$GNUPGHOME/cli
+mkdir -p "$stage/motanka-cli/lib" "$stage/motanka-cli/cmd" "$stage/motanka-cli/keys"
+cp "$repo_root/src/motanka" "$stage/motanka-cli/motanka"
+cp "$repo_root"/src/lib/*.sh "$stage/motanka-cli/lib/"
+cp "$repo_root"/src/cmd/*.sh "$stage/motanka-cli/cmd/"
+cp "$pub" "$stage/motanka-cli/keys/motanka-archive.asc"
+find "$stage" -type d -exec chmod 0755 {} +
+find "$stage" -type f -exec chmod 0644 {} +
+chmod 0755 "$stage/motanka-cli/motanka"
+tar -C "$stage" --sort=name --mtime="@${SOURCE_DATE_EPOCH:-$(date -u +%s)}" \
+  --owner=0 --group=0 --numeric-owner --format=gnu -cf - motanka-cli |
+  gzip -9n >"$out/motanka-cli.tar.gz"
+log "motanka-cli.tar.gz: $(tar -tzf "$out/motanka-cli.tar.gz" | grep -c -v '/$') files"
+
+(
+  cd "$out"
+  find pool -type f -name '*.deb' -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum
+  sha256sum install.sh motanka-cli.tar.gz
+) >"$out/SHA256SUMS"
+gpg --batch --yes --quiet --local-user "$fpr" --digest-algo SHA512 \
+  --detach-sign --output "$out/SHA256SUMS.gpg" "$out/SHA256SUMS"
+gpg --batch --quiet --verify "$out/SHA256SUMS.gpg" "$out/SHA256SUMS" 2>/dev/null ||
+  die "SHA256SUMS.gpg does not verify"
+log "SHA256SUMS: $(wc -l <"$out/SHA256SUMS") files, signed"
 
 find "$out" -type d -exec chmod 0755 {} +
 find "$out" -type f -exec chmod 0644 {} +

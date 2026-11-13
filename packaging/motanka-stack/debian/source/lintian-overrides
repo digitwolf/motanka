@@ -13,3 +13,5 @@ source-contains-prebuilt-ms-help-file
 source-contains-prebuilt-doxygen-documentation
 source-contains-prebuilt-sphinx-documentation
 very-long-line-length-in-source-file
+# CMake (built only for noble) ships CMakeCache.txt files as test fixtures.
+source-contains-cmake-cache-file [cmake/Tests/*]
