@@ -31,6 +31,10 @@ Build-Depends: debhelper-compat (= 13),
                motanka-qt6-dev,
                spirv-tools,
                zlib1g-dev,
+               fontconfig <!nocheck>,
+               fonts-dejavu-core <!nocheck>,
+               tesseract-ocr <!nocheck>,
+               tesseract-ocr-eng <!nocheck>,
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Homepage: https://github.com/digitwolf/motanka

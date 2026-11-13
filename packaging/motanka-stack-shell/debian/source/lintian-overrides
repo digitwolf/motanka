@@ -17,3 +17,6 @@ source-contains-prebuilt-java-object
 source-contains-prebuilt-ms-help-file
 source-contains-prebuilt-sphinx-documentation
 source-contains-cmake-cache-file [cmake/Tests/*]
+# CMake (built only for noble, as a build tool) ships deliberately broken ELF
+# files as fuzzing test input.
+elf-error * [cmake/Tests/Fuzzing/corpus/elf/*]

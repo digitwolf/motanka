@@ -36,10 +36,17 @@ omasnap:
     the wayland-protocols XML files a cache variable; the build points it
     at the staged wayland-protocols 1.50 on both suites (24.04's 1.34 has
     no ext-image-capture-source or ext-image-copy-capture).
-  - Its smoke suite (ctest) runs during the build with
+  - Its smoke suite (the omasnap_tests binary) runs during the build with
     QT_QPA_PLATFORM=offscreen and a private XDG_RUNTIME_DIR, as Upstream's
-    PKGBUILD does; DEB_BUILD_OPTIONS=nocheck skips it. Its clang-tidy test
-    is not run: the chroot has no run-clang-tidy.
+    PKGBUILD does; DEB_BUILD_OPTIONS=nocheck skips it. The runtime and
+    temporary folders are short ones under /tmp: omasnap's Unix sockets
+    live below them, and a socket path longer than 108 bytes is silently
+    skipped. Its OCR check reads text back with tesseract, so tesseract-ocr,
+    tesseract-ocr-eng, fontconfig and a font (fonts-dejavu-core) are
+    <!nocheck> build dependencies. A failure is run once more (the suite
+    waits at most 1.5 s or 5 s in places); a second failure fails the build
+    and prints the check's exit code. Its clang-tidy test is not run: the
+    chroot has no run-clang-tidy.
   - Installed files: /opt/motanka/bin/omasnap, its menu entry
     /opt/motanka/share/applications/omasnap.desktop and icon
     /opt/motanka/share/icons/hicolor/scalable/apps/omasnap.svg. Only the

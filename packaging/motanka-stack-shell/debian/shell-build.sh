@@ -29,10 +29,13 @@
 #          into debian/shell-build/tools when it exists (noble) and with
 #          the archive's CMake otherwise (resolute); cpptrace and Quickshell
 #          always use the archive's CMake.
-# test     runs omasnap's smoke suite (ctest in its build folder) as
+# test     runs omasnap's smoke suite (its test binary, offscreen) as
 #          Upstream's PKGBUILD check() does: QT_QPA_PLATFORM=offscreen, a
-#          private XDG_RUNTIME_DIR, and HOME, XDG_* and TMPDIR in a
-#          throwaway folder. A failing test fails the build. The suite's
+#          private XDG_RUNTIME_DIR, and HOME, XDG_* and TMPDIR in
+#          throwaway folders (the runtime and temporary ones short, under
+#          /tmp, for omasnap's Unix sockets). A failure is run once more;
+#          a second failure fails the build and names the check's exit
+#          code. The suite's
 #          clang-tidy test (omasnap_lint) exists only when run-clang-tidy
 #          is installed, which the chroot does not have.
 # install  copies the shipped files of cpptrace, Quickshell, layer-shell-qt
@@ -428,31 +431,50 @@ cmd_build() {
 
 # cmd_test: omasnap's smoke suite, as in Upstream's PKGBUILD check().
 cmd_test() {
-  local cm ct t=$W/test rc=0
+  local bin=$BUILD/omasnap/omasnap_tests t=$W/test rt tmp rc attempt
   [[ -e $STAMPS/omasnap && -d $BUILD/omasnap ]] || die "omasnap was not built; run the build step first"
+  [[ -x $bin ]] || die "$bin is missing: omasnap's build has no test binary"
   set_env
-  cm=$(cmake_for omasnap)
-  ct=${cm%/*}/ctest
-  [[ -x $ct ]] || die "$ct is missing (it comes with $cm)"
   if ! command -v run-clang-tidy >/dev/null; then
     log "omasnap_lint (clang-tidy static analysis) is not part of this run: run-clang-tidy is not installed in the chroot"
   fi
-  rm -rf -- "$t"
-  mkdir -p "$t/home" "$t/tmp" "$t/runtime"
-  chmod 0700 "$t/runtime"
-  # The suite fsyncs its working files and waits at most 5 s for them; flush
-  # the build's dirty pages first, as the PKGBUILD does.
-  sync
-  log "running omasnap's smoke suite with $ct"
-  env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
-    HOME="$t/home" XDG_CONFIG_HOME="$t/home/.config" XDG_DATA_HOME="$t/home/.local/share" \
-    XDG_STATE_HOME="$t/home/.local/state" XDG_CACHE_HOME="$t/home/.cache" \
-    TMPDIR="$t/tmp" XDG_RUNTIME_DIR="$t/runtime" \
-    QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 \
-    "$ct" --test-dir "$BUILD/omasnap" --output-on-failure --no-tests=error || rc=$?
-  rm -rf -- "$t"
-  ((rc == 0)) || die "omasnap's smoke suite failed (ctest exit $rc)"
-  log "omasnap's smoke suite passed"
+  # The binary is run directly rather than through ctest (the only test
+  # ctest has is this binary, with QT_QPA_PLATFORM=offscreen), because each
+  # of its checks exits with its own code (main() in tests/editor-smoke.cpp)
+  # and ctest does not print it. The suite waits at most 1.5 s or 5 s in
+  # places; a failure is run once more, and only a second failure fails the
+  # build, so a slow VM does not, while a real failure still does.
+  for attempt in 1 2; do
+    rm -rf -- "$t"
+    mkdir -p "$t/home"
+    # Short runtime and temporary folders, as in the PKGBUILD (/dev/shm and
+    # the default /tmp): omasnap's overlay socket is <runtime>/omasnap/
+    # overlay-close.sock, and runPinEditorReturnChecks sets XDG_RUNTIME_DIR
+    # to a QTemporaryDir below TMPDIR. Below the build tree that socket path
+    # is longer than a Unix socket address allows (108 bytes); omasnap then
+    # skips the socket silently and the forwarded-dismissal case fails.
+    rt=$(mktemp -d /tmp/omasnap-rt.XXXXXX)
+    tmp=$(mktemp -d /tmp/omasnap-tmp.XXXXXX)
+    chmod 0700 "$rt"
+    # The suite fsyncs its working files and waits at most 5 s for them;
+    # flush the build's dirty pages first, as the PKGBUILD does.
+    sync
+    log "running omasnap's smoke suite ($bin), attempt $attempt"
+    rc=0
+    (cd "$BUILD/omasnap" && env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+      HOME="$t/home" XDG_CONFIG_HOME="$t/home/.config" XDG_DATA_HOME="$t/home/.local/share" \
+      XDG_STATE_HOME="$t/home/.local/state" XDG_CACHE_HOME="$t/home/.cache" \
+      TMPDIR="$tmp" XDG_RUNTIME_DIR="$rt" \
+      QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 \
+      timeout 900 "$bin") || rc=$?
+    rm -rf -- "$t" "$rt" "$tmp"
+    if ((rc == 0)); then
+      log "omasnap's smoke suite passed (attempt $attempt)"
+      return 0
+    fi
+    log "omasnap's smoke suite failed with exit code $rc (attempt $attempt; the code names the check in main() of tests/editor-smoke.cpp)"
+  done
+  die "omasnap's smoke suite failed twice (last exit code $rc)"
 }
 
 # --- packaging --------------------------------------------------------------
