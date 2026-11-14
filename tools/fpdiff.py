@@ -13,6 +13,8 @@ File handling:
   packages.tsv    keyed by package name
   sysctl.txt      keyed by sysctl key
   dconf-*.ini     keyed by <dconf path>/<key>
+  groups.txt      lines of `getent group`, with GDM's greeter users left
+                  out of every member list (see GDM_GREETER)
   anything else   compared as a set of lines
 
 Home-folder Allowlist: ~/.cache, ~/.local/state/motanka-removed-*, and the
@@ -71,6 +73,13 @@ SYSCTL_ALLOW = (
     "net.ipv4.tcp_fastopen_key",
     "net.netfilter.nf_conntrack_count",
 )
+
+# GDM 49 (Ubuntu 26.04) logs its greeter in as a dynamic user per display,
+# gdm-greeter, gdm-greeter-2 and so on, that systemd's userdb lists as a
+# member of group gdm while it runs; /etc/group does not change. Which number
+# is running depends on how many greeters GDM started since boot, so these
+# names are left out of every group's member list.
+GDM_GREETER = re.compile(r"gdm-greeter(-[0-9]+)?")
 
 ROOT_HEADER = "# root "
 
@@ -254,6 +263,21 @@ def parse_dconf(lines):
     return entries
 
 
+def parse_groups(lines):
+    out = []
+    for line in lines:
+        parts = line.split(":")
+        if len(parts) == 4:
+            members = [
+                m
+                for m in parts[3].split(",")
+                if m and not GDM_GREETER.fullmatch(m)
+            ]
+            parts[3] = ",".join(members)
+        out.append(":".join(parts))
+    return out
+
+
 def show(value):
     return " ".join(value.split("\t"))
 
@@ -306,6 +330,8 @@ def compare_file(name, path_a, path_b, homepaths=None):
         return diff_keyed(name, parse_sysctl(a), parse_sysctl(b))
     if name.startswith("dconf-") and name.endswith(".ini"):
         return diff_keyed(name, parse_dconf(a), parse_dconf(b))
+    if name == "groups.txt":
+        return diff_lines(name, parse_groups(a), parse_groups(b))
     return diff_lines(name, a, b)
 
 

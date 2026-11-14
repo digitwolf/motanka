@@ -144,6 +144,23 @@ fpdiff() {
   assert_line 'groups.txt: + sudo:x:27:alice'
 }
 
+@test "GDM's numbered greeter users are left out of group member lists" {
+  printf 'alice:x:1001:\nsudo:x:27:\ngdm:x:975:gdm-greeter\n' >"$BEFORE/groups.txt"
+  printf 'alice:x:1001:\nsudo:x:27:\ngdm:x:975:gdm-greeter-2\n' >"$AFTER/groups.txt"
+  fpdiff
+  assert_success
+  assert_output ''
+}
+
+@test "other members of group gdm are still compared" {
+  printf 'alice:x:1001:\nsudo:x:27:\ngdm:x:975:gdm-greeter\n' >"$BEFORE/groups.txt"
+  printf 'alice:x:1001:\nsudo:x:27:\ngdm:x:975:gdm-greeter-2,alice\n' >"$AFTER/groups.txt"
+  fpdiff
+  assert_failure 1
+  assert_line 'groups.txt: - gdm:x:975:'
+  assert_line 'groups.txt: + gdm:x:975:alice'
+}
+
 @test "a file present on one side only is reported" {
   rm "$AFTER/snaps.txt"
   fpdiff
