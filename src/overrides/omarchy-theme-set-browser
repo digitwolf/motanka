@@ -1,0 +1,29 @@
+#!/bin/bash
+# omarchy-theme-set-browser: Motanka override of Upstream
+# bin/omarchy-theme-set-browser.
+#
+# usage (as Upstream): omarchy-theme-set-browser
+#
+# Upstream's script, which omarchy-theme-set runs on every theme switch,
+# writes the theme's color as a managed policy (color.json) into the policy
+# folders of Chromium, Chrome, Edge and Brave under /etc, through the
+# privileged omarchy-theme-set-browser-policy, and then makes the running
+# browsers reload their policies. Motanka writes nothing under /etc from a
+# session (compat/privileged.tsv lists omarchy-theme-set-browser-policy as
+# unsupported), and the Package_Map's Chromium is the Flatpak, which does
+# not read /etc/chromium. Upstream's script would end in a pkexec error and
+# the theme switch would report "Theme retint failed". So this override
+# changes nothing, writes a journal entry and exits 0: browsers keep their
+# own theme color.
+#
+# Exit codes: 0.
+set -euo pipefail
+
+_self=$(readlink -f -- "${BASH_SOURCE[0]}")
+_base=${_self%/*/*}
+MK_CMD=override
+# shellcheck source=../lib/common.sh
+source "$_base/lib/common.sh"
+
+mk_log info "omarchy-theme-set-browser: browser theme colors are left alone: Upstream sets them with policy files under /etc, which Motanka does not write"
+exit 0

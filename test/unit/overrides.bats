@@ -256,6 +256,12 @@ echo "config=$XDG_CONFIG_HOME"
   assert_failure 2
 }
 
+@test "omarchy-theme-set-browser changes nothing and succeeds, so a theme switch reports no failed retint" {
+  run "$O/omarchy-theme-set-browser"
+  assert_success
+  assert_output ''
+}
+
 # power <state> <image-size> <resume> <swaps...>: fixture /sys/power and /proc/swaps.
 power() {
   mkdir -p "$T/power"
