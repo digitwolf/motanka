@@ -94,6 +94,16 @@ fptwin() {
   assert_output ''
 }
 
+@test "GDM's numbered greeter users are left out of group member lists" {
+  printf 'sudo:x:27:tester\ngdm:x:975:gdm-greeter-2\n' >"$A1/groups.txt"
+  printf 'sudo:x:27:tester\ngdm:x:975:gdm-greeter\n' >"$B1/groups.txt"
+  printf 'sudo:x:27:tester\ngdm:x:120:\n' >"$A0/groups.txt"
+  printf 'sudo:x:27:tester\ngdm:x:120:\n' >"$B0/groups.txt"
+  fptwin
+  assert_success
+  assert_output ''
+}
+
 @test "a file missing from one Fingerprint is reported" {
   rm "$B1/groups.txt"
   fptwin

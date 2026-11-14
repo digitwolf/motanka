@@ -85,6 +85,8 @@ def parse_all(name, paths, homepaths):
         return [fpdiff.parse_sysctl(t) for t in texts]
     if name.startswith("dconf-") and name.endswith(".ini"):
         return [fpdiff.parse_dconf(t) for t in texts]
+    if name == "groups.txt":
+        texts = [fpdiff.parse_groups(t) for t in texts]
     return [{line: "" for line in t} for t in texts]
 
 
