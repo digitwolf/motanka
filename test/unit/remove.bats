@@ -832,3 +832,25 @@ $(cut -f2- "$LEDGER")"
     cmp -s "$FAKE_DB" "$work/db" || fail "case $i: planning changed the package database"
   done
 }
+
+@test "the Remover recreates the directories under /etc of installed packages that a purge script deleted (10.1)" {
+  local r=$BATS_TEST_TMPDIR/root
+  mkdir -p "$r/var/lib/dpkg/info" "$r/etc/apparmor.d/disable" "$r/etc/evince"
+  printf '/etc\n/etc/apparmor.d\n/etc/apparmor.d/disable\n' >"$r/var/lib/dpkg/info/apparmor.list"
+  printf '/etc\n/etc/apparmor.d\n/etc/evince\n' >"$r/var/lib/dpkg/info/evince:amd64.list"
+  chmod 0750 "$r/etc/apparmor.d/disable"
+  run bash -c 'set -euo pipefail
+    source "$1/src/lib/common.sh"; source "$1/src/cmd/remove.sh"
+    export MOTANKA_ROOT=$2
+    _mk_rm_shared_dirs evince >"$2/dirs.txt"
+    rmdir "$2/etc/apparmor.d/disable" "$2/etc/evince"
+    _mk_rm_restore_dirs "$2/dirs.txt"' _ "$REPO" "$r"
+  assert_success
+  assert_output --partial 'recreated /etc/apparmor.d/disable, which belongs to an installed package'
+  [[ -d $r/etc/apparmor.d/disable ]]
+  assert_equal "$(stat -c %a "$r/etc/apparmor.d/disable")" 750
+  [[ ! -e $r/etc/evince ]]
+  run cut -d' ' -f4 "$r/dirs.txt"
+  assert_output "$r/etc/apparmor.d
+$r/etc/apparmor.d/disable"
+}

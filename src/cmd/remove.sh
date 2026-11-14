@@ -78,7 +78,11 @@
 #      dpkg --purge --force-remove-reinstreq for half-installed ones
 #  11. apt-get purge of the Motanka packages (10.6)
 #  12. the Foreign_Package set is computed again on the new state and
-#      intersected with the planned one, checked, and purged
+#      intersected with the planned one, checked, and purged; then the
+#      directories under /etc of the packages that stay installed, listed
+#      before step 11, are recreated with their mode and owner if a
+#      maintainer script deleted them (dh_apparmor's postrm deletes
+#      /etc/apparmor.d/disable on purge)
 #  13. run-end ok; the System_Ledger is archived to
 #      /var/log/motanka-ledger-<date> and /var/lib/motanka is deleted
 # Other users' home folders are listed and never touched (10.13). The
@@ -1386,6 +1390,57 @@ _mk_rm_delete_binaries() {
   done
 }
 
+# _mk_rm_shared_dirs <package>...: the directories under /etc that exist
+# now and that dpkg lists for a package not named here (one that stays
+# installed), one per line: "<mode> <uid> <gid> <path>", sorted by path.
+# Step 12 recreates those that the purge deleted: a maintainer script may
+# delete a directory that another package owns, as dh_apparmor's postrm
+# does on purge with "rmdir /etc/apparmor.d/disable", which belongs to
+# apparmor (10.1).
+_mk_rm_shared_dirs() {
+  local info f name
+  local -A purged=()
+  local -a lists=()
+  info=$(mk_path /var/lib/dpkg/info)
+  for name in "$@"; do
+    purged[$name]=1
+  done
+  for f in "$info"/*.list; do
+    [[ -e $f ]] || continue
+    name=${f##*/}
+    name=${name%.list}
+    name=${name%%:*}
+    if [[ -z ${purged[$name]:-} ]]; then
+      lists+=("$f")
+    fi
+  done
+  ((${#lists[@]} > 0)) || return 0
+  grep -h '^/etc/' "${lists[@]}" 2>/dev/null | LC_ALL=C sort -u |
+    while IFS= read -r f; do
+      f=$(mk_path "$f")
+      if [[ -d $f && ! -L $f ]]; then
+        stat -c '%a %u %g %n' -- "$f"
+      fi
+    done
+}
+
+# _mk_rm_restore_dirs <file>: recreates, parents first, every directory of
+# the _mk_rm_shared_dirs list in <file> that no longer exists, with its
+# mode and owner, and says so.
+_mk_rm_restore_dirs() {
+  local mode uid gid path
+  while read -r mode uid gid path; do
+    [[ -n $path ]] || continue
+    if [[ ! -e $path && ! -L $path ]]; then
+      if install -d -m "$mode" -o "$uid" -g "$gid" -- "$path"; then
+        mk_info "recreated ${path#"${MOTANKA_ROOT:-}"}, which belongs to an installed package and which a maintainer script of a purged package deleted"
+      else
+        mk_warn "cannot recreate ${path#"${MOTANKA_ROOT:-}"}, which a maintainer script of a purged package deleted"
+      fi
+    fi
+  done <"$1"
+}
+
 _mk_rm_run() {
   local version marker p rc=0
   local -a planned=() target=() final=() left=() kept=() vanished=()
@@ -1430,6 +1485,8 @@ _mk_rm_run() {
     kept=("${MK_RM_KEPT[@]}")
   fi
   mapfile -t target < <(_mk_rm_intersect "${planned[*]}" "${MK_RM_FOREIGN[@]}")
+  _mk_rm_shared_dirs "${MK_RM_MOTANKA[@]}" "${target[@]}" >"$MK_RM_WORK/shared-dirs.txt" ||
+    mk_warn "cannot list the directories under /etc of the packages that stay installed"
 
   # 11. the Motanka packages
   if ((${#MK_RM_MOTANKA[@]} > 0)); then
@@ -1480,6 +1537,7 @@ _mk_rm_run() {
   if ((${#left[@]} > 0)); then
     mk_die "$MK_EXIT_ERROR" "these packages Motanka installed are still installed: ${left[*]}"
   fi
+  _mk_rm_restore_dirs "$MK_RM_WORK/shared-dirs.txt"
 
   # 13. the System_Ledger
   MK_RM_ENDED=1
