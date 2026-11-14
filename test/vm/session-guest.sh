@@ -119,6 +119,10 @@ hyprland_running() {
   pgrep -u "$UID_" -x Hyprland >/dev/null
 }
 
+compositor_unit_active() {
+  [[ -n $(systemctl --user list-units --plain --no-legend --state=active 'wayland-wm@*.service' 2>/dev/null) ]]
+}
+
 no_session() {
   ! hyprland_running && ! launcher_running
 }
@@ -360,6 +364,8 @@ session_round1() {
   else
     fail "Hyprland's parent is '$pexe', not $PREFIX/bin/start-hyprland"
   fi
+  # The unit is "activating" until the compositor reports ready.
+  wait_for 30 compositor_unit_active || true
   unit=$(systemctl --user list-units --plain --no-legend --state=active 'wayland-wm@*.service' | awk 'NR == 1 { print $1 }' || true)
   frag=$(systemctl --user show -p FragmentPath --value "$unit" 2>/dev/null || true)
   execstart=$(systemctl --user show -p ExecStart --value "$unit" 2>/dev/null || true)
@@ -538,8 +544,18 @@ phase_session() {
   mkdir -p "$L"
   systemctl --user show-environment | LC_ALL=C sort >"$L/env-before.txt"
   sudo mkdir -p "$DROPIN_DIR"
+  # A display manager registers its login as session type "wayland"; a getty
+  # login is "tty". The compositor runs in the user manager, outside the
+  # login session, so libseat's Activate call is judged by polkit through
+  # the user's display session, which logind elects by session type. On
+  # 24.04 (systemd 255) a newer SSH session of this user (also "tty") wins
+  # that election and polkit refuses ("Interactive authentication
+  # required"), so Hyprland aborts. XDG_SESSION_TYPE=wayland in getty's
+  # environment makes pam_systemd register tty1 the way GDM does; login
+  # needs -p (as in Ubuntu's getty@.service) to keep that environment, and
+  # with -o agetty no longer adds -f for --autologin itself.
   # shellcheck disable=SC2016 # $TERM is for systemd, not this shell
-  printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin %s --noclear %%I $TERM\n' "$(id -un)" |
+  printf '[Service]\nEnvironment=XDG_SESSION_TYPE=wayland\nExecStart=\nExecStart=-/sbin/agetty -o "-p -f -- \\\\u" --autologin %s --noclear %%I $TERM\n' "$(id -un)" |
     sudo tee "$DROPIN" >/dev/null
   cat >"$PROFILE" <<EOF
 if [ "\$(tty)" = /dev/tty1 ] && [ -e $T/launch ]; then
@@ -552,6 +568,16 @@ EOF
   session_round2 || true
   # shellcheck disable=SC2024 # the log file belongs to the test user
   sudo journalctl _UID="$UID_" -t motanka -t uwsm --no-pager >"$L/session-journal.log" 2>&1 || true
+  # Everything the user's processes and units logged (the compositor unit
+  # logs as uwsm_<id>), for failures the two identifiers above do not show.
+  # shellcheck disable=SC2024 # the log file belongs to the test user
+  sudo journalctl _UID="$UID_" --no-pager -o short-monotonic >"$L/user-journal-full.log" 2>&1 || true
+  # shellcheck disable=SC2024 # the log file belongs to the test user
+  sudo journalctl --user-unit 'wayland-wm*' _UID="$UID_" --no-pager >"$L/compositor-unit.log" 2>&1 || true
+  # shellcheck disable=SC2024 # the log file belongs to the test user
+  sudo journalctl -b -u systemd-logind --no-pager >"$L/logind.log" 2>&1 || true
+  # Hyprland writes a crash report (with the end of its log) when it aborts.
+  find "$HOME/.cache/hyprland" -maxdepth 1 -name 'hyprlandCrashReport*.txt' -exec cp -t "$L" {} + 2>/dev/null || true
   session_teardown
 }
 

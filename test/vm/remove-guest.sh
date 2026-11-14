@@ -163,6 +163,12 @@ hyprland_running() {
   pgrep -u "$UID_" -x Hyprland >/dev/null
 }
 
+# compositor_ready: uwsm's compositor unit is active (the compositor
+# reported ready).
+compositor_ready() {
+  [[ -n $(systemctl --user list-units --plain --no-legend --state=active 'wayland-wm@*.service' 2>/dev/null) ]]
+}
+
 no_session() {
   ! pgrep -u "$UID_" -x Hyprland >/dev/null && ! pgrep -u "$UID_" -f "$LAUNCHER" >/dev/null
 }
@@ -421,8 +427,18 @@ login_getty() {
   save_path "$dir/autologin.conf"
   save_path "$HOME/.bash_profile"
   sudo mkdir -p "$dir"
+  # A display manager registers its login as session type "wayland"; a getty
+  # login is "tty". The compositor runs in the user manager, outside the
+  # login session, so libseat's Activate call is judged by polkit through
+  # the user's display session, which logind elects by session type. On
+  # 24.04 (systemd 255) a newer SSH session of this user (also "tty") wins
+  # that election and polkit refuses ("Interactive authentication
+  # required"), so Hyprland aborts. XDG_SESSION_TYPE=wayland in getty's
+  # environment makes pam_systemd register tty1 the way GDM does; login
+  # needs -p (as in Ubuntu's getty@.service) to keep that environment, and
+  # with -o agetty no longer adds -f for --autologin itself.
   # shellcheck disable=SC2016 # $TERM is for systemd, not this shell
-  printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin %s --noclear %%I $TERM\n' "$(id -un)" |
+  printf '[Service]\nEnvironment=XDG_SESSION_TYPE=wayland\nExecStart=\nExecStart=-/sbin/agetty -o "-p -f -- \\\\u" --autologin %s --noclear %%I $TERM\n' "$(id -un)" |
     sudo tee "$dir/autologin.conf" >/dev/null
   cat >"$HOME/.bash_profile" <<EOF
 if [ "\$(tty)" = /dev/tty1 ] && [ -e $T/launch ]; then
@@ -475,6 +491,14 @@ phase_login() {
     return 0
   fi
   pass "the Motanka session runs (Hyprland $(pgrep -u "$UID_" -x Hyprland | head -n 1))"
+  # A Hyprland process shows up even when the compositor aborts a second
+  # later; uwsm's unit turns active only once the compositor is ready.
+  if wait_for 60 compositor_ready; then
+    pass "uwsm's compositor unit is active"
+  else
+    fail "uwsm's compositor unit did not become active within 60 s"
+    find "$HOME/.cache/hyprland" -maxdepth 1 -name 'hyprlandCrashReport*.txt' -exec cp -t "$L" {} + 2>/dev/null || true
+  fi
   if wait_for 120 setup_done; then
     pass "per-user setup ran and wrote setup-end to the User_Ledger"
   else
