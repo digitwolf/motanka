@@ -28,7 +28,12 @@
 #      removals are always refused. --dry-run prints the Plan and exits 0.
 #      With nothing to upgrade and no pending migration: exit 0, nothing
 #      written.
-#   7. System_Ledger: run-begin update, one plan line per simulated action
+#  6a. after a release upgrade (an installed Motanka_Package is a build for
+#      another release than VERSION_ID): the packages the release upgrader
+#      installed or kept only for Motanka (_mk_up_plan_adoptions; 11.4);
+#      the dry run lists them
+#   7. System_Ledger: run-begin update, one plan line per simulated action,
+#      then a pkg-adopted line per package of step 6a
 #   8. snapshot (src/lib/snapshot.sh): the version and .deb of every
 #      installed Motanka_Package, and an archive of each user's ledgered
 #      files and Namespaced_Paths (9.10); then a snapper pre snapshot when
@@ -104,6 +109,7 @@ MK_UP_USER="" MK_UP_UID="" MK_UP_GID="" MK_UP_HOME="" MK_UP_SETUP=0
 MK_UP_PKGS=()
 MK_UP_PENDING=()
 MK_UP_ALLOWED=()
+MK_UP_ADOPT=()
 
 mk_update_usage() {
   cat <<'EOF'
@@ -129,6 +135,11 @@ _mk_up_require_root() {
 
 # _mk_up_os_codename: VERSION_CODENAME of the running release, or nothing.
 _mk_up_os_codename() {
+  _mk_up_os_field VERSION_CODENAME
+}
+
+# _mk_up_os_field <name>: that field of os-release, unquoted, or nothing.
+_mk_up_os_field() {
   local f line v
   f=$(mk_path /etc/os-release)
   if [[ ! -r $f ]]; then
@@ -138,7 +149,7 @@ _mk_up_os_codename() {
     return 0
   fi
   while IFS= read -r line || [[ -n $line ]]; do
-    if [[ $line == VERSION_CODENAME=* ]]; then
+    if [[ $line == "$1"=* ]]; then
       v=${line#*=}
       v=${v//\"/}
       v=${v//\'/}
@@ -350,6 +361,69 @@ _mk_up_check_foreign() {
   fi
 }
 
+# _mk_up_removed <simulation>: the package names of its Remv and Purg lines.
+_mk_up_removed() {
+  awk '$1 == "Remv" || $1 == "Purg" { p = $2; sub(/:[A-Za-z0-9]+$/, "", p); print p }' "$1" | LC_ALL=C sort -u
+}
+
+# _mk_up_plan_adoptions: step 6a. After a release upgrade (an installed
+# Motanka_Package is a build for another release than VERSION_ID), fills
+# MK_UP_ADOPT with the packages the release upgrader left installed only
+# for Motanka (11.4): marked automatically installed, named by no
+# pkg-installed or pkg-adopted line, and removed by a simulated
+# "apt-get --auto-remove purge <every Motanka_Package>" but not by a
+# simulated "apt-get autoremove" now. They are new dependencies the
+# upgrader installed for packages Motanka installed, and packages that
+# only Motanka's packages still need (the upgrader would have removed them
+# otherwise). apt keeps every package that an installed package's Depends,
+# Recommends or Suggests names, so nothing a package outside Motanka uses
+# is adopted. Simulations only; nothing changes.
+_mk_up_plan_adoptions() {
+  local d=$MK_UP_DIR os p ver re='~ubuntu([0-9]+\.[0-9]+)\.' other=0
+  MK_UP_ADOPT=()
+  os=$(_mk_up_os_field VERSION_ID)
+  if [[ -z $os ]]; then
+    return 0
+  fi
+  while IFS=$'\t' read -r p ver _; do
+    if [[ $ver =~ $re ]] && [[ ${BASH_REMATCH[1]} != "$os" ]]; then
+      other=1
+    fi
+  done < <(mk_snapshot_motanka_packages)
+  if ((!other)); then
+    return 0
+  fi
+  mk_log info "Motanka packages are builds for another release than $os; looking for packages the release upgrade left for Motanka"
+  if ! LC_ALL=C apt-get -q -s autoremove >"$d/autoremove.txt" 2>"$d/autoremove.err" ||
+    ! LC_ALL=C apt-get -q -s --auto-remove purge "${MK_UP_PKGS[@]}" >"$d/purge.txt" 2>"$d/purge.err"; then
+    sed 's/^/  /' "$d/autoremove.err" "$d/purge.err" >&2 2>/dev/null || true
+    mk_die "$MK_EXIT_ERROR" "apt cannot simulate the removal of the Motanka packages; nothing was changed"
+  fi
+  _mk_up_removed "$d/autoremove.txt" >"$d/orphans-now.txt"
+  _mk_up_removed "$d/purge.txt" >"$d/orphans-without.txt"
+  LC_ALL=C apt-mark showauto 2>/dev/null | sed 's/:[A-Za-z0-9]*$//' | LC_ALL=C sort -u >"$d/auto.txt"
+  { mk_sysledger_packages "$(mk_sysledger_file)" 2>/dev/null || true; } | LC_ALL=C sort -u >"$d/ledgered.txt"
+  while IFS= read -r p; do
+    if ! mk_is_motanka_package "$p"; then
+      MK_UP_ADOPT+=("$p")
+    fi
+  done < <(LC_ALL=C comm -12 "$d/orphans-without.txt" "$d/auto.txt" |
+    LC_ALL=C comm -23 - "$d/orphans-now.txt" | LC_ALL=C comm -23 - "$d/ledgered.txt")
+}
+
+# _mk_up_record_adoptions: pkg-adopted lines for MK_UP_ADOPT, after the
+# plan lines.
+_mk_up_record_adoptions() {
+  local p ver
+  for p in "${MK_UP_ADOPT[@]}"; do
+    ver=$(mk_installed_version "$p") || continue
+    mk_sysledger_pkg_adopted "$p" "$ver" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
+  done
+  if ((${#MK_UP_ADOPT[@]} > 0)); then
+    mk_info "recorded ${#MK_UP_ADOPT[@]} package(s) the release upgrade installed or kept for Motanka; 'motanka remove' removes them: ${MK_UP_ADOPT[*]}"
+  fi
+}
+
 # _mk_up_count <op...>: the number of plan.tsv lines with one of the ops.
 _mk_up_count() {
   local ops=" $* "
@@ -394,6 +468,10 @@ _mk_up_print_plan() {
     done
   else
     printf 'No package Motanka does not own changes or is removed.\n'
+  fi
+  if ((${#MK_UP_ADOPT[@]} > 0)); then
+    printf 'Packages the release upgrade installed or kept for Motanka, recorded in the System_Ledger so that motanka remove removes them:\n'
+    printf '  %s\n' "${MK_UP_ADOPT[@]}"
   fi
   users=$(mk_snapshot_users | grep -c . || true)
   printf 'Snapshot before the upgrade: %d Motanka package(s) with their .debs, and the ledgered files of %d user(s).\n' \
@@ -547,7 +625,7 @@ _mk_up_run() {
   local inst rm version raw
   inst=$(_mk_up_count Inst)
   rm=$(_mk_up_count Remv Purg)
-  if ((inst == 0 && rm == 0 && ${#MK_UP_PENDING[@]} == 0)); then
+  if ((inst == 0 && rm == 0 && ${#MK_UP_PENDING[@]} == 0 && ${#MK_UP_ADOPT[@]} == 0)); then
     mk_info "Motanka is up to date ($(mk_installed_version motanka-core)); no migration is pending"
     mk_log info "up to date; nothing changed"
     return 0
@@ -563,6 +641,7 @@ _mk_up_run() {
   while IFS= read -r raw; do
     mk_sysledger_plan "$raw" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   done <"$MK_UP_DIR/plan.txt"
+  _mk_up_record_adoptions
 
   MK_UP_SNAPSHOT=$MK_RUN_ID
   if ! mk_snapshot_create "$MK_UP_SNAPSHOT"; then
@@ -633,6 +712,7 @@ mk_cmd_update() {
   _mk_up_apt_update
   _mk_up_simulate
   _mk_up_check_foreign
+  _mk_up_plan_adoptions
   _mk_up_load_pending
 
   if ((MK_DRY_RUN)); then

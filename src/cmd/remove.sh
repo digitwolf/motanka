@@ -27,7 +27,9 @@
 #      - every motanka and motanka-* package dpkg knows (any state but
 #        not-installed) is purged; a simulation must remove no other
 #        package and install nothing (exit 5 otherwise)
-#      - Foreign_Packages: the System_Ledger's pkg-installed names and the
+#      - Foreign_Packages: the System_Ledger's pkg-installed and
+#        pkg-adopted names (pkg-adopted: what a release upgrade installed or
+#        kept only for Motanka, recorded by the next update) and the
 #        packages that plan lines of install and update runs name as new
 #        installs ("Inst <name> (" - this covers an interrupted install,
 #        whose pkg-installed lines were never written). A name is a
@@ -442,7 +444,7 @@ _mk_rm_ledger_append() {
 
 # _mk_rm_ledger_candidates: "<name> TAB auto|manual" for every package the
 # System_Ledger records Motanka installing: pkg-installed lines (manual if
-# any of them says so) and new installs in plan lines of install and update
+# any of them says so), pkg-adopted lines (auto) and new installs in plan lines of install and update
 # runs (auto unless a pkg-installed line says otherwise).
 _mk_rm_ledger_candidates() {
   if [[ -z $MK_RM_LEDGER ]]; then
@@ -454,6 +456,10 @@ _mk_rm_ledger_candidates() {
     $3 == "pkg-installed" {
       add($4)
       if (!($4 in mode) || $6 == "manual") mode[$4] = $6
+    }
+    $3 == "pkg-adopted" {
+      add($4)
+      if (!($4 in mode)) mode[$4] = "auto"
     }
     $3 == "plan" && (kind[$2] == "install" || kind[$2] == "update") {
       m = split($4, w, " ")

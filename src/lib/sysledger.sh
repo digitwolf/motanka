@@ -7,9 +7,15 @@
 #   run-begin      install|update|remove  <motanka-version>
 #   plan           <apt simulation line>
 #   pkg-installed  <name>  <version>  auto|manual
+#   pkg-adopted    <name>  <version>
 #   menu-install   <uid>  <name>  apt|binary
 #   apps-answer    yes|no  flag|question|default
 #   run-end        ok|failed
+#
+# pkg-adopted is written by the first update run after a release upgrade
+# for a package the release upgrader installed or kept only for Motanka
+# (src/cmd/update.sh, step 6a). The Remover treats it as a Foreign_Package
+# installed as a dependency (auto).
 #
 # apps-answer is the answer of one install run to the Motanka_Apps
 # question (3.15): flag for --apps or --no-apps, question for an answer at
@@ -55,6 +61,9 @@ _mk_sysledger_check() {
       ;;
     pkg-installed)
       (($# == 3)) && [[ $3 == auto || $3 == manual ]]
+      ;;
+    pkg-adopted)
+      (($# == 2))
       ;;
     menu-install)
       (($# == 3)) && [[ $1 =~ ^[0-9]+$ ]] && [[ $3 == apt || $3 == binary ]]
@@ -131,6 +140,11 @@ mk_sysledger_pkg_installed() {
   mk_sysledger_append pkg-installed "$@"
 }
 
+# mk_sysledger_pkg_adopted <name> <version>
+mk_sysledger_pkg_adopted() {
+  mk_sysledger_append pkg-adopted "$@"
+}
+
 # mk_sysledger_menu_install <uid> <name> <apt|binary>
 mk_sysledger_menu_install() {
   mk_sysledger_append menu-install "$@"
@@ -176,10 +190,10 @@ mk_sysledger_read() {
   return 0
 }
 
-# mk_sysledger_packages [file]: Foreign_Packages recorded as installed, one
-# per line, in the order first recorded.
+# mk_sysledger_packages [file]: Foreign_Packages recorded as installed or
+# adopted, one per line, in the order first recorded.
 mk_sysledger_packages() {
-  mk_sysledger_read "$@" | awk -F'\t' '$3 == "pkg-installed" && !seen[$4]++ { print $4 }'
+  mk_sysledger_read "$@" | awk -F'\t' '($3 == "pkg-installed" || $3 == "pkg-adopted") && !seen[$4]++ { print $4 }'
 }
 
 # mk_sysledger_menu_installs [file]: <uid> TAB <name> TAB <apt|binary>

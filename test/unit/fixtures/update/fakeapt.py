@@ -17,6 +17,13 @@ A .deb is a text file of control fields (Package, Version, Architecture,
 Depends in the FAKE_REPO syntax). FAKE_APT_FAIL=<update|install|download>
 makes the real run of that apt-get command fail.
 
+"apt-get -s autoremove" prints a "Remv name [version]" line for each
+installed name in the file FAKE_AUTOREMOVE (one name per line; none when
+unset). "apt-get -s [--auto-remove] purge <names>" prints "Purg" lines for
+the installed names and, with --auto-remove, "Remv" lines for the
+installed names in FAKE_AUTOREMOVE and FAKE_PURGE_AUTOREMOVE. Both only
+simulate: a real autoremove or purge exits 99.
+
 apt-get install prints and applies "Inst name [old] (new Fake [arch])",
 "Inst name (new Fake [arch])" and "Remv name [old]" lines; a name ending in
 "-" is removed. A real install refuses removals under --no-remove and
@@ -149,6 +156,27 @@ def apt_get(args):
             fname = f"{name}_{r['version'].replace(':', '%3a')}_{r['arch']}.deb"
             with open(fname, "w") as f:
                 f.write(f"Package: {name}\nVersion: {r['version']}\nArchitecture: {r['arch']}\nDepends: {r['deps']}\n")
+        return 0
+    if cmd in ("autoremove", "purge"):
+        if not sim:
+            print(f"fake apt-get: a real {cmd} is never expected", file=sys.stderr)
+            return 99
+        rows, _ = load_db()
+        names = []
+        if cmd == "purge":
+            for n in pkgs:
+                if n in rows and rows[n]["status"] == "installed":
+                    print(f"Purg {n} [{rows[n]['version']}]")
+        if cmd == "autoremove" or "--auto-remove" in args:
+            files = ["FAKE_AUTOREMOVE"] + (["FAKE_PURGE_AUTOREMOVE"] if cmd == "purge" else [])
+            for var in files:
+                path = os.environ.get(var, "")
+                if path and os.path.exists(path):
+                    with open(path) as f:
+                        names += [x.strip() for x in f if x.strip()]
+        for n in names:
+            if n in rows and rows[n]["status"] == "installed" and n not in pkgs:
+                print(f"Remv {n} [{rows[n]['version']}]")
         return 0
     if cmd != "install":
         print(f"fake apt-get: unexpected command '{cmd}'", file=sys.stderr)

@@ -177,6 +177,18 @@ write_run() {
   assert_output 20261113T100000Z-000001
 }
 
+@test "pkg-adopted lines are validated and read back with the installed packages" {
+  MK_RUN_ID=20261114T090000Z-000001
+  mk_sysledger_begin update 0.1.0
+  mk_sysledger_pkg_installed libfoo1 1.2-4 auto
+  mk_sysledger_pkg_adopted glycin-loaders 2.1.5
+  mk_sysledger_pkg_adopted libfoo1 1.2-4
+  run mk_sysledger_pkg_adopted glycin-loaders 2.1.5 auto
+  assert_failure
+  run mk_sysledger_packages
+  assert_output $'libfoo1\nglycin-loaders'
+}
+
 @test "the ledger folder is created when missing" {
   [[ ! -e $MOTANKA_ROOT/var ]]
   mk_sysledger_begin install 0.1.0

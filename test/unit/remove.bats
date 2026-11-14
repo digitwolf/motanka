@@ -665,6 +665,25 @@ apps_db_and_ledger() {
   assert_equal "$(installed_names)" "garbage2 libx "
 }
 
+@test "a package the update adopted after a release upgrade is purged, with the ledgered one it needs (11.4)" {
+  # The release upgrader installed glycin-loaders for librsvg2-2, which
+  # Motanka installed; the next update recorded it as pkg-adopted.
+  db 'motanka-core installed 0.1 manual librsvg2-2 -' \
+    'librsvg2-2 installed 2.61 auto glycin-loaders -' \
+    'glycin-loaders installed 2.1 auto librsvg2-2 -' \
+    'bash installed 5.2 manual - -'
+  sl 20261113T090000Z-aaaaaa run-begin install 0.1
+  sl 20261113T090000Z-aaaaaa pkg-installed librsvg2-2 2.61 auto
+  sl 20261113T090000Z-aaaaaa run-end ok
+  sl 20261114T090000Z-bbbbbb run-begin update 0.1
+  sl 20261114T090000Z-bbbbbb pkg-adopted glycin-loaders 2.1
+  sl 20261114T090000Z-bbbbbb run-end ok
+  remove --yes
+  assert_success
+  refute_line --regexp '^  kept +librsvg2-2'
+  assert_equal "$(installed_names)" "bash "
+}
+
 @test "a package Motanka installed is purged when only packages purged with it need it" {
   # The 26.04 round trip: pkexec came in as a dependency of motanka-core.
   # A host package suggests it (apport) and another names it as an

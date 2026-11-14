@@ -287,3 +287,79 @@ ledger_verbs() {
   [[ ! -e $LEDGER ]]
   assert_equal "$(installed_version motanka-core)" "$N"
 }
+
+# after_release_upgrade: the Motanka packages are the 24.04 builds on the
+# 26.04 host, as a release upgrade leaves them, with the 26.04 builds
+# offered; libnew (a new dependency the upgrader installed) and libold
+# (kept only for Motanka) become orphans without Motanka, liborphan is one
+# already, libuser is manual, libledgered is already in the System_Ledger.
+after_release_upgrade() {
+  local p
+  : >"$FAKE_DB"
+  : >"$FAKE_REPO"
+  motanka_installed "$O"
+  pkg bash 5.2-1 amd64 manual
+  offer bash 5.2-1 amd64
+  for p in motanka motanka-core motanka-stack; do
+    offer "$p" "$N"
+  done
+  for p in libnew libold liborphan libledgered; do
+    pkg "$p" 1.0 amd64 auto
+  done
+  pkg libuser 1.0 amd64 manual
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tpkg-installed\tlibledgered\t1.0\tauto\n' >"$LEDGER"
+  printf 'liborphan\n' >"$FAKE_STATE/autoremove"
+  printf 'libnew\nlibold\nlibuser\nlibledgered\nmotanka-archive-keyring\n' >"$FAKE_STATE/purge-autoremove"
+  export FAKE_AUTOREMOVE=$FAKE_STATE/autoremove FAKE_PURGE_AUTOREMOVE=$FAKE_STATE/purge-autoremove
+}
+
+@test "after a release upgrade the update records what the upgrader left for Motanka as pkg-adopted (11.4)" {
+  O=0.1.0-1~ubuntu24.04.1
+  after_release_upgrade
+  run update --yes
+  assert_success
+  assert_output --partial "recorded 2 package(s) the release upgrade installed or kept for Motanka"
+  run ledger_verbs
+  assert_line $'pkg-adopted\tlibnew\t1.0'
+  assert_line $'pkg-adopted\tlibold\t1.0'
+  refute_line --partial $'pkg-adopted\tliborphan'
+  refute_line --partial $'pkg-adopted\tlibuser'
+  refute_line --partial $'pkg-adopted\tlibledgered'
+  refute_line --partial $'pkg-adopted\tmotanka'
+  assert_equal "${lines[-1]}" $'run-end\tok'
+  assert_equal "$(installed_version motanka-core)" "$N"
+  # Only simulations: no real autoremove or purge.
+  run calls apt-get
+  refute_line --regexp '^(-q )?(autoremove|purge|--auto-remove)'
+  assert_line --regexp '-s autoremove$'
+  # A second update has nothing left to adopt or upgrade.
+  run update --yes
+  assert_success
+  assert_output --partial 'Motanka is up to date'
+}
+
+@test "the dry run lists the packages it would adopt and writes nothing" {
+  O=0.1.0-1~ubuntu24.04.1
+  after_release_upgrade
+  cp "$LEDGER" "$T/ledger.before"
+  run update --dry-run
+  assert_success
+  assert_output --partial 'Packages the release upgrade installed or kept for Motanka'
+  assert_line '  libnew'
+  assert_line '  libold'
+  refute_line '  libuser'
+  cmp "$LEDGER" "$T/ledger.before"
+}
+
+@test "without builds of another release the update adopts nothing and simulates no removal" {
+  offer motanka-core "$N1"
+  printf 'bash\n' >"$FAKE_STATE/purge-autoremove"
+  export FAKE_PURGE_AUTOREMOVE=$FAKE_STATE/purge-autoremove
+  run update --yes
+  assert_success
+  run calls apt-get
+  refute_line --partial 'autoremove'
+  refute_line --partial 'purge'
+  run ledger_verbs
+  refute_line --partial 'pkg-adopted'
+}
