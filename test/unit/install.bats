@@ -445,7 +445,7 @@ EOF
   assert_output ''
   run real_installs
   assert_output ''
-  run grep -c ' -s install motanka motanka-source-resolute$' "$FAKE_STATE/apt.log"
+  run grep -c ' -s install --no-install-recommends motanka motanka-source-resolute$' "$FAKE_STATE/apt.log"
   assert_output 1
 }
 
@@ -612,11 +612,11 @@ EOF
   assert_equal "${#lines[@]}" 7
   assert_line --index 0 --regexp ' check$'
   assert_line --index 1 --regexp '^-c .*Dir::State::Lists=.* -q update$'
-  assert_line --index 2 --regexp '^-c .*Dir::State::Lists=.* -q -s install motanka motanka-source-resolute$'
+  assert_line --index 2 --regexp '^-c .*Dir::State::Lists=.* -q -s install --no-install-recommends motanka motanka-source-resolute$'
   assert_line --index 3 --regexp '^-o DPkg::Lock::Timeout=300 install -y --no-remove .*/dl/keyring\.deb .*/dl/source\.deb$'
   assert_line --index 4 -- '-o DPkg::Lock::Timeout=300 -q update'
-  assert_line --index 5 -- '-q -s install motanka motanka-source-resolute'
-  assert_line --index 6 -- '-o DPkg::Lock::Timeout=300 install -y --no-remove motanka motanka-source-resolute'
+  assert_line --index 5 -- '-q -s install --no-install-recommends motanka motanka-source-resolute'
+  assert_line --index 6 -- '-o DPkg::Lock::Timeout=300 install -y --no-remove --no-install-recommends motanka motanka-source-resolute'
   run ls -A "$HOME"
   assert_output ''
   run ls -A "$MOTANKA_ROOT/run/motanka"
@@ -674,7 +674,7 @@ interrupted_ledger() {
   assert_equal "${#lines[@]}" 11
   run real_installs
   assert_equal "${#lines[@]}" 1
-  assert_output --partial 'install -y --no-remove motanka motanka-source-resolute'
+  assert_output --partial 'install -y --no-remove --no-install-recommends motanka motanka-source-resolute'
 }
 
 @test "a rerun after an interruption between apt-get install and the ledger records the packages" {
@@ -796,15 +796,15 @@ ask() {
   assert_success
   has_err "$APPS_Q (motanka-apps: 4 more package(s), 8 MB to download)? [y/N]"
   assert_equal "$(count_in "$stderr" "$APPS_Q")" 1
-  assert_line '(apt-get install --no-remove motanka motanka-source-resolute motanka-apps):'
+  assert_line '(apt-get install --no-remove --no-install-recommends motanka motanka-source-resolute motanka-apps):'
   assert_line "  Inst motanka-apps ($VER Motanka:resolute [all])"
   assert_line "  Inst motanka-herdr ($VER Motanka:resolute [amd64])"
   assert_line '  Inst libapp1 (3.0-1 Ubuntu:26.04/resolute [amd64])'
   assert_line '11 package(s) to install; no package Motanka does not own changes or is removed.'
   assert_line 'motanka-apps: included, answered yes at the question.'
-  run grep -c -- '--print-uris -qq install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  run grep -c -- '--print-uris -qq install --no-install-recommends motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
   assert_output 1
-  run grep -c 'Dir::State::Lists=.* -q -s install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  run grep -c 'Dir::State::Lists=.* -q -s install --no-install-recommends motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
   assert_output 1
   [[ ! -e $LEDGER ]]
   run real_installs
@@ -819,7 +819,7 @@ ask() {
     assert_success
     has_err "$APPS_Q"
     refute_line --partial 'Inst motanka-apps'
-    assert_line '(apt-get install --no-remove motanka motanka-source-resolute):'
+    assert_line '(apt-get install --no-remove --no-install-recommends motanka motanka-source-resolute):'
     assert_line '7 package(s) to install; no package Motanka does not own changes or is removed.'
     assert_line 'motanka-apps: not included, answered no at the question; add it later with: sudo motanka install --apps'
   done
@@ -927,10 +927,10 @@ ask() {
   assert_line "$(printf 'pkg-installed\tapp-tool\t3.0-1\tauto')"
   refute_line --partial $'pkg-installed\tmotanka-'
   assert_equal "${lines[-1]}" "$(printf 'run-end\tok')"
-  run grep -c -- '^-q -s install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  run grep -c -- '^-q -s install --no-install-recommends motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
   assert_output 1
   run real_installs
-  assert_line -- '-o DPkg::Lock::Timeout=300 install -y --no-remove motanka motanka-source-resolute motanka-apps'
+  assert_line -- '-o DPkg::Lock::Timeout=300 install -y --no-remove --no-install-recommends motanka motanka-source-resolute motanka-apps'
   run grep -c '^motanka-apps' "$FAKE_DPKG_DB"
   assert_output 1
 }
@@ -942,7 +942,7 @@ ask() {
   run entries
   assert_equal "${lines[1]}" "$(printf 'apps-answer\tyes\tquestion')"
   run real_installs
-  assert_line --partial 'install -y --no-remove motanka motanka-source-resolute motanka-apps'
+  assert_line --partial 'install -y --no-remove --no-install-recommends motanka motanka-source-resolute motanka-apps'
 }
 
 @test "motanka-apps changing a Foreign_Package exits 5 and changes nothing" {
@@ -980,7 +980,7 @@ ask() {
   assert_equal "${lines[8]}" "$(printf 'run-end\tok')"
   assert_equal "${#lines[@]}" 9
   run real_installs
-  assert_equal "${lines[-1]}" '-o DPkg::Lock::Timeout=300 install -y --no-remove motanka motanka-source-resolute motanka-apps'
+  assert_equal "${lines[-1]}" '-o DPkg::Lock::Timeout=300 install -y --no-remove --no-install-recommends motanka motanka-source-resolute motanka-apps'
 
   # Installed now: no question, no answer, nothing to change.
   cp "$LEDGER" "$BATS_TEST_TMPDIR/ledger.apps"

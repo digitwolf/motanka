@@ -33,11 +33,11 @@
 #      installed Motanka_Package, and an archive of each user's ledgered
 #      files and Namespaced_Paths (9.10); then a snapper pre snapshot when
 #      snapper has a config for / (9.12)
-#   9. apt-get install --no-remove of the Motanka_Packages (without
-#      --no-remove only when the simulation removes Motanka_Packages and
-#      nothing else); Motanka packages that were marked automatically
-#      installed are marked so again; pkg-installed lines for new
-#      Foreign_Packages (3.7)
+#   9. apt-get install --no-remove --no-install-recommends of the
+#      Motanka_Packages (without --no-remove only when the simulation
+#      removes Motanka_Packages and nothing else); Motanka packages that
+#      were marked automatically installed are marked so again;
+#      pkg-installed lines for new Foreign_Packages (3.7)
 #  10. the Channel's Upstream_Pin: the vendored tree comes with
 #      motanka-core, so the upgrade moved it; the pin of the Channel in
 #      upstream.pin and the vendored tree are checked and reported
@@ -381,7 +381,7 @@ _mk_up_target_version() {
 _mk_up_print_plan() {
   local users cfg line
   printf 'Motanka update plan for Ubuntu %s: suite %s (channel %s)\n' "$MK_UP_CODENAME" "$MK_UP_SUITE" "$MK_UP_CHANNEL"
-  printf 'Simulated apt transaction (apt-get install %s):\n' "${MK_UP_PKGS[*]}"
+  printf 'Simulated apt transaction (apt-get install --no-install-recommends %s):\n' "${MK_UP_PKGS[*]}"
   if [[ -s $MK_UP_DIR/plan.txt ]]; then
     sed 's/^/  /' "$MK_UP_DIR/plan.txt"
   else
@@ -449,6 +449,7 @@ _mk_up_upgrade() {
   if ((!removes)); then
     args+=(--no-remove)
   fi
+  args+=(--no-install-recommends)
   mk_info "upgrading the Motanka packages"
   if ! mk_snapshot_apt "${args[@]}" "${MK_UP_PKGS[@]}"; then
     mk_die "$MK_EXIT_ERROR" "apt-get could not upgrade the Motanka packages"

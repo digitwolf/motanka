@@ -430,7 +430,11 @@ mk_aptsim_update() {
 }
 
 # mk_aptsim_simulate <out> <private|system> <package>...: apt-get -s
-# install with the private or the Host's configuration. The simulation
+# install --no-install-recommends with the private or the Host's
+# configuration. Like the Helper, the Installer, the Updater and Rollback
+# install no Recommends: Motanka's packages name what they need in
+# Depends, and a Recommends of a Foreign_Package could start a service or
+# change system policy (3.14). The simulation
 # does not pass --no-remove, so planned removals show up as Remv lines and
 # can be listed; the real install passes it. Exits 1 if apt cannot plan
 # the installation.
@@ -442,7 +446,7 @@ mk_aptsim_simulate() {
     opts=("${MK_APTSIM_OPTS[@]}")
   fi
   mk_log info "simulating apt-get install $* ($mode configuration)"
-  LC_ALL=C apt-get "${opts[@]}" -q -s install "$@" >"$out" 2>"$out.err" || rc=$?
+  LC_ALL=C apt-get "${opts[@]}" -q -s install --no-install-recommends "$@" >"$out" 2>"$out.err" || rc=$?
   if ((rc != 0)); then
     sed 's/^/  /' "$out" "$out.err" >&2
     mk_die "$MK_EXIT_ERROR" "apt cannot plan the installation of $* (apt-get exit $rc)"

@@ -40,7 +40,8 @@
 #   8. simulate again with the Host's own configuration (with motanka-apps
 #      when the answer is yes); refuse Foreign changes (exit 5); ledger the
 #      actions the first simulation did not show
-#   9. apt-get install --no-remove motanka motanka-source-<suite>, and
+#   9. apt-get install --no-remove --no-install-recommends motanka
+#      motanka-source-<suite>, and
 #      motanka-apps when the answer is yes
 #  10. pkg-installed for every Foreign_Package that a plan line of an
 #      install run names as new and that is installed now, unless already
@@ -665,7 +666,7 @@ _mk_install_apps_size() {
   local -a pkgs=("${MK_INSTALL_PKGS[@]}" "$MK_APPS_PKG")
   MK_APPS_N="" MK_APPS_BYTES="" MK_APPS_SIM=0
   mk_log info "simulating apt-get install ${pkgs[*]} (private configuration) for the size of $MK_APPS_PKG"
-  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -q -s install "${pkgs[@]}" \
+  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -q -s install --no-install-recommends "${pkgs[@]}" \
     >"$d/sim-apps.txt" 2>"$d/sim-apps.txt.err" || rc=$?
   if ((rc != 0)); then
     mk_log warning "apt cannot simulate the installation of $MK_APPS_PKG (apt-get exit $rc); asking without its size"
@@ -680,7 +681,7 @@ _mk_install_apps_size() {
   n=$(wc -l <"$d/apps-new.txt")
   MK_APPS_N=$((n))
   rc=0
-  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -o Debug::NoLocking=true --print-uris -qq install "${pkgs[@]}" \
+  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -o Debug::NoLocking=true --print-uris -qq install --no-install-recommends "${pkgs[@]}" \
     >"$d/uris-apps.txt" 2>"$d/uris-apps.txt.err" || rc=$?
   if ((rc != 0)); then
     mk_log warning "apt-get --print-uris for $MK_APPS_PKG exited $rc; asking without the download size"
@@ -840,7 +841,7 @@ _mk_install_print_plan() {
   local d=$MK_APTSIM_DIR n
   n=$(awk -F'\t' '$1 == "Inst"' "$d/plan.tsv" | wc -l)
   printf 'Simulated apt transaction for the suite %s\n' "$MK_SUITE"
-  printf '(apt-get install --no-remove %s):\n' "${MK_INSTALL_PKGS[*]}"
+  printf '(apt-get install --no-remove --no-install-recommends %s):\n' "${MK_INSTALL_PKGS[*]}"
   if [[ -s $d/plan.txt ]]; then
     sed 's/^/  /' "$d/plan.txt"
   else
@@ -939,7 +940,7 @@ _mk_install_local_debs() {
     return 0
   fi
   mk_info "installing the verified keyring and source packages"
-  _mk_install_apt install -y --no-remove "${debs[@]}" ||
+  _mk_install_apt install -y --no-remove --no-install-recommends "${debs[@]}" ||
     mk_die "$MK_EXIT_ERROR" "apt-get could not install the keyring and source packages; 'sudo motanka install' resumes from the System_Ledger"
 }
 
@@ -986,7 +987,7 @@ _mk_install_run() {
   else
     mk_info "installing motanka"
   fi
-  _mk_install_apt install -y --no-remove "${MK_INSTALL_PKGS[@]}" ||
+  _mk_install_apt install -y --no-remove --no-install-recommends "${MK_INSTALL_PKGS[@]}" ||
     mk_die "$MK_EXIT_ERROR" "apt-get could not install ${MK_INSTALL_PKGS[*]}; the System_Ledger records the plan, and 'sudo motanka install' resumes"
 
   _mk_install_record_packages

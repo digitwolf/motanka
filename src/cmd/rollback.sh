@@ -27,10 +27,10 @@
 #      the snapshot>, one plan line per simulated action. The System_Ledger
 #      format has no kind for a rollback; an update run is the closest, and
 #      the Remover reads its plan lines the same way.
-#   7. apt-get install of the .debs (with --no-remove unless the simulation
-#      removes Motanka_Packages only); Motanka packages that were marked
-#      automatically installed are marked so again; pkg-installed lines for
-#      new Foreign_Packages (3.7)
+#   7. apt-get install --no-install-recommends of the .debs (with
+#      --no-remove unless the simulation removes Motanka_Packages only);
+#      Motanka packages that were marked automatically installed are marked
+#      so again; pkg-installed lines for new Foreign_Packages (3.7)
 #   8. the invoking user's archive is restored
 #   9. run-end ok. The snapshot stays, so a rollback can be repeated.
 # After run-begin, any exit other than success appends run-end failed.
@@ -260,10 +260,10 @@ _mk_rb_run() {
   if [[ -s $d/plan.tsv ]]; then
     mapfile -t auto < <(mk_snapshot_auto_packages "${MK_RB_NAMES[@]}")
     if ((removes)); then
-      mk_snapshot_apt install --allow-downgrades "${args[@]}" ||
+      mk_snapshot_apt install --allow-downgrades --no-install-recommends "${args[@]}" ||
         mk_die "$MK_EXIT_ERROR" "apt-get could not install the packages of the snapshot $MK_RB_ID"
     else
-      mk_snapshot_apt install --allow-downgrades --no-remove "${args[@]}" ||
+      mk_snapshot_apt install --allow-downgrades --no-remove --no-install-recommends "${args[@]}" ||
         mk_die "$MK_EXIT_ERROR" "apt-get could not install the packages of the snapshot $MK_RB_ID"
     fi
     if ((${#auto[@]} > 0)); then
