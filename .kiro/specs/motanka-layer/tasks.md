@@ -2,7 +2,7 @@
 
 Rules for every task: nothing is built, installed, removed or run with `sudo` on the development host. "26.04 VM" and "24.04 VM" mean throwaway test VMs started by `test/vm/`. No task runs `git push` or publishes to the apt repo.
 
-- [ ] 1. VM test harness
+- [x] 1. VM test harness
 - [x] 1.1 Harness library, KVM check, `up` and `down`
   - Create `test/vm/lib.sh`, `test/vm/up`, `test/vm/down`
   - Start QEMU as the current user with user-mode networking and SSH forwarded to a free port on 127.0.0.1; overlays and state under `~/.cache/motanka-vm/`
@@ -29,7 +29,7 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [x] 2. Checkpoint — run `test/run-all`, confirm a 26.04 and a 24.04 VM boot and tear down, stop for questions
   - _Requirements: 14.1, 14.2, 14.3_
 
-- [ ] 3. Feasibility spikes (each runs in a test VM and writes its result into `design.md`)
+- [x] 3. Feasibility spikes (each runs in a test VM and writes its result into `design.md`)
 - [x] 3.1 S3: Hyprland in QEMU
   - In a 26.04 VM, start Ubuntu's own Hyprland headless; choose between `virtio-vga-gl` with `egl-headless` and software rendering; record the QEMU flags in `test/vm/lib.sh`
   - _Requirements: 8.5_
@@ -99,7 +99,7 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 - [ ] 8. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
   - _Requirements: 13.1_
 
-- [ ] 9. Core data and CLI
+- [x] 9. Core data and CLI
 - [x] 9.1 Package map
   - Create `packages.yaml` from Upstream's package lists at the pin, `tools/pkgmap` (validate, compile to `package-map.tsv` per release), `test/unit/pkgmap.bats`; fail on an unmapped Upstream package
   - _Requirements: 7.2, 7.9_
