@@ -33,7 +33,8 @@
 #            unplanned entry, the Hyprland fragment is ledgered, alice's
 #            Shared_Files are unchanged; Hyprland --verify-config on alice's
 #            config reports zero errors, and so does "hyprctl configerrors" in
-#            the running compositor (8.3); after Upstream's
+#            the running compositor (8.3), where "hyprctl getoption
+#            misc:disable_xdg_env_checks" is on; after Upstream's
 #            dbus-update-activation-environment ran (OZONE_PLATFORM=wayland is
 #            in the user manager), "systemctl --user show-environment" has
 #            XDG_CURRENT_DESKTOP=Motanka:Hyprland and
@@ -484,6 +485,29 @@ print(sum(1 for e in items if str(e).strip()))' <<<"$out")
   else
     fail "hyprctl configerrors (exit $rc) reports '$n' error(s):"
     head -n 20 "$L/configerrors.json" | show
+  fi
+
+  # The Motanka session fragment turns off Hyprland's warning about an
+  # XDG_CURRENT_DESKTOP other than "Hyprland" (motanka-session.lua).
+  rc=0
+  out=$(as_alice env HYPRLAND_INSTANCE_SIGNATURE="$sig" "$PREFIX/bin/hyprctl" -j getoption misc:disable_xdg_env_checks 2>&1) || rc=$?
+  printf '%s\n' "$out" >"$L/getoption-xdg-env-checks.json"
+  n=$(python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    print("unparsable")
+    sys.exit(0)
+for key in ("int", "bool", "value"):
+    if key in data:
+        print(int(data[key] in (1, True, "1", "true")))
+        break
+else:
+    print("missing")' <<<"$out")
+  if ((rc == 0)) && [[ $n == 1 ]]; then
+    pass "misc:disable_xdg_env_checks is on in the Motanka session"
+  else
+    fail "misc:disable_xdg_env_checks is not on (hyprctl exit $rc, result '$n'): $out"
   fi
 }
 
