@@ -38,6 +38,19 @@
 #                  are active and zero processes run from /opt/motanka
 #                  (5.5); the interactive shell finds no Shim and no
 #                  Motanka command (5.9).
+#   other-in <label>
+#                  the same, but stays logged in, so that the host can take
+#                  the Fingerprint from the running Other_Session
+#   other-out      log out of GNOME (after other-in)
+#   owned          state/owned-packages.txt: the Motanka_Packages and the
+#                  Foreign_Packages the System_Ledger records (pkg-installed,
+#                  pkg-adopted, new installs in plan lines);
+#                  state/owned-paths.txt: what those packages own (dpkg -L),
+#                  the dconf database motanka-core's postinst compiles,
+#                  /etc/ld.so.cache (ldconfig's cache of the installed
+#                  libraries), the paths tester's User_Ledger records and,
+#                  as trees, the Namespaced_Paths and the User_Ledger's own
+#                  folder (test/vm/fpowned.py reads both)
 #   motanka-settings
 #                  while the Motanka session runs (round-trip guest phase
 #                  "login" before it): set the cursor theme and the colour
@@ -285,8 +298,9 @@ check_view() {
   fi
 }
 
+# phase_other [stay]: with "stay", leaves GNOME running.
 phase_other() {
-  local label=${ARGS[0]:-}
+  local label=${ARGS[0]:-} stay=${1:-}
   if [[ -z $label ]]; then
     echo "usage: isolation-guest.sh other <release> <label>" >&2
     exit 2
@@ -312,7 +326,31 @@ phase_other() {
     record_view "$label"
     check_view "$label"
   fi
-  gnome_logout
+  if [[ $stay != stay ]]; then
+    gnome_logout
+  fi
+}
+
+phase_owned() {
+  local p
+  {
+    dpkg-query -W -f='${Package}\n' 'motanka' 'motanka-*' 2>/dev/null || true
+    sudo awk -F'\t' '
+      $3 == "pkg-installed" || $3 == "pkg-adopted" { print $4 }
+      $3 == "plan" { n = split($4, w, " "); if (n >= 3 && w[1] == "Inst" && substr(w[3], 1, 1) == "(") { sub(/:[A-Za-z0-9]+$/, "", w[2]); print w[2] } }
+    ' /var/lib/motanka/ledger 2>/dev/null || true
+  } | LC_ALL=C sort -u >"$S/owned-packages.txt"
+  {
+    while IFS= read -r p; do
+      dpkg -L "$p" 2>/dev/null || true
+    done <"$S/owned-packages.txt"
+    printf '%s\n' /etc/dconf/db/motanka /etc/ld.so.cache
+    awk -F'\t' -v h="$HOME" '$3 != "setup-begin" && $3 != "setup-end" && $5 != "-" && $5 != "" { print h "/" $5 }' \
+      "$HOME/.local/state/motanka/ledger" 2>/dev/null || true
+    printf '%s/\n' "$HOME/.config/omarchy" "$HOME/.local/share/omarchy" "$HOME/.local/state/omarchy" \
+      "$HOME/.config/dconf/motanka" "$HOME/.local/state/motanka"
+  } | LC_ALL=C sort -u >"$S/owned-paths.txt"
+  pass "owned by Motanka: $(wc -l <"$S/owned-packages.txt") packages, $(wc -l <"$S/owned-paths.txt") paths"
 }
 
 # --- the Motanka session's settings ----------------------------------------
@@ -384,6 +422,9 @@ phase_compare() {
 
 case $phase in
   other) phase_other ;;
+  other-in) phase_other stay ;;
+  other-out) gnome_logout ;;
+  owned) phase_owned ;;
   motanka-settings) phase_motanka_settings ;;
   compare) phase_compare ;;
   *)

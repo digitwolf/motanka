@@ -14,6 +14,14 @@
 #   5. every part of the view "installed" equals the view "before":
 #      dconf dump / (5.7), the user manager's environment (5.11) and the
 #      rest (5.3, 5.10)
+#   6. the Fingerprint (test/vm/fingerprint), taken while GNOME runs before
+#      installation and while it runs with Motanka installed, is the same
+#      once test/vm/fpowned.py has removed from both what Motanka installed
+#      (the Motanka_Packages and the ledgered Foreign_Packages with their
+#      files, the compiled Motanka dconf database, ldconfig's cache, the
+#      paths tester's User_Ledger records and the Namespaced_Paths) and
+#      the state any two GNOME logins leave different (GNOME_LOGIN_STATE),
+#      and tools/fpdiff.py its Allowlist (5.10)
 # The guest halves are test/vm/isolation-guest.sh (its header lists every
 # part of a view) and test/vm/remove-guest.sh.
 #
@@ -122,14 +130,72 @@ mv_copy_to_vm "$tvm" "$LR_REPO" "$RG_T/www/repo"
 mv_copy_to_vm "$tvm" "$stage/cli" "/home/$MV_GUEST_USER/motanka"
 mv_copy_to_vm "$tvm" "$stage/ig" "$IG_T"
 
-if gphase rg serve && gphase ig other warmup && gphase ig other before &&
-  gphase rg install; then
-  if gphase rg login; then
-    gphase ig motanka-settings || true
+# fingerprint <label>: prints the Fingerprint folder, or nothing.
+fingerprint() {
+  "$MV_LIB_DIR/fingerprint" "$tvm" "$1" </dev/null | tail -n 1 || true
+}
+
+# State that any two GNOME logins leave different, with or without Motanka:
+# cupsd rewrites its subscriptions when GNOME's print notifier subscribes,
+# and GNOME keeps its colour profile of the display, its session history,
+# the ibus socket address and nautilus's tag database in the home folder.
+# A line ending in "/" is a tree (test/vm/fpowned.py).
+GNOME_LOGIN_STATE=(
+  /etc/cups/subscriptions.conf
+  /etc/cups/subscriptions.conf.O
+  "/home/$MV_GUEST_USER/.config/ibus/bus/"
+  "/home/$MV_GUEST_USER/.local/share/icc/"
+  "/home/$MV_GUEST_USER/.local/share/gnome-shell/session-active-history.json"
+  "/home/$MV_GUEST_USER/.local/share/nautilus/tags/"
+)
+
+# fp_compare <before> <installed>: step 6.
+fp_compare() {
+  local a=$1 b=$2 owned=$results/owned rc=0 out=$results/fpdiff-installed.txt
+  if [[ -z $a || -z $b || ! -d $a || ! -d $b ]]; then
+    fail "a Fingerprint is missing"
+    return 0
   fi
-  gphase rg logout || true
-  if gphase ig other installed; then
-    gphase ig compare before installed || true
+  rm -rf -- "$owned"
+  mv_copy_from_vm "$tvm" "$IG_T/state" "$owned/state" || true
+  local pk=$owned/state/owned-packages.txt pa=$owned/state/owned-paths.txt
+  if [[ ! -s $pk || ! -s $pa ]]; then
+    fail "the lists of what Motanka owns did not come back from the VM"
+    return 0
+  fi
+  cat "$pa" >"$owned/paths.txt"
+  printf '%s\n' "${GNOME_LOGIN_STATE[@]}" >>"$owned/paths.txt"
+  python3 -I "$MV_LIB_DIR/fpowned.py" "$pk" "$owned/paths.txt" "$a" "$owned/before" &&
+    python3 -I "$MV_LIB_DIR/fpowned.py" "$pk" "$owned/paths.txt" "$b" "$owned/installed" || rc=$?
+  if ((rc != 0)); then
+    fail "test/vm/fpowned.py exited $rc"
+    return 0
+  fi
+  python3 "$MV_REPO/tools/fpdiff.py" "$owned/before" "$owned/installed" >"$out" 2>&1 || rc=$?
+  if ((rc == 0)); then
+    pass "while Motanka is installed, the Fingerprint taken from GNOME equals the one before installation, apart from what Motanka installed and the Allowlist (5.10)"
+  else
+    fail "while Motanka is installed, the Fingerprint taken from GNOME differs from the one before installation: fpdiff exit $rc (details in $out)"
+    head -n 60 "$out" >&2
+  fi
+}
+
+fp_before="" fp_installed=""
+if gphase rg serve && gphase ig other warmup && gphase ig other-in before; then
+  fp_before=$(fingerprint isolation-before)
+  gphase ig other-out || true
+  if gphase rg install; then
+    if gphase rg login; then
+      gphase ig motanka-settings || true
+    fi
+    gphase rg logout || true
+    if gphase ig other-in installed; then
+      gphase ig owned || true
+      fp_installed=$(fingerprint isolation-installed)
+      gphase ig other-out || true
+      gphase ig compare before installed || true
+      fp_compare "$fp_before" "$fp_installed"
+    fi
   fi
 fi
 
