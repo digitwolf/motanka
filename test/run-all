@@ -37,7 +37,11 @@
 #               default /dev/dri/renderD128). Without it, as on CI runners
 #               without a GPU, they are SKIP with that reason instead of
 #               failing to boot:
-#                 first-login.sh, session.sh, stack.sh
+#                 first-login.sh, session.sh, stack.sh, isolation.sh
+#               Tests in ONLY_RELEASE run on that release only and are SKIP
+#               on the other:
+#                 isolation.sh        resolute (the 26.04 gnome-snaps
+#                                     variant, task 15.5)
 #               roundtrip.sh and release-upgrade.sh check the render node
 #               themselves and then skip only their login, with "SKIP:"
 #               lines in their logs.
@@ -149,7 +153,9 @@ unit_vm=""
 # VM tests that run only on request: test name -> the variable that must be 1.
 declare -A OPT_IN=(["release-upgrade"]=MOTANKA_VM_RELEASE_UPGRADE ["parity"]=MOTANKA_VM_PARITY)
 # VM tests that cannot run without a GL render node (MOTANKA_VM_GPU=gl).
-declare -A NEEDS_GL=(["first-login"]=1 ["session"]=1 ["stack"]=1 ["parity"]=1)
+declare -A NEEDS_GL=(["first-login"]=1 ["session"]=1 ["stack"]=1 ["parity"]=1 ["isolation"]=1)
+# Tests that run on one release only; on the other they are SKIP.
+declare -A ONLY_RELEASE=(["isolation"]=resolute)
 
 # run_stage <stage> <command...>: runs the command, logs its output to
 # <stage>.log and stderr, and records the exit code.
@@ -303,6 +309,10 @@ if want vm; then
     opt=${OPT_IN[$name]:-}
     if [[ -n $opt && ${!opt:-0} != 1 ]]; then
       skip_stage "$stage" "opt-in; set $opt=1 to run it"
+      continue
+    fi
+    if [[ -n ${ONLY_RELEASE[$name]:-} && ${ONLY_RELEASE[$name]} != "$release" ]]; then
+      skip_stage "$stage" "runs on ${ONLY_RELEASE[$name]} only"
       continue
     fi
     if [[ -n ${NEEDS_GL[$name]:-} ]] && ! gl_usable; then

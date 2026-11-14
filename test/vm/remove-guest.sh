@@ -3,7 +3,8 @@
 # shellcheck disable=SC2088 # "~/..." in messages is literal text
 # shellcheck disable=SC2024 # redirects write the test logs as tester on purpose
 # Guest half of test/vm/tests/roundtrip.sh and test/vm/tests/remove-edge.sh
-# (tasks 19.3, 19.4). Runs INSIDE a throwaway test VM as user tester, who
+# (tasks 19.3, 19.4); test/vm/tests/isolation.sh (task 15.5) uses its
+# phases serve, install, login and logout. Runs INSIDE a throwaway test VM as user tester, who
 # has passwordless sudo there. Never run it on a real machine: it installs
 # and removes Motanka and configures automatic login.
 #
