@@ -20,7 +20,8 @@
 # Build VM size: MOTANKA_BUILD_VM_CPUS (default host CPUs up to 10),
 # MOTANKA_BUILD_VM_RAM (default 10G), MOTANKA_VM_DISK (default 40G). When a
 # package with upstream components (motanka-stack, motanka-qt6,
-# motanka-stack-shell) is among the packages, the defaults are host CPUs up
+# motanka-stack-shell, motanka-fonts, motanka-apps) is among the packages,
+# and the VM is booted here (not --vm), the defaults are host CPUs up
 # to 16, half the host memory up to 16G (at least 10G) and an 80G disk; the
 # Stack compiles about 3,000 C++ files, Qt several times that, and
 # debian/rules runs one job per 2 GiB of guest memory.

@@ -1,0 +1,21 @@
+#@source motanka-apps
+#@packages motanka-herdr
+# Upstream components of motanka-apps: the programs of Upstream's base
+# package list that the Ubuntu archives do not have and that cannot be
+# built from them.
+#
+# Same format as stack/components.tsv (see the comment there). Installed
+# unchanged by packaging/motanka-apps/debian/rules, for both suites.
+#
+#   herdr  herdr 0.9.5 (Apache-2.0), the version Upstream's PKGBUILD pins:
+#          the project's x86_64 release binary herdr-linux-x86_64 (30285672
+#          bytes; the release has no tarballs). Build "file": stack/fetch-
+#          sources packs it as herdr/herdr-linux-x86_64 into the orig
+#          component herdr. It is not built from source because its
+#          ghostty-vt crate compiles libghostty-vt with Zig, which neither
+#          release has. SHA-256 from GitHub's published digest of the asset.
+#
+# Download, verify and pin: stack/fetch-sources --components stack/apps-components.tsv
+#
+# name	version	url	sha256	build	suites	package
+herdr	0.9.5	https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64	14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d	file	both	motanka-herdr

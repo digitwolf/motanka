@@ -54,6 +54,20 @@ environment variable MOTANKA_CRATES_BASE_URL (an https:// or file:// URL)
 replaces https://static.crates.io/crates, for the unit tests. A component
 may not be called <name>-crates when a cargo component <name> exists.
 
+A component of build "file" is one file, not a tarball: an upstream
+release binary, for example. Its URL's last path segment (letters,
+digits, '.', '_', '+' and '-') is the file name. It is downloaded into
+DIR/downloads/<name>-<version>.<file name> and pinned by SHA-256 like a
+tarball (exit 6 on a mismatch, and the download is deleted). Because
+dpkg-source 3.0 (quilt) takes only tarballs as orig components, the tool
+packs it into
+
+  <source>_<V>.orig-<name>.tar.gz
+
+with the single top folder <name>/ holding the file under its file name,
+mode 0644 (the package build installs it with the mode it needs). The
+tarball is reproducible in the same way as a crates tarball.
+
 Directives (lines starting with '#@', before or between components):
   #@source <name>           source package the components belong to
   #@packages <pkg>...       binary packages the package field may name
@@ -73,9 +87,10 @@ Options:
 
 Exit codes: 0 success, 1 a component is unpinned, failed to download or is
 malformed (for cargo components also: no Cargo.lock, a package from a
-source other than crates.io, a malformed crate), 2 usage error, invalid
-components.tsv or invalid MOTANKA_CRATES_BASE_URL, 6 checksum mismatch of
-a tarball or a crate.
+source other than crates.io, a malformed crate; for file components: an
+empty file), 2 usage error, invalid components.tsv or invalid
+MOTANKA_CRATES_BASE_URL, 6 checksum mismatch of a tarball, a file or a
+crate.
 
 It only downloads and verifies: it installs nothing and runs nothing it
 downloads, so it may run on the development host or in a test VM. It
@@ -113,8 +128,12 @@ FIELDS = ("name", "version", "url", "sha256", "build", "suites", "package")
 # plain files installed as they are (fonts, motanka-fonts); the tarball may
 # hold them without a top-level folder. cargo: a Rust program built offline
 # with the archive's cargo; its crates become the component <name>-crates.
-BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source", "files", "cargo"}
+# file: one file that is not a tarball (an upstream release binary,
+# motanka-apps), packed into the orig component <name>.
+BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source", "files", "cargo", "file"}
 CARGO_BUILDS = {"cargo"}
+FILE_BUILDS = {"file"}
+FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 CRATES_SUFFIX = "-crates"
 CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 CRATES_BASE_ENV = "MOTANKA_CRATES_BASE_URL"
@@ -154,6 +173,16 @@ def ext_of(url):
         if path.endswith(suffix):
             return ext
     raise TsvError(f"cannot tell the compression of {url} (expected .tar.gz, .tgz, .tar.xz or .tar.bz2)")
+
+
+def file_name_of(where, url):
+    """The file name of a component of build "file": the last segment of
+    the URL's path."""
+    rest = url.split("?", 1)[0].split("#", 1)[0][len("https://"):]
+    name = rest.rsplit("/", 1)[-1] if "/" in rest else ""
+    if not FILE_NAME_RE.match(name):
+        raise TsvError(f"{where}: a component of build file needs a URL whose last path segment is a file name, got '{url}'")
+    return name
 
 
 def parse_directive(where, line, meta):
@@ -214,7 +243,11 @@ def parse_tsv(path):
             raise TsvError(f"{where}: unknown build system '{c['build']}'")
         if c["suites"] not in SUITES:
             raise TsvError(f"{where}: suites must be noble, resolute or both")
-        c["ext"] = ext_of(c["url"])
+        if c["build"] in FILE_BUILDS:
+            c["file"] = file_name_of(where, c["url"])
+            c["ext"] = "gz"
+        else:
+            c["ext"] = ext_of(c["url"])
         c["line"] = i
         comps.append(c)
     for c in comps:
@@ -497,38 +530,18 @@ def tar_entry(name, mode, size=None):
     return info
 
 
-def pack_crates(dest, top, crates):
-    """Writes the reproducible crates tarball <dest> (top folder <top>/)."""
+def write_tgz(dest, fill):
+    """Writes the reproducible tarball <dest>: fill(out) adds the members to
+    the tar writer <out> (with tar_entry: mtime 0, owner and group 0 with
+    empty names) in path order; the gzip header has mtime 0 and no file
+    name. The tarball is written as <dest>.tmp and renamed, so a failure
+    leaves no partial file."""
     tmp = dest + ".tmp"
     try:
         with open(tmp, "wb") as raw:
             with gzip.GzipFile(filename="", mode="wb", fileobj=raw, compresslevel=9, mtime=0) as gz:
                 with tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as out:
-                    out.addfile(tar_entry(top, 0o755))
-                    for k in crates:
-                        folder = f"{k['name']}-{k['version']}"
-                        files = {}
-                        with tarfile.open(k["path"], "r:gz") as tar:
-                            for m in tar:
-                                if not m.isfile():
-                                    continue
-                                rel = tuple(p for p in m.name.split("/") if p not in ("", "."))[1:]
-                                if not rel or rel == (".cargo-checksum.json",):
-                                    continue
-                                files[rel] = (m.mode & 0o777, tar.extractfile(m).read())
-                        files[(".cargo-checksum.json",)] = (0o644, checksum_json(k["sha256"]))
-                        dirs = {()}
-                        for rel in files:
-                            for i in range(1, len(rel)):
-                                dirs.add(rel[:i])
-                        items = [(d, None) for d in dirs] + list(files.items())
-                        items.sort(key=lambda item: item[0])
-                        for rel, val in items:
-                            name = "/".join((top, folder) + rel)
-                            if val is None:
-                                out.addfile(tar_entry(name, 0o755))
-                            else:
-                                out.addfile(tar_entry(name, val[0], len(val[1])), io.BytesIO(val[1]))
+                    fill(out)
         os.replace(tmp, dest)
     except BaseException:
         try:
@@ -536,6 +549,55 @@ def pack_crates(dest, top, crates):
         except FileNotFoundError:
             pass
         raise
+
+
+def add_tree(out, prefix, files):
+    """Adds the folder <prefix> (a tuple of path parts) to the tar writer
+    <out>, and below it <files> ({path tuple below prefix: (mode, bytes)})
+    with every folder between them; folders get mode 0755. Members are
+    sorted by path."""
+    dirs = {()}
+    for rel in files:
+        for i in range(1, len(rel)):
+            dirs.add(rel[:i])
+    items = [(d, None) for d in dirs] + list(files.items())
+    items.sort(key=lambda item: item[0])
+    for rel, val in items:
+        name = "/".join(prefix + rel)
+        if val is None:
+            out.addfile(tar_entry(name, 0o755))
+        else:
+            out.addfile(tar_entry(name, val[0], len(val[1])), io.BytesIO(val[1]))
+
+
+def pack_crates(dest, top, crates):
+    """Writes the reproducible crates tarball <dest> (top folder <top>/)."""
+
+    def fill(out):
+        out.addfile(tar_entry(top, 0o755))
+        for k in crates:
+            folder = f"{k['name']}-{k['version']}"
+            files = {}
+            with tarfile.open(k["path"], "r:gz") as tar:
+                for m in tar:
+                    if not m.isfile():
+                        continue
+                    rel = tuple(p for p in m.name.split("/") if p not in ("", "."))[1:]
+                    if not rel or rel == (".cargo-checksum.json",):
+                        continue
+                    files[rel] = (m.mode & 0o777, tar.extractfile(m).read())
+            files[(".cargo-checksum.json",)] = (0o644, checksum_json(k["sha256"]))
+            add_tree(out, (top, folder), files)
+
+    write_tgz(dest, fill)
+
+
+def pack_file(dest, top, name, path):
+    """Writes the reproducible tarball <dest> of a file component: the top
+    folder <top>/ with the file <path> as <top>/<name>, mode 0644."""
+    with open(path, "rb") as f:
+        data = f.read()
+    write_tgz(dest, lambda out: add_tree(out, (top,), {(name,): (0o644, data)}))
 
 
 def read_version():
@@ -566,6 +628,8 @@ def layout(out, source, version, comps, files):
         if n.startswith(prefix) and ".orig-" in n:
             os.unlink(os.path.join(orig, n))
     for c in comps:
+        if c["build"] in FILE_BUILDS:
+            continue  # packed by main() after the layout
         dest = os.path.join(orig, f"{source}_{version}.orig-{c['name']}.tar.{c['ext']}")
         try:
             os.link(files[c["name"]], dest)
@@ -620,7 +684,10 @@ def main(argv=None):
     crates_of = {}
     for c in comps:
         name, pinned = c["name"], c["sha256"]
-        path = os.path.join(dl, f"{name}-{c['version']}.tar.{c['ext']}")
+        if c["build"] in FILE_BUILDS:
+            path = os.path.join(dl, f"{name}-{c['version']}.{c['file']}")
+        else:
+            path = os.path.join(dl, f"{name}-{c['version']}.tar.{c['ext']}")
         if os.path.exists(path) and pinned != "-" and sha256_of(path) != pinned:
             log(f"{name}: cached file does not match the pinned checksum; downloading again")
             os.unlink(path)
@@ -646,6 +713,12 @@ def main(argv=None):
             mismatch = True
             problems.append(f"{name}: sha256 {digest} does not match the pinned {pinned}; download deleted")
             continue
+        if c["build"] in FILE_BUILDS:
+            if os.path.getsize(path) == 0:
+                problems.append(f"{name}: the downloaded file {c['file']} is empty")
+                continue
+            files[name] = path
+            continue
         reason = check_tar(path, c["build"] in FLAT_OK_BUILDS)
         if reason:
             problems.append(f"{name}: {reason}")
@@ -668,6 +741,16 @@ def main(argv=None):
         return EXIT_MISMATCH if mismatch else EXIT_PROBLEM
 
     orig = layout(out, source, version, comps, files)
+    for c in comps:
+        if c["build"] not in FILE_BUILDS:
+            continue
+        dest = os.path.join(orig, f"{source}_{version}.orig-{c['name']}.tar.gz")
+        try:
+            pack_file(dest, c["name"], c["file"], files[c["name"]])
+        except (OSError, tarfile.TarError) as e:
+            log(f"error: {c['name']}: cannot write {dest}: {e}")
+            return EXIT_PROBLEM
+        log(f"{c['name']}: {c['file']} packed into {os.path.basename(dest)}")
     for c in comps:
         if c["build"] not in CARGO_BUILDS:
             continue

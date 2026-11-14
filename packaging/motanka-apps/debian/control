@@ -1,0 +1,46 @@
+Source: motanka-apps
+Section: misc
+Priority: optional
+Maintainer: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/digitwolf/motanka
+Vcs-Browser: https://github.com/digitwolf/motanka
+Vcs-Git: https://github.com/digitwolf/motanka.git
+
+Package: motanka-apps
+Section: metapackages
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends},
+         motanka-herdr (= ${source:Version}),
+         @PKGMAP_DEPENDS@
+Description: Omarchy-compatible Hyprland session for Ubuntu - applications
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. It installs
+ next to the current desktop as a separate login session, follows
+ upstream Omarchy, and removes cleanly.
+ .
+ This optional metapackage depends on the part of upstream Omarchy's base
+ package list whose packages start no system service and change no system
+ policy: input methods, the GTK portal backend, the keyring, terminal and
+ file tools, viewers, office and fonts, and on motanka-herdr, the herdr
+ server that upstream's autostart starts.
+ .
+ Packages of the base list that start system services or change system
+ policy (Docker, CUPS, Avahi, BlueZ, NetworkManager, ufw and others) are
+ not pulled in; the Motanka helper installs them when upstream Omarchy
+ asks for them.
+
+Package: motanka-herdr
+Architecture: amd64
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+Description: Omarchy-compatible Hyprland session for Ubuntu - herdr
+ Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. It installs
+ next to the current desktop as a separate login session, follows
+ upstream Omarchy, and removes cleanly.
+ .
+ This package ships the herdr 0.9.5 release binary, unchanged and checked
+ against its pinned SHA-256 at build time, as /opt/motanka/bin/herdr.
+ herdr cannot be built from the archive: its ghostty-vt crate needs Zig.

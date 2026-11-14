@@ -1,0 +1,33 @@
+Source of two binary packages, for both suites. motanka-apps
+(Architecture: all) is the optional metapackage with the applications of
+upstream Omarchy's base package list (install/omarchy-base.packages);
+motanka-herdr (amd64) ships herdr. Nothing depends on motanka-apps;
+motanka install offers it (design.md, "Decisions by the owner (2026-11-13)").
+
+Its Depends are the Package_Map outcomes of the Upstream names in
+debian/pkgmap-depends: packaging/build.sh resolves them with tools/pkgmap
+for the suite and writes them in place of @PKGMAP_DEPENDS@ in
+debian/control. The list is the base list without the packages that,
+together with what apt installs for them, start a system service or change
+system policy (docker, cups, avahi, bluez, networkmanager, ufw and others;
+the header of debian/pkgmap-depends names them all, and design.md, "Base
+package set: membership", gives the reason for each). Those stay with the
+Helper, which installs them when Upstream code asks for them. A name
+written "?name" is optional: on a suite where its outcome is skip, flatpak
+or binary, packaging/build.sh leaves it out and logs it (fastfetch, gum,
+lazygit, starship and the share picker have no apt or motanka outcome on
+noble).
+
+motanka-herdr ships one file: herdr 0.9.5, the version Upstream's
+PKGBUILD pins, as /opt/motanka/bin/herdr (Upstream's autostart runs
+"herdr server"). It is the project's x86_64 release binary, unchanged:
+herdr cannot be built from the archives, because its ghostty-vt crate
+compiles libghostty-vt with Zig, which neither release has. The binary is
+listed in stack/apps-components.tsv (imported by build-imports) with build
+"file" and its SHA-256; test/vm/build fetches it with stack/fetch-sources
+--components stack/apps-components.tsv, which checks the digest and packs
+the file as herdr/herdr-linux-x86_64 into the orig component herdr, since
+dpkg-source takes only tarballs as orig components. debian/rules installs
+it with mode 0755 and does not strip it. packages.yaml maps herdr to
+motanka-herdr, so dpkg owns and removes the file, and a Helper request for
+herdr alone does not pull in all of motanka-apps.

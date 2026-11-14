@@ -21,9 +21,11 @@
 #     (test/vm/build --suite <release> packaging/motanka-qt6
 #     packaging/motanka-stack-shell builds them, several hours).
 #   - one build VM builds motanka-archive-keyring, motanka-source, motanka,
-#     motanka-fonts and motanka-core; the motanka-source .debs are repacked with
-#     URIs: http://127.0.0.1:8765/repo, where each test VM serves the
-#     repository, and chumak/build-repo signs it with the TEST key.
+#     motanka-fonts, motanka-apps (optional; nothing depends on it, but the
+#     Installer offers it) and motanka-core; the motanka-source .debs are
+#     repacked with URIs: http://127.0.0.1:8765/repo, where each test VM
+#     serves the repository, and chumak/build-repo signs it with the TEST
+#     key.
 #
 # Usage, after sourcing lib.sh and calling mv_init:
 #   lr_repo <release> <results-folder> || <handle the failure>
@@ -42,7 +44,7 @@
 LR_STACK_PKGS=(motanka-stack-libs motanka-stack-hyprland motanka-stack-tools motanka-stack)
 LR_OPTIONAL_PKGS=(motanka-qt6 motanka-stack-shell)
 # Built in the build VM from the working tree, every time the cache misses.
-LR_BUILD_PKGS=(motanka-archive-keyring motanka-source motanka motanka-fonts motanka-core)
+LR_BUILD_PKGS=(motanka-archive-keyring motanka-source motanka motanka-fonts motanka-apps motanka-core)
 LR_URI=http://127.0.0.1:8765/repo
 LR_REPO=""
 LR_VER=""
@@ -177,6 +179,14 @@ lr_repo() {
   done
   if ! compgen -G "$stage/in/motanka-core_${LR_VER}_*.deb" >/dev/null; then
     mv_log "FAIL: test/vm/build did not produce motanka-core $LR_VER"
+    rc=1
+  fi
+  if [[ ! -f $stage/in/motanka-apps_${LR_VER}_all.deb ]]; then
+    mv_log "FAIL: test/vm/build did not produce motanka-apps_${LR_VER}_all.deb"
+    rc=1
+  fi
+  if [[ ! -f $stage/in/motanka-herdr_${LR_VER}_amd64.deb ]]; then
+    mv_log "FAIL: test/vm/build did not produce motanka-herdr_${LR_VER}_amd64.deb"
     rc=1
   fi
   if ((rc != 0)); then

@@ -1,0 +1,40 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: motanka-apps
+Upstream-Contact: Ruslan Babych <1285978+digitwolf@users.noreply.github.com>
+Source: https://github.com/digitwolf/motanka
+Comment: The source package bundles the upstream component listed in
+ stack/apps-components.tsv as the dpkg-source component herdr/: the
+ x86_64 release binary of herdr 0.9.5, from
+ https://github.com/herdrdev/herdr/releases/tag/v0.9.5, unchanged and
+ SHA-256 pinned. stack/fetch-sources packs the file into the component's
+ tarball; the binary package installs it as /opt/motanka/bin/herdr.
+
+Files: *
+Copyright: 2026 Ruslan Babych
+License: LicenseRef-motanka-no-license-yet
+ The Motanka repository does not have a license file yet. Until the
+ copyright holder publishes one, no rights are granted beyond those that
+ apply by law.
+
+Files: herdr/*
+Copyright: herdr contributors (herdrdev)
+License: Apache-2.0
+Comment: The release binary of herdr 0.9.5, the version upstream Omarchy's
+ PKGBUILD pins. Its source is https://github.com/herdrdev/herdr at the
+ tag v0.9.5.
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License"); you may
+ not use this file except in compliance with the License. You may obtain a
+ copy of the License at
+ .
+ http://www.apache.org/licenses/LICENSE-2.0
+ .
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ License for the specific language governing permissions and limitations
+ under the License.
+ .
+ On Debian systems, the complete text of the Apache License, Version 2.0
+ can be found in /usr/share/common-licenses/Apache-2.0.

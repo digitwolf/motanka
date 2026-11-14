@@ -1,0 +1,3 @@
+# Motanka's files live in /opt/motanka by design (DESIGN.md, "Linux
+# practices: Filesystem layout"), so they never shadow a host package.
+dir-or-file-in-opt

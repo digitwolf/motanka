@@ -23,7 +23,11 @@
 #             downloads every crates.io crate it lists, checks each against
 #             the lock file's SHA-256 and packs them into one more orig
 #             component <name>-crates, so the build compiles offline;
-#             stack/shell-components.tsv)
+#             stack/shell-components.tsv) and file (one file that is not a
+#             tarball, such as an upstream release binary, pinned by its
+#             SHA-256; stack/fetch-sources packs it, mode 0644, as
+#             <name>/<last segment of the URL> into the orig component
+#             <name>; stack/apps-components.tsv)
 #   suites    noble | resolute | both: the suites that build the component
 #   package   binary package for the component's programs and data, or '-'
 #             for build-time only. Shared libraries (lib/*.so.*) always go

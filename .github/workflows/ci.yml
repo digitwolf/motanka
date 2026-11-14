@@ -22,9 +22,10 @@
 #                and the key of every local .deb it builds against) and
 #                rebuilt only on a cache miss: the Stack takes more than an
 #                hour, Qt 20 to 30 minutes per release.
-#   build-core   the keyring, source, metapackage and motanka-core packages
-#                for both releases (lintian and tools/debcheck run in
-#                packaging/build.sh); cheap, not cached
+#   build-core   the keyring, source, metapackage, motanka-fonts,
+#                motanka-apps and motanka-core packages for both releases
+#                (lintian and tools/debcheck run in packaging/build.sh);
+#                cheap, not cached
 #   vm-plan      the VM test matrix (ci/vm-matrix)
 #   vm           one job per release and VM test: test/run-all --release R
 #                --stage vm --test T, with the cached .debs and a new TEST
@@ -46,7 +47,8 @@
 #                DEV_BUILD marker, the committed release key); signs one
 #                version for noble and resolute, and for noble-edge and
 #                resolute-edge while the edge pin equals the stable pin
-#                (ci/publish-repo); uploads the site and attaches the .debs
+#                (ci/publish-repo; ci/release-build also builds motanka-fonts
+#                and motanka-apps); uploads the site and attaches the .debs
 #                to the GitHub release of the tag
 #   deploy       deploys the site to GitHub Pages:
 #                https://digitwolf.github.io/motanka/apt
@@ -299,7 +301,7 @@ jobs:
           retention-days: 14
 
   build-core:
-    name: build (keyring, source, motanka, motanka-core, ${{ matrix.suite }})
+    name: build (keyring, source, motanka, fonts, apps, motanka-core, ${{ matrix.suite }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -320,7 +322,8 @@ jobs:
         run: >-
           bash ci/in-harness --kvm -- bash test/vm/build --suite "$SUITE"
           packaging/motanka-archive-keyring packaging/motanka-source
-          packaging/motanka packaging/motanka-core
+          packaging/motanka packaging/motanka-fonts packaging/motanka-apps
+          packaging/motanka-core
       - name: Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -452,7 +455,7 @@ jobs:
         uses: ./.github/actions/restore-debs
         with:
           suite: resolute
-      - name: Published builds of the keyring, source, metapackage and motanka-core
+      - name: Published builds of the keyring, source, metapackage, fonts, apps and motanka-core
         run: bash ci/in-harness --kvm -- bash ci/release-build --out .cache/ci/release-debs
       - name: The Stack, Qt and shell .debs
         run: |

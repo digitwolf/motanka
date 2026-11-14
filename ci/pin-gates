@@ -31,6 +31,10 @@
 #               tools/inventory makes of the tree                [blocking]
 #   pkgmap      tools/pkgmap validate: every package of Upstream's lists
 #               has an outcome for both releases (7.9)           [blocking]
+#   apps        every name in packaging/motanka-apps/debian/pkgmap-depends
+#               is in the tree's install/omarchy-base.packages (design.md,
+#               "Base package set: membership"): blocking for stable,
+#               info for edge                                    [blocking]
 #   overrides   tools/checkoverrides --old <base tree> --new <tree>: every
 #               changed file that has an override or Arch findings is
 #               reviewed in compat/reviewed/<commit> (7.10)      [blocking]
@@ -140,6 +144,25 @@ tree_of() {
   printf '%s\n' "$dest"
 }
 
+# apps_check <tree>: prints every name of motanka-apps' debian/pkgmap-depends
+# (comments dropped, "?" of optional names removed) that the tree's
+# install/omarchy-base.packages does not list, and fails when there is one.
+apps_check() {
+  local base=$1/install/omarchy-base.packages
+  [[ -f $base ]] || {
+    printf '%s is missing\n' "$base"
+    return 1
+  }
+  awk '
+    { sub(/#.*/, ""); gsub(/[ \t]/, "") }
+    $0 == "" { next }
+    NR == FNR { base[$0] = 1; next }
+    { n = $0; sub(/^\?/, "", n) }
+    !(n in base) { printf "%s: not in install/omarchy-base.packages\n", n; bad = 1 }
+    END { exit bad }
+  ' "$base" "$repo/packaging/motanka-apps/debian/pkgmap-depends"
+}
+
 ROWS=()
 DETAILS=()
 blocking_failed=0
@@ -230,6 +253,17 @@ for channel in "${channels[@]}"; do
     gate "$channel" pkgmap FAIL 1 "packages.yaml lacks or breaks entries (7.9)"
   fi
   show "$channel: tools/pkgmap validate" "$o/pkgmap.log"
+
+  # apps
+  if apps_check "$tree" >"$o/apps.log" 2>&1; then
+    gate "$channel" apps PASS 1 "every Depends name of motanka-apps is in install/omarchy-base.packages"
+  elif [[ $channel == stable ]]; then
+    gate "$channel" apps FAIL 1 "packaging/motanka-apps/debian/pkgmap-depends names packages outside Upstream's base list"
+    show "$channel: motanka-apps names outside the base list" "$o/apps.log"
+  else
+    gate "$channel" apps info 0 "names to drop from packaging/motanka-apps/debian/pkgmap-depends when edge becomes stable"
+    show "$channel: motanka-apps names outside the base list" "$o/apps.log"
+  fi
 
   # overrides
   if [[ -z $inv ]]; then

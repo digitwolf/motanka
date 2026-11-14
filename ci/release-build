@@ -6,9 +6,13 @@
 #
 # Usage: ci/release-build --out <folder>
 #
-# The packages: motanka-archive-keyring, motanka-source, motanka and
-# motanka-core. Published builds differ from the development builds the
-# VM tests install in two ways:
+# The packages: motanka-archive-keyring, motanka-source, motanka,
+# motanka-fonts, motanka-apps and motanka-core. motanka-fonts and
+# motanka-apps are the same in both kinds of build; they are built here
+# because they are cheap and not cached, and ci/publish-repo requires
+# every package the control files under packaging/ declare. Published
+# builds of the others differ from the development builds the VM tests
+# install in two ways:
 #   - motanka-core is built with the build profile pkg.motanka.release, so
 #     it has no /opt/motanka/share/motanka/DEV_BUILD marker (14.8: the
 #     marker makes the CLI refuse to run outside a VM);
@@ -34,7 +38,8 @@ MV_USAGE="ci/release-build --out <folder>"
 mv_init
 
 PROFILE=pkg.motanka.release
-PKGS=(packaging/motanka-archive-keyring packaging/motanka-source packaging/motanka packaging/motanka-core)
+PKGS=(packaging/motanka-archive-keyring packaging/motanka-source packaging/motanka packaging/motanka-fonts
+  packaging/motanka-apps packaging/motanka-core)
 KEY=$MV_REPO/packaging/keys/motanka-archive.asc
 
 if [[ ${GITHUB_ACTIONS:-} != true ]]; then

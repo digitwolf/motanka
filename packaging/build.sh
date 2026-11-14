@@ -27,7 +27,9 @@
 #      has a debian/pkgmap-depends file (Upstream package names), the line
 #      "@PKGMAP_DEPENDS@" in debian/control becomes one line per apt or
 #      motanka outcome of those names for the suite (tools/pkgmap compile
-#      of the package's imported packages.yaml);
+#      of the package's imported packages.yaml, or the repository's); a
+#      name written "?<name>" is left out on a suite where it has no apt or
+#      motanka outcome;
 #   4. make the orig tarball reproducibly (sorted, fixed owner and mtime);
 #      then copy every <source>_<upstream>.orig-<component>.tar.* found in
 #      --orig-dir next to it and unpack it into <component>/ (dpkg-source
@@ -167,10 +169,16 @@ gen_control() {
 # replaces the line "@PKGMAP_DEPENDS@" (optionally followed by a comma) of
 # <tree>/debian/control with the suite's apt or motanka outcomes of the
 # Upstream package names listed there, one "         <name>," line each,
-# sorted and without duplicates. A name without an entry, or with a skip,
-# flatpak or binary outcome, fails the build.
+# sorted and without duplicates. The list has one name per line; '#' starts
+# a comment, and spaces and tabs are ignored. A name written "?<name>" is
+# optional: when its outcome on the suite is skip, flatpak or binary, it is
+# left out with the log line "debian/pkgmap-depends: optional <name> left
+# out on <suite> (<kind>)". A name without an entry fails the build, also
+# an optional one, and so does a plain name with a skip, flatpak or binary
+# outcome.
 pkgmap_depends() {
-  local tree=$1 s=$2 list=$1/debian/pkgmap-depends control=$1/debian/control map line kind targets
+  local tree=$1 s=$2 list=$1/debian/pkgmap-depends control=$1/debian/control map line name kind targets
+  local optional
   local -a names=() deps=() t=()
   [[ -f $list ]] || return 0
   map=$tree/packages.yaml
@@ -191,17 +199,35 @@ pkgmap_depends() {
     return 1
   fi
   for line in "${names[@]}"; do
-    kind=$(awk -F'\t' -v n="$line" '$1 == n { print $2 "\t" $3; exit }' "$tree/debian/pkgmap-depends.tsv")
+    optional=0
+    name=$line
+    if [[ $name == \?* ]]; then
+      optional=1
+      name=${name#\?}
+    fi
+    if [[ ! $name =~ ^[a-z0-9@_+][a-z0-9@._+-]*$ ]]; then
+      log "debian/pkgmap-depends: '$line' is not an Upstream package name"
+      return 1
+    fi
+    kind=$(awk -F'\t' -v n="$name" '$1 == n { print $2 "\t" $3; exit }' "$tree/debian/pkgmap-depends.tsv")
     targets=${kind#*$'\t'}
     kind=${kind%%$'\t'*}
     case $kind in
       apt | motanka) ;;
       "")
-        log "debian/pkgmap-depends: $line has no entry in $map"
+        log "debian/pkgmap-depends: $name has no entry in $map"
+        return 1
+        ;;
+      skip | flatpak | binary)
+        if ((optional)); then
+          log "debian/pkgmap-depends: optional $name left out on $s ($kind)"
+          continue
+        fi
+        log "debian/pkgmap-depends: $name has the outcome '$kind' on $s; only apt and motanka outcomes can be Depends (write ?$name to leave it out where it has none)"
         return 1
         ;;
       *)
-        log "debian/pkgmap-depends: $line has the outcome '$kind' on $s; only apt and motanka outcomes can be Depends"
+        log "debian/pkgmap-depends: $name has the outcome '$kind' on $s; only apt and motanka outcomes can be Depends"
         return 1
         ;;
     esac
@@ -516,6 +542,11 @@ build_one() {
     -exec mv -f {} "$out/" \;
   log "built $src: $(printf '%s ' "${debs[@]##*/}")"
 }
+
+# Sourced by test/unit/build-sh.bats for its functions; run otherwise.
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
 
 suite=""
 out=""

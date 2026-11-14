@@ -1,0 +1,8 @@
+motanka-apps (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial package: optional; depends on the part of upstream Omarchy's
+    base package list that starts no system service and changes no system
+    policy, and ships the herdr 0.9.5 release binary as
+    /opt/motanka/bin/herdr.
+
+ -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

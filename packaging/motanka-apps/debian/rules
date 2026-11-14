@@ -1,0 +1,45 @@
+#!/usr/bin/make -f
+# Installs herdr, the one component of stack/apps-components.tsv, into the
+# binary package motanka-herdr: the upstream release binary, unchanged, as
+# /opt/motanka/bin/herdr, for both suites. stack/fetch-sources checked its
+# SHA-256 and packed it as herdr/herdr-linux-x86_64 into the orig
+# component herdr. Nothing is compiled. motanka-apps is a metapackage: its Depends are motanka-herdr
+# and what packaging/build.sh writes into debian/control from
+# debian/pkgmap-depends.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+HERDR := herdr/herdr-linux-x86_64
+HERDR_DEST := debian/motanka-herdr/opt/motanka/bin/herdr
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_test:
+
+# The file must be an ELF executable; the orig component is checked against
+# the pinned SHA-256 before the build.
+override_dh_auto_install:
+	test -f $(HERDR) || { echo "debian/rules: $(HERDR) is missing (orig component herdr)" >&2; exit 1; }
+	test "$$(od -An -tx1 -N4 $(HERDR) | tr -d ' \n')" = 7f454c46 || \
+		{ echo "debian/rules: $(HERDR) is not an ELF file" >&2; exit 1; }
+	install -D -m 0755 $(HERDR) $(HERDR_DEST)
+
+# herdr is upstream's release build: shipped as it is, not stripped and not
+# compressed by dwz, so it keeps the pinned upstream bytes.
+override_dh_strip:
+	dh_strip -Xopt/motanka/bin/herdr
+
+override_dh_dwz:
+	dh_dwz -Xopt/motanka/bin/herdr
+
+# The shipped file is the upstream file, mode 0755 (dh_fixperms keeps the
+# execute bits): the session runs /opt/motanka/bin/herdr directly.
+override_dh_builddeb:
+	test "$$(stat -c %a $(HERDR_DEST))" = 755
+	cmp $(HERDR) $(HERDR_DEST)
+	dh_builddeb

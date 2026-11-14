@@ -168,7 +168,7 @@ gvfs-nfs:
 gvfs-smb:
   all: {apt: gvfs-backends}
 herdr:
-  all: {binary: {dest: /opt/motanka/bin/herdr, sha256: 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d, url: "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64"}, reason: "Upstream repository package (herdr 0.9.5, Apache-2.0); the project's static x86_64 release binary, the version Upstream's PKGBUILD pins"}
+  all: {motanka: motanka-herdr, reason: "Pinned upstream release binary herdr 0.9.5 (Apache-2.0), SHA-256-checked at build; its ghostty-vt crate needs Zig, which neither release has"}
 hype:
   all: {skip: "Upstream repository package; port pending"}
 hyprland:

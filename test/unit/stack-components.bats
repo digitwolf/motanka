@@ -391,6 +391,8 @@ sline_of() {
   assert_output "$REPO/packaging/motanka-stack-shell/build-imports"
   run grep -l '^/stack/fonts-components.tsv$' "$REPO"/packaging/*/build-imports
   assert_output "$REPO/packaging/motanka-fonts/build-imports"
+  run grep -l '^/stack/apps-components.tsv$' "$REPO"/packaging/*/build-imports
+  assert_output "$REPO/packaging/motanka-apps/build-imports"
 }
 
 # --- fonts (motanka-fonts) ----------------------------------------------------
