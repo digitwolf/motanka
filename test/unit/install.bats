@@ -5,7 +5,12 @@
 # verification of SHA256SUMS and the two .debs (4.1, 4.5), the private apt
 # configuration, the Foreign_Package check (2.6), the dry run (2.2, 2.3),
 # the real run's ledger lines (3.7, 3.9), reruns (3.10), no home-folder
-# writes (3.8), and the bootstrap's refusal without an embedded key.
+# writes (3.8), the bootstrap's refusal without an embedded key, and the
+# Motanka_Apps question of task 26.2 (2.9-2.11, 3.15): --apps and
+# --no-apps, the answers, the size line, the dry run, the apps-answer
+# line, a later --apps and --no-apps on an installed Host. Tests that need
+# a terminal on stdin redefine mk_stdin_tty (install_tty); one runs the
+# real terminal check under script(1).
 #
 # System paths live in a fake root (MOTANKA_ROOT). A fake repository is
 # served by a curl stub from $FAKE_WWW; gpgv, apt-get, apt-cache,
@@ -38,7 +43,8 @@ setup() {
   : >"$FAKE_STATE/db"
   export FAKE_DPKG_DB="$FAKE_STATE/db" FAKE_MANUAL="$FAKE_STATE/manual"
   export FAKE_SIM="$FAKE_STATE/sim.txt"
-  unset FAKE_SIM_HOST FAKE_UPDATE_RC FAKE_UPDATE_OUT FAKE_INSTALL_RC FAKE_POLICY_OK SUDO_USER PKEXEC_UID
+  unset FAKE_SIM_HOST FAKE_UPDATE_RC FAKE_UPDATE_OUT FAKE_INSTALL_RC FAKE_POLICY_OK SUDO_USER PKEXEC_UID \
+    FAKE_SIM_APPS FAKE_SIM_HOST_APPS FAKE_SIM_APPS_RC FAKE_URIS FAKE_URIS_RC NO_COLOR
   VER=0.1.0-1~ubuntu26.04.1
   LEDGER="$MOTANKA_ROOT/var/lib/motanka/ledger"
   make_stubs
@@ -121,16 +127,33 @@ EOF
   cat >"$STUBS/apt-get" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_STATE/apt.log"
-private=0 sim=0 cmd="" debs=""
+private=0 sim=0 cmd="" debs="" apps=0 uris=0
 for a in "$@"; do
   case "$a" in
     Dir::State::Lists=*) private=1 ;;
     -s) sim=1 ;;
+    --print-uris) uris=1 ;;
+    motanka-apps) apps=1 ;;
     update | install | check) [ -n "$cmd" ] || cmd=$a ;;
     *.deb) debs="$debs $a" ;;
   esac
 done
+private_sim=$FAKE_SIM
 host_sim=${FAKE_SIM_HOST:-$FAKE_SIM}
+if [ "$apps" = 1 ]; then
+  private_sim=${FAKE_SIM_APPS:-$FAKE_SIM}
+  host_sim=${FAKE_SIM_HOST_APPS:-$private_sim}
+fi
+if [ "$cmd" = install ] && [ "$uris" = 1 ]; then
+  if [ -n "$FAKE_URIS" ]; then
+    cat "$FAKE_URIS"
+  fi
+  exit "${FAKE_URIS_RC:-0}"
+fi
+if [ "$cmd" = install ] && [ "$sim" = 1 ] && [ "$apps" = 1 ] && [ "${FAKE_SIM_APPS_RC:-0}" != 0 ]; then
+  echo "E: Unable to locate package motanka-apps" >&2
+  exit "$FAKE_SIM_APPS_RC"
+fi
 case "$cmd" in
   check) exit 0 ;;
   update)
@@ -152,7 +175,7 @@ case "$cmd" in
     ;;
   install)
     if [ "$sim" = 1 ]; then
-      if [ "$private" = 1 ]; then cat "$FAKE_SIM"; else cat "$host_sim"; fi
+      if [ "$private" = 1 ]; then cat "$private_sim"; else cat "$host_sim"; fi
       exit 0
     fi
     if [ -n "$debs" ]; then
@@ -252,8 +275,73 @@ write_sim() {
   } >"$1"
 }
 
+# write_sim_apps <file> all|rest|none: write_sim's output for the same
+# Host, plus what motanka-apps adds: two Ubuntu packages, motanka-herdr and
+# motanka-apps.
+write_sim_apps() {
+  write_sim "$1" "$2"
+  {
+    printf 'Inst libapp1 (3.0-1 Ubuntu:26.04/resolute [amd64])\n'
+    printf 'Inst app-tool (3.0-1 Ubuntu:26.04/resolute [amd64])\n'
+    printf 'Inst motanka-herdr (%s Motanka:resolute [amd64])\n' "$VER"
+    printf 'Inst motanka-apps (%s Motanka:resolute [all])\n' "$VER"
+  } >>"$1"
+}
+
+# write_uris <file>: apt-get --print-uris output for motanka with
+# motanka-apps. The four packages motanka-apps adds come to 7 602 000
+# bytes (8 MB); libfoo1, which the simulation of motanka alone installs
+# too, must not count.
+write_uris() {
+  {
+    printf "'http://archive.test/pool/l/libapp1_3.0-1_amd64.deb' libapp1_3.0-1_amd64.deb 1200000 SHA512:aa\n"
+    printf "'http://archive.test/pool/a/app-tool_3.0-1_amd64.deb' app-tool_3.0-1_amd64.deb 2400000 SHA512:bb\n"
+    printf "'%s/pool/m/motanka-herdr_%s_amd64.deb' motanka-herdr_%s_amd64.deb 4000000 SHA512:cc\n" "$FAKE_URI" "$VER" "$VER"
+    printf "'%s/pool/m/motanka-apps_%s_all.deb' motanka-apps_%s_all.deb 2000 SHA512:dd\n" "$FAKE_URI" "$VER" "$VER"
+    printf "'http://archive.test/pool/l/libfoo1_1.2-3_amd64.deb' libfoo1_1.2-3_amd64.deb 99000000 SHA512:ee\n"
+  } >"$1"
+}
+
+# apps_fixture: FAKE_SIM_APPS and FAKE_URIS for a fresh Host.
+apps_fixture() {
+  export FAKE_SIM_APPS=$FAKE_STATE/sim-apps.txt FAKE_URIS=$FAKE_STATE/uris.txt
+  write_sim_apps "$FAKE_SIM_APPS" all
+  write_uris "$FAKE_URIS"
+}
+
+APPS_Q='Also install the applications upstream Omarchy installs by default'
+
+# install_run <options...>: the Installer without a terminal on stdin.
 install_run() {
-  run --separate-stderr bash "$MOTANKA" install "$@"
+  run --separate-stderr bash "$MOTANKA" install "$@" </dev/null
+}
+
+# install_tty <answers> <options...>: the Installer as if stdin were a
+# terminal: mk_stdin_tty is redefined to say so, and the answers (printf
+# %b text, one per line) are read from a file, as mk_ask_yes_no and
+# mk_confirm read the terminal. The guards of src/motanka do not run.
+install_tty() {
+  printf '%b' "$1" >"$BATS_TEST_TMPDIR/answers"
+  shift
+  run --separate-stderr bash -c 'set -euo pipefail
+    MK_LIBEXEC=$1/src
+    source "$1/src/lib/common.sh"; source "$1/src/lib/guard.sh"
+    source "$1/src/lib/sysledger.sh"; source "$1/src/lib/aptsim.sh"
+    source "$1/src/cmd/install.sh"
+    mk_stdin_tty() { return 0; }
+    MK_CMD=install
+    shift
+    mk_cmd_install "$@"' _ "$REPO" "$@" <"$BATS_TEST_TMPDIR/answers"
+}
+
+# count_in <text> <needle>: how often the needle occurs in the text.
+count_in() {
+  local t=$1 n=0
+  while [[ $t == *"$2"* ]]; do
+    t=${t#*"$2"}
+    n=$((n + 1))
+  done
+  printf '%d\n' "$n"
 }
 
 # entries: the ledger without time and run ID.
@@ -268,9 +356,10 @@ $stderr"
   fi
 }
 
-# real_installs: apt-get calls that install for real (not -s).
+# real_installs: apt-get calls that install for real (not -s, and not the
+# --print-uris query that sizes motanka-apps).
 real_installs() {
-  awk '/(^| )install( |$)/ && !/ -s / { print }' "$FAKE_STATE/apt.log"
+  awk '/(^| )install( |$)/ && !/ -s / && !/--print-uris/ { print }' "$FAKE_STATE/apt.log"
 }
 
 # --- library functions --------------------------------------------------
@@ -508,14 +597,15 @@ EOF
   assert_success
   has_err "Motanka $VER is installed"
   run entries
-  assert_equal "${#lines[@]}" 11
+  assert_equal "${#lines[@]}" 12
   assert_equal "${lines[0]}" "$(printf 'run-begin\tinstall\t%s' "$VER")"
-  assert_equal "${lines[1]}" "$(printf 'plan\tInst motanka-archive-keyring (%s Motanka:resolute [all])' "$VER")"
-  assert_equal "${lines[3]}" "$(printf 'plan\tInst libfoo1 (1.2-3 Ubuntu:26.04/resolute [amd64])')"
-  assert_equal "${lines[7]}" "$(printf 'plan\tInst motanka (%s Motanka:resolute [all])' "$VER")"
-  assert_equal "${lines[8]}" "$(printf 'pkg-installed\tlibfoo1\t1.2-3\tauto')"
-  assert_equal "${lines[9]}" "$(printf 'pkg-installed\tfoo-tools\t1.2-3\tmanual')"
-  assert_equal "${lines[10]}" "$(printf 'run-end\tok')"
+  assert_equal "${lines[1]}" "$(printf 'apps-answer\tno\tdefault')"
+  assert_equal "${lines[2]}" "$(printf 'plan\tInst motanka-archive-keyring (%s Motanka:resolute [all])' "$VER")"
+  assert_equal "${lines[4]}" "$(printf 'plan\tInst libfoo1 (1.2-3 Ubuntu:26.04/resolute [amd64])')"
+  assert_equal "${lines[8]}" "$(printf 'plan\tInst motanka (%s Motanka:resolute [all])' "$VER")"
+  assert_equal "${lines[9]}" "$(printf 'pkg-installed\tlibfoo1\t1.2-3\tauto')"
+  assert_equal "${lines[10]}" "$(printf 'pkg-installed\tfoo-tools\t1.2-3\tmanual')"
+  assert_equal "${lines[11]}" "$(printf 'run-end\tok')"
   run cut -f2 "$LEDGER"
   assert_equal "$(printf '%s\n' "${lines[@]}" | sort -u | wc -l)" 1
   run cat "$FAKE_STATE/apt.log"
@@ -575,12 +665,13 @@ interrupted_ledger() {
   IFS=$'\t' read -r -a f <<<"${lines[0]}"
   assert_equal "${f[1]}" run-begin
   local self=${f[0]}
-  assert_equal "${lines[1]}" "$(printf '%s\tplan\tInst libfoo1 (1.2-3 Ubuntu:26.04/resolute [amd64])' "$self")"
-  assert_equal "${lines[6]}" "$(printf '%s\tpkg-installed\tlibfoo1\t1.2-3\tauto' "$self")"
-  assert_equal "${lines[7]}" "$(printf '%s\tpkg-installed\tfoo-tools\t1.2-3\tauto' "$self")"
-  assert_equal "${lines[8]}" "$(printf '20261113T090000Z-aaaaaa\trun-end\tfailed')"
-  assert_equal "${lines[9]}" "$(printf '%s\trun-end\tok' "$self")"
-  assert_equal "${#lines[@]}" 10
+  assert_equal "${lines[1]}" "$(printf '%s\tapps-answer\tno\tdefault' "$self")"
+  assert_equal "${lines[2]}" "$(printf '%s\tplan\tInst libfoo1 (1.2-3 Ubuntu:26.04/resolute [amd64])' "$self")"
+  assert_equal "${lines[7]}" "$(printf '%s\tpkg-installed\tlibfoo1\t1.2-3\tauto' "$self")"
+  assert_equal "${lines[8]}" "$(printf '%s\tpkg-installed\tfoo-tools\t1.2-3\tauto' "$self")"
+  assert_equal "${lines[9]}" "$(printf '20261113T090000Z-aaaaaa\trun-end\tfailed')"
+  assert_equal "${lines[10]}" "$(printf '%s\trun-end\tok' "$self")"
+  assert_equal "${#lines[@]}" 11
   run real_installs
   assert_equal "${#lines[@]}" 1
   assert_output --partial 'install -y --no-remove motanka motanka-source-resolute'
@@ -608,7 +699,7 @@ interrupted_ledger() {
   assert_success
   has_err '1 action(s) the first simulation did not show'
   run entries
-  assert_equal "${lines[8]}" "$(printf 'plan\tInst libbar2 (2.0-1 Ubuntu:26.04/resolute-updates [amd64])')"
+  assert_equal "${lines[9]}" "$(printf 'plan\tInst libbar2 (2.0-1 Ubuntu:26.04/resolute-updates [amd64])')"
   assert_line "$(printf 'pkg-installed\tlibbar2\t2.0-1\tauto')"
 }
 
@@ -642,6 +733,292 @@ interrupted_ledger() {
   [[ ! -e $LEDGER ]]
   run real_installs
   assert_output ''
+}
+
+# --- Motanka_Apps (2.9-2.11, 3.15) -------------------------------------
+
+@test "--apps and --no-apps together are a usage error, before anything is read or downloaded" {
+  install_run --apps --no-apps --dry-run
+  assert_failure 2
+  has_err '--apps and --no-apps cannot be given together'
+  install_run --no-apps --yes --apps
+  assert_failure 2
+  [[ ! -e $FAKE_STATE/curl.log && ! -e $FAKE_STATE/apt.log ]]
+}
+
+@test "--help lists --apps and --no-apps" {
+  run bash "$MOTANKA" install --help
+  assert_success
+  assert_line 'usage: motanka install [--dry-run] [--yes] [--apps|--no-apps] [--channel stable|edge]'
+  assert_line --regexp '^  --apps +also install motanka-apps'
+  assert_line --regexp '^  --no-apps +do not install motanka-apps'
+}
+
+# ask <tty|notty> <input>: mk_ask_yes_no with the input (printf %b text)
+# on stdin; with tty, mk_stdin_tty is redefined to report a terminal.
+ask() {
+  printf '%b' "$2" >"$BATS_TEST_TMPDIR/ask-input"
+  run --separate-stderr bash -c 'set -euo pipefail
+    source "$1/src/lib/common.sh"
+    if [[ $2 == tty ]]; then
+      mk_stdin_tty() { return 0; }
+    fi
+    rc=0
+    mk_ask_yes_no "Go on?" || rc=$?
+    echo "rc=$rc"' _ "$REPO" "$1" <"$BATS_TEST_TMPDIR/ask-input"
+}
+
+@test "mk_ask_yes_no: 2 without a terminal; yes, no, retries and end of input with one" {
+  ask notty 'y\n'
+  assert_output 'rc=2'
+  [[ -z $stderr ]] || fail "asked without a terminal: $stderr"
+  ask tty 'Yes\n'
+  assert_output 'rc=0'
+  has_err 'Go on? [y/N]'
+  ask tty '  n \n'
+  assert_output 'rc=1'
+  ask tty '\n'
+  assert_output 'rc=1'
+  ask tty 'x\nyes\n'
+  assert_output 'rc=0'
+  has_err 'please answer y or n (an empty answer is no)'
+  ask tty 'x\ny x\nz\ny\n'
+  assert_output 'rc=1'
+  assert_equal "$(count_in "$stderr" 'Go on? [y/N]')" 3
+  has_err 'no valid answer after 3 tries; the answer is no'
+  ask tty ''
+  assert_output 'rc=1'
+}
+
+@test "the question shows the packages and the download size motanka-apps adds; y puts it into the dry run's transaction" {
+  apps_fixture
+  install_tty 'y\n' --dry-run
+  assert_success
+  has_err "$APPS_Q (motanka-apps: 4 more package(s), 8 MB to download)? [y/N]"
+  assert_equal "$(count_in "$stderr" "$APPS_Q")" 1
+  assert_line '(apt-get install --no-remove motanka motanka-source-resolute motanka-apps):'
+  assert_line "  Inst motanka-apps ($VER Motanka:resolute [all])"
+  assert_line "  Inst motanka-herdr ($VER Motanka:resolute [amd64])"
+  assert_line '  Inst libapp1 (3.0-1 Ubuntu:26.04/resolute [amd64])'
+  assert_line '11 package(s) to install; no package Motanka does not own changes or is removed.'
+  assert_line 'motanka-apps: included, answered yes at the question.'
+  run grep -c -- '--print-uris -qq install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  assert_output 1
+  run grep -c 'Dir::State::Lists=.* -q -s install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  assert_output 1
+  [[ ! -e $LEDGER ]]
+  run real_installs
+  assert_output ''
+}
+
+@test "an empty answer, n and no in any case mean no; the dry run's transaction then has no motanka-apps" {
+  local a
+  apps_fixture
+  for a in '' n no NO ' No '; do
+    install_tty "$a\n" --dry-run
+    assert_success
+    has_err "$APPS_Q"
+    refute_line --partial 'Inst motanka-apps'
+    assert_line '(apt-get install --no-remove motanka motanka-source-resolute):'
+    assert_line '7 package(s) to install; no package Motanka does not own changes or is removed.'
+    assert_line 'motanka-apps: not included, answered no at the question; add it later with: sudo motanka install --apps'
+  done
+}
+
+@test "y and yes in any case mean yes" {
+  local a
+  apps_fixture
+  for a in Y yes YES ' y'; do
+    install_tty "$a\n" --dry-run
+    assert_success
+    assert_line 'motanka-apps: included, answered yes at the question.'
+  done
+}
+
+@test "another answer asks again; three of them mean no; end of input means no" {
+  apps_fixture
+  install_tty 'maybe\ny\n' --dry-run
+  assert_success
+  assert_equal "$(count_in "$stderr" "$APPS_Q")" 2
+  has_err 'please answer y or n (an empty answer is no)'
+  assert_line 'motanka-apps: included, answered yes at the question.'
+  install_tty 'a\nb\nc\ny\n' --dry-run
+  assert_success
+  assert_equal "$(count_in "$stderr" "$APPS_Q")" 3
+  has_err 'no valid answer after 3 tries; the answer is no'
+  assert_line --partial 'motanka-apps: not included, answered no at the question'
+  install_tty '' --dry-run
+  assert_success
+  assert_line --partial 'motanka-apps: not included, answered no at the question'
+}
+
+@test "without a terminal nothing is asked, the answer is no, and one line says how to add the applications later" {
+  apps_fixture
+  install_run --dry-run
+  assert_success
+  [[ $stderr != *"$APPS_Q"* ]] || fail "the question was asked without a terminal"
+  has_err 'motanka-apps: there is no terminal to ask on, so the applications upstream Omarchy installs by default are not installed; add them later with: sudo motanka install --apps'
+  assert_line 'motanka-apps: not included, answered no by default (--yes without --apps, or no terminal to ask on); add it later with: sudo motanka install --apps'
+  refute_line --partial 'Inst motanka-apps'
+  run grep -c -e '--print-uris' -e ' motanka-apps$' "$FAKE_STATE/apt.log"
+  assert_output 0
+}
+
+@test "--yes without --apps asks nothing and answers no, also with a terminal (2.10)" {
+  apps_fixture
+  install_tty 'y\ny\n' --yes
+  assert_success
+  [[ $stderr != *"$APPS_Q"* ]] || fail "--yes asked the question"
+  has_err 'motanka-apps: --yes without --apps does not install the applications upstream Omarchy installs by default; add them later with: sudo motanka install --apps'
+  run entries
+  assert_equal "${lines[1]}" "$(printf 'apps-answer\tno\tdefault')"
+  run real_installs
+  refute_output --partial 'motanka-apps'
+  run grep -c -e '--print-uris' -e ' motanka-apps$' "$FAKE_STATE/apt.log"
+  assert_output 0
+}
+
+@test "--apps and --no-apps answer without asking" {
+  apps_fixture
+  install_tty '' --dry-run --apps
+  assert_success
+  [[ $stderr != *"$APPS_Q"* ]] || fail "--apps asked the question"
+  assert_line 'motanka-apps: included, answered yes by --apps.'
+  assert_line "  Inst motanka-apps ($VER Motanka:resolute [all])"
+  install_tty '' --dry-run --no-apps
+  assert_success
+  [[ $stderr != *"$APPS_Q"* ]] || fail "--no-apps asked the question"
+  assert_line 'motanka-apps: not included, answered no by --no-apps; add it later with: sudo motanka install --apps'
+  refute_line --partial 'Inst motanka-apps'
+  run grep -c -- '--print-uris' "$FAKE_STATE/apt.log"
+  assert_output 0
+}
+
+@test "the size line: an empty --print-uris list, a failing --print-uris, a failing simulation" {
+  apps_fixture
+  : >"$FAKE_URIS"
+  install_tty 'n\n' --dry-run
+  assert_success
+  has_err "$APPS_Q (motanka-apps: 4 more package(s), 0 MB to download)? [y/N]"
+  write_uris "$FAKE_URIS"
+  FAKE_URIS_RC=100 install_tty 'n\n' --dry-run
+  assert_success
+  has_err "$APPS_Q (motanka-apps: 4 more package(s), download size unknown)? [y/N]"
+  FAKE_SIM_APPS_RC=100 install_tty 'n\n' --dry-run
+  assert_success
+  has_err "$APPS_Q (motanka-apps, size unknown)? [y/N]"
+  assert_line --partial 'motanka-apps: not included, answered no at the question'
+  FAKE_SIM_APPS_RC=100 install_tty 'y\n' --dry-run
+  assert_failure 1
+  has_err 'apt cannot plan the installation of motanka motanka-source-resolute motanka-apps'
+}
+
+@test "a real run with --apps ledgers the answer and installs motanka-apps with the Foreign_Packages it brings (3.7, 3.15)" {
+  apps_fixture
+  install_run --yes --apps
+  assert_success
+  has_err 'They include motanka-apps and the applications it depends on.'
+  run entries
+  assert_equal "${lines[0]}" "$(printf 'run-begin\tinstall\t%s' "$VER")"
+  assert_equal "${lines[1]}" "$(printf 'apps-answer\tyes\tflag')"
+  assert_line "$(printf 'plan\tInst motanka-apps (%s Motanka:resolute [all])' "$VER")"
+  assert_line "$(printf 'plan\tInst motanka-herdr (%s Motanka:resolute [amd64])' "$VER")"
+  assert_line "$(printf 'pkg-installed\tlibapp1\t3.0-1\tauto')"
+  assert_line "$(printf 'pkg-installed\tapp-tool\t3.0-1\tauto')"
+  refute_line --partial $'pkg-installed\tmotanka-'
+  assert_equal "${lines[-1]}" "$(printf 'run-end\tok')"
+  run grep -c -- '^-q -s install motanka motanka-source-resolute motanka-apps$' "$FAKE_STATE/apt.log"
+  assert_output 1
+  run real_installs
+  assert_line -- '-o DPkg::Lock::Timeout=300 install -y --no-remove motanka motanka-source-resolute motanka-apps'
+  run grep -c '^motanka-apps' "$FAKE_DPKG_DB"
+  assert_output 1
+}
+
+@test "yes at the question in a real run is ledgered as an answer at the question" {
+  apps_fixture
+  install_tty 'y\ny\n'
+  assert_success
+  run entries
+  assert_equal "${lines[1]}" "$(printf 'apps-answer\tyes\tquestion')"
+  run real_installs
+  assert_line --partial 'install -y --no-remove motanka motanka-source-resolute motanka-apps'
+}
+
+@test "motanka-apps changing a Foreign_Package exits 5 and changes nothing" {
+  apps_fixture
+  printf 'Inst libc6 [2.39-0ubuntu8] (2.40-1 Ubuntu:26.04/resolute [amd64])\n' >>"$FAKE_SIM_APPS"
+  install_run --yes --apps
+  assert_failure 5
+  has_err 'libc6 2.39-0ubuntu8 -> 2.40-1 (upgrade)'
+  has_err "refused: installing Motanka with motanka-apps would change 1 package(s) Motanka does not own; nothing was changed; 'sudo motanka install --no-apps' installs Motanka without it"
+  [[ ! -e $LEDGER ]]
+  run real_installs
+  assert_output ''
+}
+
+@test "a later 'install --apps' adds motanka-apps to an installed Host instead of taking the nothing-to-change path" {
+  install_run --yes
+  assert_success
+  cp "$LEDGER" "$BATS_TEST_TMPDIR/ledger.before"
+  write_sim "$FAKE_SIM" none
+  export FAKE_SIM_APPS=$FAKE_STATE/sim-apps.txt
+  write_sim_apps "$FAKE_SIM_APPS" none
+  install_run --yes --apps
+  assert_success
+  [[ $stderr != *'nothing to change'* ]] || fail "the nothing-to-change path was taken"
+  local size
+  size=$(stat -c %s "$BATS_TEST_TMPDIR/ledger.before")
+  head -c "$size" "$LEDGER" | cmp - "$BATS_TEST_TMPDIR/ledger.before"
+  run bash -c 'tail -c +"$(($2 + 1))" "$1" | cut -f3-' _ "$LEDGER" "$size"
+  assert_equal "${lines[0]}" "$(printf 'run-begin\tinstall\t%s' "$VER")"
+  assert_equal "${lines[1]}" "$(printf 'apps-answer\tyes\tflag')"
+  assert_equal "${lines[2]}" "$(printf 'plan\tInst libapp1 (3.0-1 Ubuntu:26.04/resolute [amd64])')"
+  assert_equal "${lines[5]}" "$(printf 'plan\tInst motanka-apps (%s Motanka:resolute [all])' "$VER")"
+  assert_equal "${lines[6]}" "$(printf 'pkg-installed\tlibapp1\t3.0-1\tauto')"
+  assert_equal "${lines[7]}" "$(printf 'pkg-installed\tapp-tool\t3.0-1\tauto')"
+  assert_equal "${lines[8]}" "$(printf 'run-end\tok')"
+  assert_equal "${#lines[@]}" 9
+  run real_installs
+  assert_equal "${lines[-1]}" '-o DPkg::Lock::Timeout=300 install -y --no-remove motanka motanka-source-resolute motanka-apps'
+
+  # Installed now: no question, no answer, nothing to change.
+  cp "$LEDGER" "$BATS_TEST_TMPDIR/ledger.apps"
+  install_tty 'y\n' --yes
+  assert_success
+  [[ $stderr != *"$APPS_Q"* && $stderr != *'--yes without --apps'* ]] || fail "motanka-apps is installed, yet the Installer asked or answered"
+  has_err "Motanka $VER is already installed; nothing to change"
+  cmp "$BATS_TEST_TMPDIR/ledger.apps" "$LEDGER"
+}
+
+@test "--no-apps on a Host with motanka-apps installed leaves it and says how to remove it" {
+  install_run --yes
+  assert_success
+  printf 'motanka-apps\t%s\nmotanka-herdr\t%s\n' "$VER" "$VER" >>"$FAKE_DPKG_DB"
+  cp "$LEDGER" "$BATS_TEST_TMPDIR/ledger.before"
+  cp "$FAKE_DPKG_DB" "$BATS_TEST_TMPDIR/db.before"
+  write_sim "$FAKE_SIM" none
+  install_run --yes --no-apps
+  assert_success
+  has_err "motanka-apps $VER is installed and stays installed: --no-apps does not remove it. 'sudo motanka remove' removes Motanka with everything it installed; 'sudo apt purge motanka-apps' removes only that metapackage, and the packages it brought stay until 'sudo motanka remove'."
+  has_err 'nothing to change'
+  cmp "$BATS_TEST_TMPDIR/ledger.before" "$LEDGER"
+  cmp "$BATS_TEST_TMPDIR/db.before" "$FAKE_DPKG_DB"
+  run grep -c ' purge\| remove ' "$FAKE_STATE/apt.log"
+  assert_output 0
+}
+
+@test "on a real terminal the question is asked and answered (script)" {
+  if ! command -v script >/dev/null 2>&1; then
+    skip "script(1) is not installed"
+  fi
+  apps_fixture
+  printf 'y\n' >"$BATS_TEST_TMPDIR/answers"
+  run script -qec "NO_COLOR=1 bash '$MOTANKA' install --dry-run" /dev/null <"$BATS_TEST_TMPDIR/answers"
+  assert_success
+  assert_output --partial "$APPS_Q (motanka-apps: 4 more package(s), 8 MB to download)? [y/N]"
+  assert_output --partial "  Inst motanka-apps ($VER Motanka:resolute [all])"
+  assert_output --partial 'motanka-apps: included, answered yes at the question.'
 }
 
 # --- bootstrap ----------------------------------------------------------

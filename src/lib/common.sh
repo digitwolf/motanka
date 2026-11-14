@@ -152,6 +152,14 @@ mk_parse_common_opt() {
   return 0
 }
 
+# mk_stdin_tty: 0 if stdin is a terminal, the only place questions are
+# asked. The bootstrap (install.sh) gives the Installer the terminal as
+# stdin when it has one (/dev/tty under "curl | sudo bash"), else
+# /dev/null. The unit tests redefine this function to answer from a file.
+mk_stdin_tty() {
+  [[ -t 0 ]]
+}
+
 # mk_confirm <question>: 0 if the user agrees. With --yes it agrees without
 # asking. Without a terminal on stdin it refuses and names --yes.
 mk_confirm() {
@@ -159,13 +167,46 @@ mk_confirm() {
   if ((MK_YES)); then
     return 0
   fi
-  if [[ ! -t 0 ]]; then
+  if ! mk_stdin_tty; then
     mk_info "$(mk_cmd_name): '$1' needs an answer; pass --yes to run without a terminal"
     return 1
   fi
   printf '%s [y/N] ' "$1" >&2
   IFS= read -r answer || true
   [[ $answer == [yY] || $answer == [yY][eE][sS] ]]
+}
+
+# mk_ask_yes_no <question>: asks on the terminal, as mk_confirm does, with
+# no as the default; --yes does not answer it (the caller decides what
+# --yes means). Returns 0 for yes, 1 for no, 2 when stdin is not a
+# terminal (nothing is asked). An empty answer, "n" and "no" mean no, "y"
+# and "yes" mean yes, in any case and with blanks around them; anything
+# else asks again, at most 3 times in all, then counts as no. End of input
+# counts as no.
+mk_ask_yes_no() {
+  local answer tries
+  if ! mk_stdin_tty; then
+    return 2
+  fi
+  for ((tries = 1; tries <= 3; tries++)); do
+    printf '%s [y/N] ' "$1" >&2
+    answer=""
+    if ! IFS= read -r answer; then
+      printf '\n' >&2
+      return 1
+    fi
+    answer=${answer#"${answer%%[![:space:]]*}"}
+    answer=${answer%"${answer##*[![:space:]]}"}
+    case ${answer,,} in
+      "" | n | no) return 1 ;;
+      y | yes) return 0 ;;
+    esac
+    if ((tries < 3)); then
+      mk_info "please answer y or n (an empty answer is no)"
+    fi
+  done
+  mk_info "no valid answer after 3 tries; the answer is no"
+  return 1
 }
 
 # --- lock ---------------------------------------------------------------

@@ -5,7 +5,7 @@
 motanka \- Omarchy\-compatible Hyprland session for Ubuntu
 .SH SYNOPSIS
 .PP
-\fBmotanka\fR \fBinstall\fR [\fB\-\-dry\-run\fR] [\fB\-\-yes\fR] [\fB\-\-channel\fR \fICHANNEL\fR]
+\fBmotanka\fR \fBinstall\fR [\fB\-\-dry\-run\fR] [\fB\-\-yes\fR] [\fB\-\-apps\fR | \fB\-\-no\-apps\fR] [\fB\-\-channel\fR \fICHANNEL\fR]
 .PP
 \fBmotanka\fR \fBremove\fR [\fB\-\-dry\-run\fR] [\fB\-\-yes\fR] [\fB\-\-purge\fR]
 .PP
@@ -32,15 +32,30 @@ Every command writes its actions to the systemd journal with the identifier \fBm
 Adds Motanka to this Ubuntu installation as a separate login session.
 It first runs every read\-only preflight check: the release, the architecture, the \fBuniverse\fR component, the dpkg state, 4 GB of free space on the root filesystem, the display manager and, when an NVIDIA GPU is present, its driver.
 It then downloads the keyring and source packages of the running release from the Motanka repository, checks them against the signed \fBSHA256SUMS\fR, simulates the apt transaction, and refuses when a package Motanka does not own would be upgraded, downgraded or removed.
+Unless \fBmotanka\-apps\fR is installed already, it asks once whether to install \fBmotanka\-apps\fR too: the applications upstream Omarchy installs by default that start no system service and change no system policy, and \fBherdr\fR.
+The question shows how many packages that adds and their download size; an empty answer is no.
+Without a terminal to ask on, or with \fB\-\-yes\fR alone, the answer is no.
+The answer is recorded in the System_Ledger, and \fBmotanka doctor\fR reports it.
+\fBsudo motanka install \-\-apps\fR adds the applications later.
 After a real run, choose Motanka at the login screen; per\-user setup runs at the first login.
 Running it again on an installed system changes nothing.
 .TP
 \fB\-\-dry\-run\fR
 Run the preflight, verify the repository, and print the simulated apt transaction and every home\-folder path first\-login setup would write.
+The transaction includes \fBmotanka\-apps\fR when the answer is yes.
 Change nothing.
 .TP
 \fB\-\-yes\fR, \fB\-y\fR
 Do not ask for confirmation.
+Without \fB\-\-apps\fR, do not install \fBmotanka\-apps\fR.
+.TP
+\fB\-\-apps\fR
+Also install \fBmotanka\-apps\fR, without asking.
+On a system where Motanka is installed, this adds \fBmotanka\-apps\fR.
+.TP
+\fB\-\-no\-apps\fR
+Do not install \fBmotanka\-apps\fR, without asking.
+An installed \fBmotanka\-apps\fR stays: \fBmotanka remove\fR removes it with the rest of Motanka, and \fBapt purge motanka\-apps\fR removes only the metapackage, leaving the packages it brought until \fBmotanka remove\fR.
 .TP
 \fB\-\-channel\fR \fICHANNEL\fR, \fB\-\-channel=\fR\fICHANNEL\fR
 \fBstable\fR (the default) follows the release tags of upstream Omarchy; \fBedge\fR follows its default branch.
@@ -89,7 +104,7 @@ Print what would be restored and change nothing.
 Do not ask for confirmation.
 .SS doctor
 .PP
-Reports the release, the Motanka version, the channel, the Upstream pin, the Stack versions, the GPU driver, the display manager, the snapshot method, the features that are not available on this release, the unsupported calls of Arch commands logged in the last 30 days, and the ledgered paths of the home folder that are missing or changed, unplanned or written by the desktop.
+Reports the release, the Motanka version, the channel, the Upstream pin, the Stack versions, whether \fBmotanka\-apps\fR is installed and the last answer \fBinstall\fR recorded about it, the GPU driver, the display manager, the snapshot method, the features that are not available on this release, the unsupported calls of Arch commands logged in the last 30 days, and the ledgered paths of the home folder that are missing or changed, unplanned or written by the desktop.
 Run it as your user for your home folder, or with \fBsudo\fR for the parts that need root and your home folder.
 Without \fB\-\-fix\fR it changes nothing.
 .TP

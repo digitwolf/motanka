@@ -8,7 +8,15 @@
 #   plan           <apt simulation line>
 #   pkg-installed  <name>  <version>  auto|manual
 #   menu-install   <uid>  <name>  apt|binary
+#   apps-answer    yes|no  flag|question|default
 #   run-end        ok|failed
+#
+# apps-answer is the answer of one install run to the Motanka_Apps
+# question (3.15): flag for --apps or --no-apps, question for an answer at
+# the question, default for no without a question (--yes without --apps,
+# or no terminal to ask on). The Installer writes it right after
+# run-begin, only when motanka-apps was not installed at the start of the
+# run. The Doctor reports the last one (mk_sysledger_last_apps_answer).
 #
 # Every line is appended and fsynced before the function returns, so a
 # caller that writes the line before its action keeps the ledger complete up
@@ -50,6 +58,10 @@ _mk_sysledger_check() {
       ;;
     menu-install)
       (($# == 3)) && [[ $1 =~ ^[0-9]+$ ]] && [[ $3 == apt || $3 == binary ]]
+      ;;
+    apps-answer)
+      (($# == 2)) && [[ $1 == yes || $1 == no ]] &&
+        [[ $2 == flag || $2 == question || $2 == default ]]
       ;;
     run-end)
       (($# == 1)) && [[ $1 == ok || $1 == failed ]]
@@ -124,6 +136,11 @@ mk_sysledger_menu_install() {
   mk_sysledger_append menu-install "$@"
 }
 
+# mk_sysledger_apps_answer <yes|no> <flag|question|default>
+mk_sysledger_apps_answer() {
+  mk_sysledger_append apps-answer "$@"
+}
+
 # mk_sysledger_end <ok|failed>
 mk_sysledger_end() {
   mk_sysledger_append run-end "$@"
@@ -169,6 +186,15 @@ mk_sysledger_packages() {
 # for every menu install.
 mk_sysledger_menu_installs() {
   mk_sysledger_read "$@" | awk -F'\t' 'BEGIN { OFS = "\t" } $3 == "menu-install" { print $4, $5, $6 }'
+}
+
+# mk_sysledger_last_apps_answer [file]: <utc-time> TAB <yes|no> TAB
+# <flag|question|default> of the last apps-answer line, or nothing when
+# there is none.
+mk_sysledger_last_apps_answer() {
+  mk_sysledger_read "$@" | awk -F'\t' '
+    $3 == "apps-answer" { last = $1 "\t" $4 "\t" $5 }
+    END { if (last != "") print last }'
 }
 
 # mk_sysledger_incomplete_runs [file]: run IDs that have a run-begin line

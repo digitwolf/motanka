@@ -2,9 +2,10 @@
 # shellcheck disable=SC2329 # setup and helpers are called by bats
 # shellcheck disable=SC2016 # stub bodies and python snippets are single-quoted on purpose
 # shellcheck disable=SC2030,SC2031 # bats runs each test in a subshell; variables are set per test on purpose
-# Unit tests for src/cmd/doctor.sh (tasks 22.1, 22.2; requirements 1.7,
-# 11.2, 12.1-12.4, 12.6-12.8; design.md, Doctor and "Session-time home
-# writes"): the report's system fields, the per-release feature list,
+# Unit tests for src/cmd/doctor.sh (tasks 22.1, 22.2, 26.2; requirements
+# 1.7, 11.2, 12.1-12.4, 12.6-12.9; design.md, Doctor and "Session-time home
+# writes"): the report's system fields, motanka-apps and the recorded
+# answer about it, the per-release feature list,
 # missing and changed ledgered paths, unsupported shim calls from the
 # journal, User_Ledger entries recorded as unplanned and paths observed as
 # written by Ubuntu's session components, a pending session capture, --json
@@ -456,6 +457,66 @@ assert d["system"]["motanka"]["installed"] is False'
   assert_success
   assert_line --regexp '^  System_Ledger: +/var/lib/motanka/ledger: 2 Ubuntu package\(s\) recorded, 1 of them no longer installed \(foo-tools\); interrupted runs: 20261113T100000Z-bbbbbb$'
   assert_line --partial '  - the System_Ledger records 1 run(s) that did not finish (20261113T100000Z-bbbbbb)'
+}
+
+# --- Motanka_Apps (12.9) -------------------------------------------------------------------
+
+# apps_ledger <answer> <source> [<answer> <source>]...: one install run per
+# answer, the first at 09:00, the next at 10:00; the apps-answer line of
+# each is at hh:00:01.
+apps_ledger() {
+  local h=8
+  mkdir -p "$MOTANKA_ROOT/var/lib/motanka"
+  while (($# >= 2)); do
+    h=$((h + 1))
+    printf '2026-11-13T%02d:00:00Z\t20261113T%02d0000Z-aaaaaa\trun-begin\tinstall\t0.1.0-1~ubuntu26.04.1\n' "$h" "$h"
+    printf '2026-11-13T%02d:00:01Z\t20261113T%02d0000Z-aaaaaa\tapps-answer\t%s\t%s\n' "$h" "$h" "$1" "$2"
+    printf '2026-11-13T%02d:00:02Z\t20261113T%02d0000Z-aaaaaa\trun-end\tok\n' "$h" "$h"
+    shift 2
+  done >>"$MOTANKA_ROOT/var/lib/motanka/ledger"
+}
+
+@test "motanka-apps installed with the last recorded answer (12.9)" {
+  fake_host resolute 26.04 resolute
+  fake_pkg motanka-apps "$VER_R"
+  fake_pkg motanka-herdr "$VER_R"
+  apps_ledger no default yes flag
+  doctor
+  assert_success
+  assert_line --regexp '^  motanka-apps: +installed \(0\.1\.0-1~ubuntu26\.04\.1\); last answer: yes, by --apps, on 2026-11-13T10:00:01Z$'
+  assert_line '  none found'
+  doctor --json
+  assert_success
+  check_json 'a = d["system"]["apps"]
+assert a == {"installed": True, "version": "0.1.0-1~ubuntu26.04.1", "ledger_read": True, "answer": "yes", "answer_time": "2026-11-13T10:00:01Z", "answer_source": "flag"}, a
+assert not any("apps" in p["id"] for p in d["problems"]), d["problems"]'
+}
+
+@test "motanka-apps not installed with the answer no is reported, and is not a problem (12.9)" {
+  fake_host resolute 26.04 resolute
+  apps_ledger no default
+  doctor
+  assert_success
+  assert_line --regexp '^  motanka-apps: +not installed; last answer: no, by default \(--yes without --apps, or no terminal to ask on\), on 2026-11-13T09:00:01Z$'
+  assert_line '  none found'
+  : >"$MOTANKA_ROOT/var/lib/motanka/ledger"
+  apps_ledger no question
+  doctor
+  assert_line --regexp '^  motanka-apps: +not installed; last answer: no, at the question, on '
+}
+
+@test "without an apps-answer line the Doctor says no answer was recorded (12.9)" {
+  fake_host resolute 26.04 resolute
+  doctor
+  assert_success
+  assert_line --regexp '^  motanka-apps: +not installed; no answer recorded$'
+  doctor --json
+  check_json 'a = d["system"]["apps"]
+assert a == {"installed": False, "version": None, "ledger_read": True, "answer": None, "answer_time": None, "answer_source": None}, a'
+  mkdir -p "$MOTANKA_ROOT/var/lib/motanka"
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-aaaaaa\trun-begin\tinstall\t0.1.0\n' >"$MOTANKA_ROOT/var/lib/motanka/ledger"
+  doctor
+  assert_line --regexp '^  motanka-apps: +not installed; no answer recorded$'
 }
 
 # --- home part: missing and changed paths (12.2) ----------------------------------------

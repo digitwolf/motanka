@@ -8,7 +8,7 @@ motanka - Omarchy-compatible Hyprland session for Ubuntu
 
 # SYNOPSIS
 
-**motanka** **install** [`--dry-run`] [`--yes`] [`--channel` *CHANNEL*]
+**motanka** **install** [`--dry-run`] [`--yes`] [`--apps` | `--no-apps`] [`--channel` *CHANNEL*]
 
 **motanka** **remove** [`--dry-run`] [`--yes`] [`--purge`]
 
@@ -38,15 +38,30 @@ Every command writes its actions to the systemd journal with the identifier `mot
 Adds Motanka to this Ubuntu installation as a separate login session.
 It first runs every read-only preflight check: the release, the architecture, the `universe` component, the dpkg state, 4 GB of free space on the root filesystem, the display manager and, when an NVIDIA GPU is present, its driver.
 It then downloads the keyring and source packages of the running release from the Motanka repository, checks them against the signed `SHA256SUMS`, simulates the apt transaction, and refuses when a package Motanka does not own would be upgraded, downgraded or removed.
+Unless `motanka-apps` is installed already, it asks once whether to install `motanka-apps` too: the applications upstream Omarchy installs by default that start no system service and change no system policy, and `herdr`.
+The question shows how many packages that adds and their download size; an empty answer is no.
+Without a terminal to ask on, or with `--yes` alone, the answer is no.
+The answer is recorded in the System_Ledger, and **motanka doctor** reports it.
+**sudo motanka install --apps** adds the applications later.
 After a real run, choose Motanka at the login screen; per-user setup runs at the first login.
 Running it again on an installed system changes nothing.
 
 `--dry-run`
 :   Run the preflight, verify the repository, and print the simulated apt transaction and every home-folder path first-login setup would write.
+    The transaction includes `motanka-apps` when the answer is yes.
     Change nothing.
 
 `--yes`, `-y`
 :   Do not ask for confirmation.
+    Without `--apps`, do not install `motanka-apps`.
+
+`--apps`
+:   Also install `motanka-apps`, without asking.
+    On a system where Motanka is installed, this adds `motanka-apps`.
+
+`--no-apps`
+:   Do not install `motanka-apps`, without asking.
+    An installed `motanka-apps` stays: **motanka remove** removes it with the rest of Motanka, and **apt purge motanka-apps** removes only the metapackage, leaving the packages it brought until **motanka remove**.
 
 `--channel` *CHANNEL*, `--channel=`*CHANNEL*
 :   **stable** (the default) follows the release tags of upstream Omarchy; **edge** follows its default branch.
@@ -99,7 +114,7 @@ It works without network access.
 
 ## doctor
 
-Reports the release, the Motanka version, the channel, the Upstream pin, the Stack versions, the GPU driver, the display manager, the snapshot method, the features that are not available on this release, the unsupported calls of Arch commands logged in the last 30 days, and the ledgered paths of the home folder that are missing or changed, unplanned or written by the desktop.
+Reports the release, the Motanka version, the channel, the Upstream pin, the Stack versions, whether `motanka-apps` is installed and the last answer **install** recorded about it, the GPU driver, the display manager, the snapshot method, the features that are not available on this release, the unsupported calls of Arch commands logged in the last 30 days, and the ledgered paths of the home folder that are missing or changed, unplanned or written by the desktop.
 Run it as your user for your home folder, or with **sudo** for the parts that need root and your home folder.
 Without `--fix` it changes nothing.
 

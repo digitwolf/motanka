@@ -10,7 +10,8 @@
 # values of --channel (also as --channel=VALUE). The development-build
 # option --i-know-this-is-not-a-vm is never offered. An option already on
 # the command line is not offered again (--yes and -y, and -h and --help,
-# count as one). Needs no bash-completion helper functions.
+# count as one; after --apps or --no-apps neither is offered, since they
+# exclude each other). Needs no bash-completion helper functions.
 
 _motanka_commands="install remove update rollback doctor help"
 _motanka_channels="stable edge"
@@ -18,7 +19,7 @@ _motanka_channels="stable edge"
 # _motanka_options <command>: the options of the command, one per line.
 _motanka_options() {
   case $1 in
-    install) printf '%s\n' --dry-run --yes -y --channel -h --help ;;
+    install) printf '%s\n' --dry-run --yes -y --apps --no-apps --channel -h --help ;;
     remove) printf '%s\n' --dry-run --yes -y --purge -h --help ;;
     update) printf '%s\n' --dry-run --yes -y --system -h --help ;;
     rollback) printf '%s\n' --dry-run --yes -y -h --help ;;
@@ -31,6 +32,7 @@ _motanka_same() {
   case $1 in
     --yes | -y) printf '%s\n' --yes -y ;;
     -h | --help) printf '%s\n' -h --help ;;
+    --apps | --no-apps) printf '%s\n' --apps --no-apps ;;
     --channel=*) printf '%s\n' --channel ;;
     *) printf '%s\n' "$1" ;;
   esac

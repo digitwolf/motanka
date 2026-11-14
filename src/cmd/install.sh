@@ -1,10 +1,12 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2329 # functions are called by src/motanka and by the unit tests
 # motanka install (design.md: Install sequence, CLI, Error Handling;
-# requirements 1.1, 1.4-1.6, 2.1-2.8, 3.1, 3.2, 3.7-3.10, 4.1, 4.5).
+# requirements 1.1, 1.4-1.6, 2.1-2.11, 3.1, 3.2, 3.7-3.10, 3.15, 4.1,
+# 4.5).
 #
 # Steps, in order. Nothing on the Host changes before step 6.
-#   1. options; root (exit 11); the system lock (exit 9)
+#   1. options; root (exit 11); the system lock (exit 9). --apps and
+#      --no-apps together are a usage error (exit 2).
 #   2. preflight, read-only (mk_preflight): release, architecture,
 #      universe, dpkg state, free space, display manager, NVIDIA report.
 #      Every check runs; the first failure's exit code is returned.
@@ -13,16 +15,33 @@
 #   4. apt-get update and a simulated install of motanka with a private
 #      apt configuration under /run/motanka
 #   5. refuse (exit 5) if a Foreign_Package would be upgraded, downgraded
-#      or removed. --dry-run prints the simulated transaction and the
+#      or removed. Then the Motanka_Apps question (2.9-2.11), once, when
+#      motanka-apps is not installed:
+#        --apps answers yes, --no-apps no (recorded as "flag")
+#        --yes alone answers no, and so does a missing terminal on stdin;
+#          one line says how to add the applications later ("default")
+#        otherwise mk_ask_yes_no asks on the terminal, showing how many
+#          packages motanka-apps adds to the simulation of step 4 and
+#          their download size (a private simulation of motanka with
+#          motanka-apps, and apt-get --print-uris of it); without them it
+#          asks anyway. An empty answer is no ("question").
+#      With yes, motanka-apps joins the package list of every later step:
+#      the Plan becomes the private simulation of motanka with
+#      motanka-apps, and its Foreign_Package check refuses with exit 5.
+#      When motanka-apps is installed, nothing is asked; --no-apps then
+#      leaves it installed and says how to remove it.
+#      --dry-run prints the simulated transaction, the answer and the
 #      home-folder Plan on stdout and exits 0.
-#   6. System_Ledger: run-begin, then one plan line per simulated action,
-#      each fsynced before the next step (3.9)
+#   6. System_Ledger: run-begin, apps-answer (when the run has an answer,
+#      3.15), then one plan line per simulated action, each fsynced before
+#      the next step (3.9)
 #   7. apt-get install of the two verified .debs (skipped for a package
 #      already installed at that version or newer); apt-get update
-#   8. simulate again with the Host's own configuration; refuse Foreign
-#      changes (exit 5); ledger the actions the first simulation did not
-#      show
-#   9. apt-get install --no-remove motanka motanka-source-<suite>
+#   8. simulate again with the Host's own configuration (with motanka-apps
+#      when the answer is yes); refuse Foreign changes (exit 5); ledger the
+#      actions the first simulation did not show
+#   9. apt-get install --no-remove motanka motanka-source-<suite>, and
+#      motanka-apps when the answer is yes
 #  10. pkg-installed for every Foreign_Package that a plan line of an
 #      install run names as new and that is installed now, unless already
 #      recorded (3.7; this also completes an interrupted earlier run);
@@ -31,7 +50,9 @@
 # If the simulation shows nothing to install, the keyring and source
 # packages are installed at least at the verified versions, and no earlier
 # install run is unfinished, the Installer exits 0 at step 6 and writes
-# nothing (3.10). After run-begin, any exit other than success appends
+# nothing (3.10), not even the answer of step 5. That path is never taken
+# when the answer is yes and motanka-apps is not installed: its plan
+# installs motanka-apps. After run-begin, any exit other than success appends
 # run-end failed. The Installer writes nothing into any home folder (3.8):
 # downloads, gpgv's home folder and apt's private lists all live under
 # /run/motanka.
@@ -42,6 +63,8 @@
 readonly MK_MIN_FREE_KIB=$((4 * 1024 * 1024))
 readonly MK_NVIDIA_MIN_MAJOR=555
 readonly MK_HOME_PATHS=/opt/motanka/share/motanka/home-paths.tsv
+readonly MK_APPS_PKG=motanka-apps
+readonly MK_APPS_LATER="sudo motanka install --apps"
 
 MK_CHANNEL=stable
 MK_SUITE=""
@@ -50,10 +73,26 @@ MK_PF_DM=""
 MK_PF_FAIL_CODE=0
 MK_INSTALL_BEGUN=0
 MK_INSTALL_ENDED=0
+# The packages this run installs: motanka, motanka-source-<suite>, and
+# motanka-apps when the answer is yes.
+MK_INSTALL_PKGS=()
+# The Motanka_Apps question: the flag (yes for --apps, no for --no-apps),
+# the answer and its source (flag, question or default; both empty when
+# motanka-apps is installed already), the installed version of
+# motanka-apps, and what the question shows (packages added, download
+# size in bytes; empty when unknown), and whether sim-apps.txt holds a
+# successful simulation.
+MK_APPS_FLAG=""
+MK_APPS_ANSWER=""
+MK_APPS_SOURCE=""
+MK_APPS_INSTALLED=""
+MK_APPS_N=""
+MK_APPS_BYTES=""
+MK_APPS_SIM=0
 
 mk_install_usage() {
   cat <<'EOF'
-usage: motanka install [--dry-run] [--yes] [--channel stable|edge]
+usage: motanka install [--dry-run] [--yes] [--apps|--no-apps] [--channel stable|edge]
 
 Adds Motanka to this Ubuntu installation as a separate login session.
 Runs as root. Every check runs before anything changes.
@@ -62,10 +101,17 @@ Runs as root. Every check runs before anything changes.
                      print the simulated apt transaction and the
                      home-folder paths first-login setup writes; change
                      nothing
-  --yes, -y          do not ask for confirmation
+  --yes, -y          do not ask for confirmation; without --apps, do not
+                     install motanka-apps
+  --apps             also install motanka-apps, the applications upstream
+                     Omarchy installs by default, without asking
+  --no-apps          do not install motanka-apps, without asking
   --channel CHANNEL  stable (default) follows Upstream release tags,
                      edge follows Upstream's default branch
   -h, --help         show this help
+
+Without --apps, --no-apps and --yes, the Installer asks once whether to
+install motanka-apps and shows its download size; an empty answer is no.
 
 Environment: MOTANKA_APT_URI, the repository to fetch the keyring and
 source packages from (default https://digitwolf.github.io/motanka/apt).
@@ -525,15 +571,16 @@ _mk_install_require_root() {
   fi
 }
 
-# _mk_install_refuse_foreign <parsed-simulation> <what-changed>: exits 5
-# and lists the packages if a Foreign_Package would change (2.6).
+# _mk_install_refuse_foreign <parsed-simulation> <what-changed> [what]:
+# exits 5 and lists the packages if a Foreign_Package would change (2.6).
+# [what] names what is installed (default Motanka).
 _mk_install_refuse_foreign() {
   local -a changes
   mapfile -t changes < <(mk_aptsim_foreign_changes "$1")
   if ((${#changes[@]} > 0)); then
     mk_info "The apt transaction would change these packages that Motanka does not own:"
     printf '  %s\n' "${changes[@]}" >&2
-    mk_die "$MK_EXIT_FOREIGN" "refused: installing Motanka would change ${#changes[@]} package(s) Motanka does not own; $2"
+    mk_die "$MK_EXIT_FOREIGN" "refused: installing ${3:-Motanka} would change ${#changes[@]} package(s) Motanka does not own; $2"
   fi
 }
 
@@ -585,6 +632,9 @@ _mk_install_deb_current() {
 # change nothing (3.10).
 _mk_install_nothing_to_do() {
   [[ ! -s $MK_APTSIM_DIR/plan.txt ]] || return 1
+  if [[ $MK_APPS_ANSWER == yes ]] && ! mk_installed_version "$MK_APPS_PKG" >/dev/null; then
+    return 1
+  fi
   mk_installed_version motanka >/dev/null || return 1
   _mk_install_deb_current motanka-archive-keyring "$MK_APTSIM_KEYRING_VERSION" || return 1
   _mk_install_deb_current "motanka-source-$MK_SUITE" "$MK_APTSIM_SOURCE_VERSION" || return 1
@@ -602,7 +652,162 @@ _mk_install_target_version() {
   printf '%s\n' "$v"
 }
 
+# --- the Motanka_Apps question (2.9-2.11) -------------------------------
+
+# _mk_install_apps_size: simulates motanka with motanka-apps in the private
+# configuration (sim-apps.txt) and sets MK_APPS_N, the packages it newly
+# installs that the simulation of step 4 (plan.tsv) does not, and
+# MK_APPS_BYTES, their download size from apt-get --print-uris ("'<URI>'
+# <file> <size> <hash>" lines; the private cache is empty, so every package
+# is listed). A value apt cannot give stays empty; nothing here fails.
+_mk_install_apps_size() {
+  local d=$MK_APTSIM_DIR rc=0 n
+  local -a pkgs=("${MK_INSTALL_PKGS[@]}" "$MK_APPS_PKG")
+  MK_APPS_N="" MK_APPS_BYTES="" MK_APPS_SIM=0
+  mk_log info "simulating apt-get install ${pkgs[*]} (private configuration) for the size of $MK_APPS_PKG"
+  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -q -s install "${pkgs[@]}" \
+    >"$d/sim-apps.txt" 2>"$d/sim-apps.txt.err" || rc=$?
+  if ((rc != 0)); then
+    mk_log warning "apt cannot simulate the installation of $MK_APPS_PKG (apt-get exit $rc); asking without its size"
+    return 0
+  fi
+  MK_APPS_SIM=1
+  mk_aptsim_parse "$d/sim-apps.txt" >"$d/sim-apps.tsv"
+  awk -F'\t' '
+    FILENAME == ARGV[1] { if ($1 == "Inst") base[$2] = 1; next }
+    $1 == "Inst" && $3 == "-" && !($2 in base) && !seen[$2]++ { print $2 }
+  ' "$d/plan.tsv" "$d/sim-apps.tsv" >"$d/apps-new.txt"
+  n=$(wc -l <"$d/apps-new.txt")
+  MK_APPS_N=$((n))
+  rc=0
+  LC_ALL=C apt-get "${MK_APTSIM_OPTS[@]}" -o Debug::NoLocking=true --print-uris -qq install "${pkgs[@]}" \
+    >"$d/uris-apps.txt" 2>"$d/uris-apps.txt.err" || rc=$?
+  if ((rc != 0)); then
+    mk_log warning "apt-get --print-uris for $MK_APPS_PKG exited $rc; asking without the download size"
+    return 0
+  fi
+  MK_APPS_BYTES=$(awk '
+    FILENAME == ARGV[1] { want[$1] = 1; next }
+    {
+      p = $2; sub(/_.*/, "", p)
+      if ((p in want) && $3 ~ /^[0-9]+$/) s += $3
+    }
+    END { printf "%.0f\n", s }
+  ' "$d/apps-new.txt" "$d/uris-apps.txt")
+  if [[ ! $MK_APPS_BYTES =~ ^[0-9]+$ ]]; then
+    MK_APPS_BYTES=""
+  fi
+}
+
+# _mk_install_mb <bytes>: the size in MB (10^6 bytes), as apt prints it.
+_mk_install_mb() {
+  local b=$1
+  if ((b > 0 && b < 500000)); then
+    printf 'less than 1 MB\n'
+  else
+    printf '%d MB\n' $(((b + 500000) / 1000000))
+  fi
+}
+
+# _mk_install_apps_question: the question, with the size when it is known.
+_mk_install_apps_question() {
+  local what=$MK_APPS_PKG
+  if [[ -n $MK_APPS_N ]]; then
+    what+=": $MK_APPS_N more package(s)"
+    if [[ -n $MK_APPS_BYTES ]]; then
+      what+=", $(_mk_install_mb "$MK_APPS_BYTES") to download"
+    else
+      what+=", download size unknown"
+    fi
+  else
+    what+=", size unknown"
+  fi
+  printf 'Also install the applications upstream Omarchy installs by default (%s)?\n' "$what"
+}
+
+# _mk_install_apps_decide: the answer to the Motanka_Apps question, in
+# MK_APPS_ANSWER and MK_APPS_SOURCE (see step 5 at the top).
+_mk_install_apps_decide() {
+  local q rc=0
+  MK_APPS_ANSWER="" MK_APPS_SOURCE=""
+  MK_APPS_INSTALLED=$(mk_installed_version "$MK_APPS_PKG") || MK_APPS_INSTALLED=""
+  if [[ -n $MK_APPS_INSTALLED ]]; then
+    if [[ $MK_APPS_FLAG == no ]]; then
+      mk_info "$MK_APPS_PKG $MK_APPS_INSTALLED is installed and stays installed: --no-apps does not remove it. 'sudo motanka remove' removes Motanka with everything it installed; 'sudo apt purge $MK_APPS_PKG' removes only that metapackage, and the packages it brought stay until 'sudo motanka remove'."
+    fi
+    return 0
+  fi
+  if [[ -n $MK_APPS_FLAG ]]; then
+    MK_APPS_ANSWER=$MK_APPS_FLAG MK_APPS_SOURCE=flag
+    return 0
+  fi
+  MK_APPS_ANSWER=no MK_APPS_SOURCE=default
+  if ((MK_YES)); then
+    mk_info "$MK_APPS_PKG: --yes without --apps does not install the applications upstream Omarchy installs by default; add them later with: $MK_APPS_LATER"
+    return 0
+  fi
+  if ! mk_stdin_tty; then
+    mk_info "$MK_APPS_PKG: there is no terminal to ask on, so the applications upstream Omarchy installs by default are not installed; add them later with: $MK_APPS_LATER"
+    return 0
+  fi
+  _mk_install_apps_size
+  q=$(_mk_install_apps_question)
+  MK_APPS_SOURCE=question
+  mk_ask_yes_no "$q" || rc=$?
+  if ((rc == 0)); then
+    MK_APPS_ANSWER=yes
+  fi
+  mk_log info "$MK_APPS_PKG question answered $MK_APPS_ANSWER"
+}
+
+# _mk_install_apps_plan: with yes, motanka-apps joins the package list and
+# the Plan becomes the private simulation of motanka with motanka-apps;
+# exits 5 when it would change a Foreign_Package.
+_mk_install_apps_plan() {
+  local d=$MK_APTSIM_DIR
+  if [[ $MK_APPS_ANSWER != yes ]]; then
+    return 0
+  fi
+  MK_INSTALL_PKGS+=("$MK_APPS_PKG")
+  if ((MK_APPS_SIM)); then
+    cp -- "$d/sim-apps.txt" "$d/sim.txt"
+  else
+    mk_aptsim_simulate "$d/sim.txt" private "${MK_INSTALL_PKGS[@]}"
+  fi
+  mk_aptsim_plan_lines "$d/sim.txt" >"$d/plan.txt"
+  mk_aptsim_parse "$d/sim.txt" >"$d/plan.tsv"
+  _mk_install_refuse_foreign "$d/plan.tsv" "nothing was changed; 'sudo motanka install --no-apps' installs Motanka without it" \
+    "Motanka with $MK_APPS_PKG"
+}
+
+# _mk_install_apps_how: how this run answered, for messages.
+_mk_install_apps_how() {
+  case $MK_APPS_SOURCE in
+    flag)
+      if [[ $MK_APPS_ANSWER == yes ]]; then
+        printf 'by --apps\n'
+      else
+        printf 'by --no-apps\n'
+      fi
+      ;;
+    question) printf 'at the question\n' ;;
+    *) printf 'by default (--yes without --apps, or no terminal to ask on)\n' ;;
+  esac
+}
+
 # --- dry run ------------------------------------------------------------
+
+# _mk_install_print_apps: the Motanka_Apps line of the dry run (2.11).
+_mk_install_print_apps() {
+  if [[ -n $MK_APPS_INSTALLED ]]; then
+    printf '%s %s is installed already.\n' "$MK_APPS_PKG" "$MK_APPS_INSTALLED"
+  elif [[ $MK_APPS_ANSWER == yes ]]; then
+    printf '%s: included, answered yes %s.\n' "$MK_APPS_PKG" "$(_mk_install_apps_how)"
+  else
+    printf '%s: not included, answered no %s; add it later with: %s\n' \
+      "$MK_APPS_PKG" "$(_mk_install_apps_how)" "$MK_APPS_LATER"
+  fi
+}
 
 # _mk_install_print_home_plan: the home-folder paths per-user setup writes
 # at a user's first login (2.2).
@@ -635,13 +840,15 @@ _mk_install_print_plan() {
   local d=$MK_APTSIM_DIR n
   n=$(awk -F'\t' '$1 == "Inst"' "$d/plan.tsv" | wc -l)
   printf 'Simulated apt transaction for the suite %s\n' "$MK_SUITE"
-  printf '(apt-get install --no-remove motanka motanka-source-%s):\n' "$MK_SUITE"
+  printf '(apt-get install --no-remove %s):\n' "${MK_INSTALL_PKGS[*]}"
   if [[ -s $d/plan.txt ]]; then
     sed 's/^/  /' "$d/plan.txt"
   else
     printf '  nothing to install\n'
   fi
-  printf '%d package(s) to install; no package Motanka does not own changes or is removed.\n\n' "$n"
+  printf '%d package(s) to install; no package Motanka does not own changes or is removed.\n' "$n"
+  _mk_install_print_apps
+  printf '\n'
   _mk_install_print_home_plan
   printf '\nDry run: nothing was changed.\n'
 }
@@ -737,7 +944,7 @@ _mk_install_local_debs() {
 }
 
 _mk_install_run() {
-  local d=$MK_APTSIM_DIR suite=$MK_SUITE version raw n m
+  local d=$MK_APTSIM_DIR version raw n m
   if _mk_install_nothing_to_do; then
     mk_info "Motanka $(mk_installed_version motanka) is already installed; nothing to change"
     mk_log info "already installed; nothing changed"
@@ -746,6 +953,9 @@ _mk_install_run() {
   n=$(awk -F'\t' '$1 == "Inst"' "$d/plan.tsv" | wc -l)
   m=$(awk -F'\t' '$1 == "Inst" && ($2 == "motanka" || $2 ~ /^motanka-/)' "$d/plan.tsv" | wc -l)
   mk_info "The Installer will install $n package(s): $m Motanka package(s) and $((n - m)) from Ubuntu."
+  if [[ $MK_APPS_ANSWER == yes ]]; then
+    mk_info "They include $MK_APPS_PKG and the applications it depends on."
+  fi
   mk_info "No package Motanka does not own changes, and no home folder is written. See the list with --dry-run."
   if ! mk_confirm "Install Motanka now?"; then
     mk_die "$MK_EXIT_ERROR" "cancelled; nothing was changed"
@@ -754,6 +964,9 @@ _mk_install_run() {
   version=$(_mk_install_target_version)
   mk_sysledger_begin install "$version" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger; nothing was changed"
   MK_INSTALL_BEGUN=1
+  if [[ -n $MK_APPS_ANSWER ]]; then
+    mk_sysledger_apps_answer "$MK_APPS_ANSWER" "$MK_APPS_SOURCE" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
+  fi
   while IFS= read -r raw; do
     mk_sysledger_plan "$raw" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   done <"$d/plan.txt"
@@ -763,14 +976,18 @@ _mk_install_run() {
   _mk_install_apt -q update ||
     mk_die "$MK_EXIT_ERROR" "apt-get update failed; run 'sudo motanka install' again when the network works"
 
-  mk_aptsim_simulate "$d/sim-host.txt" system motanka "motanka-source-$suite"
+  mk_aptsim_simulate "$d/sim-host.txt" system "${MK_INSTALL_PKGS[@]}"
   mk_aptsim_parse "$d/sim-host.txt" >"$d/sim-host.tsv"
   _mk_install_refuse_foreign "$d/sim-host.tsv" "the keyring and source packages are installed; 'sudo motanka remove' removes them"
   _mk_install_ledger_new_actions "$d/sim-host.txt" "$d/sim-host.tsv"
 
-  mk_info "installing motanka"
-  _mk_install_apt install -y --no-remove motanka "motanka-source-$suite" ||
-    mk_die "$MK_EXIT_ERROR" "apt-get could not install motanka; the System_Ledger records the plan, and 'sudo motanka install' resumes"
+  if [[ $MK_APPS_ANSWER == yes ]]; then
+    mk_info "installing motanka and $MK_APPS_PKG"
+  else
+    mk_info "installing motanka"
+  fi
+  _mk_install_apt install -y --no-remove "${MK_INSTALL_PKGS[@]}" ||
+    mk_die "$MK_EXIT_ERROR" "apt-get could not install ${MK_INSTALL_PKGS[*]}; the System_Ledger records the plan, and 'sudo motanka install' resumes"
 
   _mk_install_record_packages
   _mk_install_close_interrupted
@@ -782,13 +999,19 @@ _mk_install_run() {
 # --- entry point --------------------------------------------------------
 
 mk_cmd_install() {
-  local d
+  local d apps=0 no_apps=0
   MK_CHANNEL=stable
   while (($# > 0)); do
     case $1 in
       -h | --help)
         mk_install_usage
         exit "$MK_EXIT_OK"
+        ;;
+      --apps)
+        apps=1
+        ;;
+      --no-apps)
+        no_apps=1
         ;;
       --channel)
         if (($# < 2)); then
@@ -820,16 +1043,26 @@ mk_cmd_install() {
     stable | edge) ;;
     *) mk_usage_error "--channel must be stable or edge, not '$MK_CHANNEL'" ;;
   esac
+  if ((apps && no_apps)); then
+    mk_usage_error "--apps and --no-apps cannot be given together"
+  fi
+  MK_APPS_FLAG=""
+  if ((apps)); then
+    MK_APPS_FLAG=yes
+  elif ((no_apps)); then
+    MK_APPS_FLAG=no
+  fi
   mk_aptsim_uri
 
   _mk_install_require_root
   mk_lock_system
-  mk_log info "install started (channel $MK_CHANNEL, dry run $MK_DRY_RUN, repository $MK_APTSIM_URI)"
+  mk_log info "install started (channel $MK_CHANNEL, dry run $MK_DRY_RUN, apps ${MK_APPS_FLAG:-ask}, repository $MK_APTSIM_URI)"
   mk_preflight
   MK_SUITE=$MK_PF_CODENAME
   if [[ $MK_CHANNEL == edge ]]; then
     MK_SUITE=$MK_SUITE-edge
   fi
+  MK_INSTALL_PKGS=(motanka "motanka-source-$MK_SUITE")
 
   trap _mk_install_on_exit EXIT
   trap 'exit 129' HUP
@@ -840,10 +1073,12 @@ mk_cmd_install() {
   mk_aptsim_fetch_verified "$MK_SUITE"
   mk_aptsim_prepare "$MK_SUITE"
   mk_aptsim_update "$MK_SUITE"
-  mk_aptsim_simulate "$d/sim.txt" private motanka "motanka-source-$MK_SUITE"
+  mk_aptsim_simulate "$d/sim.txt" private "${MK_INSTALL_PKGS[@]}"
   mk_aptsim_plan_lines "$d/sim.txt" >"$d/plan.txt"
   mk_aptsim_parse "$d/sim.txt" >"$d/plan.tsv"
   _mk_install_refuse_foreign "$d/plan.tsv" "nothing was changed"
+  _mk_install_apps_decide
+  _mk_install_apps_plan
 
   if ((MK_DRY_RUN)); then
     _mk_install_print_plan

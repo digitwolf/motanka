@@ -7,8 +7,9 @@
 #   curl -fsSL https://digitwolf.github.io/motanka/apt/install.sh | sudo bash -s -- --dry-run
 #   curl -fsSL https://digitwolf.github.io/motanka/apt/install.sh | sudo bash -s -- --yes
 #
-# Arguments go to 'motanka install' ([--dry-run] [--yes] [--channel edge]).
-# Without a terminal the Installer needs --yes or --dry-run.
+# Arguments go to 'motanka install' ([--dry-run] [--yes] [--apps|--no-apps]
+# [--channel edge]). Without a terminal the Installer needs --yes or
+# --dry-run, and does not install motanka-apps unless --apps is given.
 #
 # Trust: chumak/build-repo publishes this file with the archive's public
 # key embedded below, next to SHA256SUMS, its signature SHA256SUMS.gpg and

@@ -108,7 +108,7 @@ $got"
 
 @test "the help of install, remove, update and rollback lists the expected options" {
   run expected_options install
-  assert_output "$(printf '%s\n' --channel --dry-run --help --yes -h -y | LC_ALL=C sort)"
+  assert_output "$(printf '%s\n' --apps --channel --dry-run --help --no-apps --yes -h -y | LC_ALL=C sort)"
   run expected_options remove
   assert_output "$(printf '%s\n' --dry-run --help --purge --yes -h -y | LC_ALL=C sort)"
   run expected_options update
@@ -140,7 +140,15 @@ $got"
 @test "an option already given is not offered again, in either spelling" {
   run complete_line motanka install -y --dry-run ""
   assert_success
-  assert_output "$(printf '%s\n' --channel --help -h | LC_ALL=C sort)"
+  assert_output "$(printf '%s\n' --apps --channel --help --no-apps -h | LC_ALL=C sort)"
+}
+
+@test "after --apps or --no-apps neither is offered again" {
+  run complete_line motanka install --apps ""
+  assert_success
+  assert_output "$(printf '%s\n' --channel --dry-run --help --yes -h -y | LC_ALL=C sort)"
+  run complete_line motanka install --no-apps --a
+  assert_output ''
 }
 
 @test "--channel completes stable and edge" {

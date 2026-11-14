@@ -182,3 +182,38 @@ write_run() {
   mk_sysledger_begin install 0.1.0
   [[ -d $MOTANKA_ROOT/var/lib/motanka && -f $LEDGER ]]
 }
+
+@test "apps-answer lines are written, validated and read back as the last answer (3.15)" {
+  run mk_sysledger_last_apps_answer
+  assert_success
+  assert_output ''
+  MK_RUN_ID=20261113T090000Z-000001
+  mk_sysledger_begin install 0.1.0
+  mk_sysledger_apps_answer no default
+  mk_sysledger_end ok
+  MK_RUN_ID=20261113T100000Z-000002
+  mk_sysledger_begin install 0.1.0
+  mk_sysledger_apps_answer yes flag
+  mk_sysledger_end ok
+  run cut -f3- "$LEDGER"
+  assert_line "$(printf 'apps-answer\tno\tdefault')"
+  assert_line "$(printf 'apps-answer\tyes\tflag')"
+  run --separate-stderr mk_sysledger_read
+  assert_equal "${#lines[@]}" 6
+  [[ -z $stderr ]] || fail "apps-answer lines were skipped as invalid: $stderr"
+  run mk_sysledger_last_apps_answer
+  assert_output --regexp $'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\tyes\tflag$'
+  cp "$LEDGER" "$BATS_TEST_TMPDIR/before"
+  run mk_sysledger_apps_answer maybe question
+  assert_failure
+  run mk_sysledger_apps_answer yes asked
+  assert_failure
+  run mk_sysledger_apps_answer yes
+  assert_failure
+  run mk_sysledger_apps_answer no question extra
+  assert_failure
+  cmp "$BATS_TEST_TMPDIR/before" "$LEDGER"
+  mk_sysledger_apps_answer no question
+  run mk_sysledger_last_apps_answer
+  assert_output --regexp $'\tno\tquestion$'
+}

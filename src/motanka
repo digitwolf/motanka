@@ -26,7 +26,7 @@ mk_main_usage() {
 usage: motanka <command> [options]
 
 Commands:
-  install   [--dry-run] [--yes] [--channel stable|edge]
+  install   [--dry-run] [--yes] [--apps|--no-apps] [--channel stable|edge]
             add Motanka to this Ubuntu installation
   remove    [--dry-run] [--yes] [--purge]
             remove Motanka and restore the earlier state

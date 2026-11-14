@@ -39,6 +39,8 @@ _motanka() {
         install)
           _arguments \
             $help_opts $yes_opts $dry_opts \
+            '(--apps --no-apps)--apps[also install motanka-apps, the applications upstream Omarchy installs by default]' \
+            '(--apps --no-apps)--no-apps[do not install motanka-apps]' \
             '--channel=[the channel to follow]:channel:((stable\:"follow the release tags of upstream Omarchy" edge\:"follow the default branch of upstream Omarchy"))' \
             && ret=0
           ;;

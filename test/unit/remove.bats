@@ -368,6 +368,60 @@ no_network_no_install() {
   assert_equal "$(manifest "$H" | awk -F'\t' '$1 != ".local" && $1 != ".local/state"')" "$HOME_BEFORE"
 }
 
+# apps_db_and_ledger: Motanka installed without motanka-apps, then
+# 'motanka install --apps' adding motanka-apps, motanka-herdr and two
+# Ubuntu packages.
+apps_db_and_ledger() {
+  local r=20261113T090000Z-aaaaaa a=20261113T100000Z-bbbbbb p
+  db 'motanka installed 0.1.0-1 manual motanka-core -' \
+    'motanka-core installed 0.1.0-1 auto libfoo1 -' \
+    'motanka-archive-keyring installed 0.1.0-1 auto - -' \
+    'motanka-source-resolute installed 0.1.0-1 manual - -' \
+    'motanka-apps installed 0.1.0-1 manual motanka-herdr,libapp1,app-tool -' \
+    'motanka-herdr installed 0.1.0-1 auto - -' \
+    'libfoo1 installed 1.2-3 auto - -' \
+    'libapp1 installed 3.0-1 auto - -' \
+    'app-tool installed 3.0-1 auto libapp1 -' \
+    'bash installed 5.2 manual - -'
+  sl "$r" run-begin install 0.1.0-1
+  sl "$r" apps-answer no default
+  for p in motanka-archive-keyring libfoo1 motanka; do
+    sl "$r" plan "Inst $p (1.0 Ubuntu:26.04/resolute [amd64])"
+  done
+  sl "$r" pkg-installed libfoo1 1.2-3 auto
+  sl "$r" run-end ok
+  sl "$a" run-begin install 0.1.0-1
+  sl "$a" apps-answer yes flag
+  for p in libapp1 app-tool motanka-herdr motanka-apps; do
+    sl "$a" plan "Inst $p (1.0 Ubuntu:26.04/resolute [amd64])"
+  done
+  sl "$a" pkg-installed libapp1 3.0-1 auto
+  sl "$a" pkg-installed app-tool 3.0-1 auto
+  sl "$a" run-end ok
+}
+
+@test "motanka-apps and motanka-herdr are purged with the other Motanka packages, and the packages motanka-apps brought too (10.15)" {
+  apps_db_and_ledger
+  remove --dry-run
+  assert_success
+  assert_line --regexp '^  purge +motanka-apps 0\.1\.0-1  \(Motanka package\)$'
+  assert_line --regexp '^  purge +motanka-herdr 0\.1\.0-1  \(Motanka package\)$'
+  assert_line --regexp '^  purge +libapp1 3\.0-1  \(installed by Motanka; no other package needs it\)$'
+  assert_line --regexp '^  purge +app-tool 3\.0-1  '
+  [[ $stderr != *'incomplete or invalid'* ]] || fail "the Remover skipped System_Ledger lines: $stderr"
+  remove --yes
+  assert_success
+  assert_line 'Motanka was removed.'
+  assert_line 'Purged 3 package(s) Motanka installed: app-tool libapp1 libfoo1'
+  [[ $stderr != *'incomplete or invalid'* ]] || fail "the Remover skipped System_Ledger lines: $stderr"
+  assert_equal "$(installed_names)" "bash "
+  run real_apt
+  assert_equal "${#lines[@]}" 2
+  assert_line --index 0 --regexp ' purge motanka motanka-apps motanka-archive-keyring motanka-core motanka-herdr motanka-source-resolute$'
+  assert_line --index 1 --regexp ' purge app-tool libapp1 libfoo1$'
+  no_network_no_install
+}
+
 @test "a home folder restored with --purge equals the one before setup, apart from motanka-removed" {
   standard_db
   make_home

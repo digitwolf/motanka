@@ -17,7 +17,11 @@
 #      whether that user's per-user setup completed
 #   5. apt-get update (a dry run uses private lists in
 #      /run/motanka/update.XXXXXX instead), then a simulated
-#      "apt-get install <every installed Motanka_Package>"
+#      "apt-get install <every installed Motanka_Package>"; with
+#      motanka-apps installed this includes motanka-apps and motanka-herdr,
+#      so new Depends of a new motanka-apps are installed and get
+#      pkg-installed lines in step 9 like those of motanka-core. The
+#      Updater never installs motanka-apps when it is not installed.
 #   6. refuse with exit 5, before any change, when the transaction would
 #      upgrade, downgrade or remove a Foreign_Package (9.2). With --system,
 #      upgrades and downgrades of Foreign_Packages are allowed and listed;

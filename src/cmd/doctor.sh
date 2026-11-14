@@ -1,15 +1,18 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2329 # functions are called by src/motanka and by the unit tests
 # motanka doctor (design.md: Doctor, CLI, Error Handling; requirements 1.7,
-# 11.2, 12.1-12.4, 12.6-12.8).
+# 11.2, 12.1-12.4, 12.6-12.9).
 #
 # usage: motanka doctor [--json] [--fix [--i-know-this-is-not-a-vm]]
 #
-# The report (12.1-12.3, 12.8, 1.7):
+# The report (12.1-12.3, 12.8, 12.9, 1.7):
 #   system    release, Motanka version, development build, the apt source
 #             (motanka-source-<suite> package, suite, Enabled, URI),
 #             Channel, Upstream_Pin, Stack package versions (motanka-stack*,
-#             motanka-stack-shell, motanka-qt6), GPU driver as the session
+#             motanka-stack-shell, motanka-qt6), Motanka_Apps (whether
+#             motanka-apps is installed, with its version, and the last
+#             apps-answer line of the System_Ledger with its time and
+#             source, or none; never a problem), GPU driver as the session
 #             launcher detects it (src/lib/gpu.sh), display manager (the
 #             Installer's preflight functions in src/cmd/install.sh),
 #             snapshot method, and the System_Ledger: recorded Ubuntu
@@ -356,6 +359,23 @@ def text_system(o, s):
     if have and lack:
         o.append(more("not installed: " + ", ".join(lack)))
 
+    a = s.get("apps") or {}
+    v = "installed (%s)" % clean(a.get("version")) if a.get("installed") else "not installed"
+    if not a.get("ledger_read"):
+        v += "; the recorded answer was not read (see Skipped)"
+    elif a.get("answer"):
+        src = a.get("answer_source")
+        if src == "flag":
+            how = "by --apps" if a["answer"] == "yes" else "by --no-apps"
+        elif src == "question":
+            how = "at the question"
+        else:
+            how = "by default (--yes without --apps, or no terminal to ask on)"
+        v += "; last answer: %s, %s, on %s" % (clean(a["answer"]), how, clean(a.get("answer_time")))
+    else:
+        v += "; no answer recorded"
+    o.append(line("motanka-apps", v))
+
     g = s.get("gpu") or {}
     cards = []
     for c in g.get("cards") or []:
@@ -537,7 +557,8 @@ mk_doctor_usage() {
 usage: motanka doctor [--json] [--fix [--i-know-this-is-not-a-vm]]
 
 Reports Motanka's state: release, Motanka version, channel, Upstream pin,
-Stack versions, GPU driver, display manager, snapshot method, features not
+Stack versions, motanka-apps and the recorded answer about it, GPU
+driver, display manager, snapshot method, features not
 available on this release, unsupported shim calls of the last 30 days, and
 the home folder's ledgered, missing, changed, unplanned and desktop paths.
 Changes nothing unless --fix is given.
@@ -868,6 +889,34 @@ _mk_dr_emit_stack() {
       _mk_dr_rec Z version
     fi
   done
+}
+
+# _mk_dr_emit_apps: whether motanka-apps is installed, and the last answer
+# to the Motanka_Apps question the System_Ledger recorded (12.9). A
+# report, never a problem. An unreadable System_Ledger is listed as
+# skipped by _mk_dr_emit_sysledger.
+_mk_dr_emit_apps() {
+  local file line="" t="" answer="" src="" readable=1
+  if _mk_dr_installed motanka-apps; then
+    _mk_dr_rec b system.apps.installed true
+    _mk_dr_rec s system.apps.version "${MK_DR_PKG_VER["motanka-apps"]}"
+  else
+    _mk_dr_rec b system.apps.installed false
+    _mk_dr_rec z system.apps.version
+  fi
+  file=$(mk_sysledger_file)
+  if [[ -e $file && ! -r $file ]]; then
+    readable=0
+  elif [[ -e $file ]]; then
+    line=$(mk_sysledger_last_apps_answer "$file" 2>/dev/null) || line=""
+  fi
+  if [[ -n $line ]]; then
+    IFS=$'\t' read -r t answer src <<<"$line"
+  fi
+  _mk_dr_bool system.apps.ledger_read "$readable"
+  _mk_dr_str system.apps.answer "$answer"
+  _mk_dr_str system.apps.answer_time "$t"
+  _mk_dr_str system.apps.answer_source "$src"
 }
 
 # _mk_dr_emit_gpu: the session launcher's verdict (src/lib/gpu.sh).
@@ -1259,6 +1308,7 @@ _mk_dr_emit() {
   _mk_dr_emit_other_release
   _mk_dr_emit_pin
   _mk_dr_emit_stack
+  _mk_dr_emit_apps
   _mk_dr_emit_gpu
   _mk_dr_emit_dm
   _mk_dr_emit_snapshots

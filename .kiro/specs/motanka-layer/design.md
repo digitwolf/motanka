@@ -400,8 +400,11 @@ run-begin        install|update|remove  <motanka-version>
 plan             <apt simulation line>
 pkg-installed    <name>  <version>  auto|manual
 menu-install     <uid>  <name>  apt|binary
+apps-answer      yes|no  flag|question|default
 run-end          ok|failed
 ```
+
+`apps-answer` records an install run's answer to the Motanka_Apps question (3.15): `flag` for `--apps` or `--no-apps`, `question` for an answer given at the question, `default` for no without a question (`--yes` without `--apps`, or no terminal to ask on). The Installer writes it right after `run-begin`, and only when `motanka-apps` was not installed when the run started. A run that ends on the "nothing to change" path of 3.10 writes no line, so its answer is not recorded. The Doctor reports the last `apps-answer` line (12.9).
 
 **User_Ledger** `~/.local/state/motanka/ledger`:
 

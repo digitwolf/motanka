@@ -2,7 +2,12 @@
 # shellcheck disable=SC2329 # functions are called by src/motanka, by the user phase and by the unit tests
 # shellcheck disable=SC2088 # "~/..." in messages is literal text, not a path to expand
 # motanka remove (design.md: Remove flow, CLI, Data Models, Error Handling;
-# requirements 10.1-10.14, 11.4, 12.5).
+# requirements 10.1-10.15, 11.4, 12.5).
+#
+# Motanka_Apps (10.15) needs no rule of its own: motanka-apps and
+# motanka-herdr are motanka-* packages, so step 6 purges them with the
+# others, and the Foreign_Packages they brought are named by the plan and
+# pkg-installed lines of the install (or update) run that installed them.
 #
 # Steps, in order. Nothing changes before step 8.
 #   1. options; root (exit 11)
