@@ -279,3 +279,16 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
 
 - [ ] 25. Final checkpoint — run `test/run-all` and `test/run-all --release noble`, check every acceptance criterion against a test or a documented manual check, update the spec files to match what was built
   - _Requirements: 13.1, 13.3_
+
+- [ ] 26. Optional applications (added after the owner's decision of 2026-11-13)
+- [ ] 26.1 `motanka-apps` package
+  - Create `packaging/motanka-apps/`: an amd64 package whose Depends come from `debian/pkgmap-depends` (the service-free part of Upstream's base list, design.md "Base package set: membership"), with optional names that are left out on a release without an apt or motanka outcome; ship the pinned herdr release binary as `/opt/motanka/bin/herdr`; map Upstream's `herdr` to `motanka-apps`; build it in CI and in `test/vm/local-repo.sh`
+  - _Requirements: 3.4, 3.14, 7.2, 7.3_
+- [ ] 26.2 Installer question, ledger, Doctor and Remover
+  - `motanka install` asks once whether to install `motanka-apps` (download size shown, empty answer no); `--apps` and `--no-apps` answer it; `--yes` alone means no; `--dry-run` shows the choice; the answer goes into the System_Ledger; a later `motanka install --apps` adds it; the Doctor reports it; the Remover purges it with the Foreign_Packages it brought
+  - _Requirements: 2.9, 2.10, 2.11, 3.15, 10.15, 12.9_
+- [ ] 26.3 VM tests for `motanka-apps`
+  - Install with `--apps` on the fresh, gnome-snaps and kde variants of both releases and compare enabled and active system units, sysctl values, binfmt, modules-load, firewall, `nsswitch.conf` and polkit rules with the values before; run the roundtrip with `--apps` and require the Fingerprint after removal to equal the one before
+  - _Requirements: 3.14, 10.1, 10.15_
+- [ ] 27. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
+  - _Requirements: 13.1_

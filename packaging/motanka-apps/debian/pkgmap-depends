@@ -1,0 +1,122 @@
+# Upstream (Arch) package names whose Package_Map outcome for the suite
+# becomes a Depends of motanka-apps. packaging/build.sh resolves them with
+# tools/pkgmap from packages.yaml and writes them in place of the line
+# @PKGMAP_DEPENDS@ in debian/control.
+#
+# A plain name must have an apt or motanka outcome on every suite. A name
+# written as "?name" is optional: on a suite where its outcome is skip,
+# flatpak or binary it is left out (with a log line), otherwise it is a
+# Depends like a plain name.
+#
+# The list is Upstream's install/omarchy-base.packages at the Upstream_Pin
+# without the names whose packages, together with what apt installs for
+# them, start a system service or change system policy. Those stay with the
+# Helper (design.md, "Base package set: membership", which also gives the
+# reason for each):
+#   alsa-utils avahi bluez bluez-tools bluez-utils bolt cups cups-filters
+#   cups-pk-helper ddcutil docker docker-buildx docker-compose gvfs-mtp
+#   gvfs-nfs gvfs-smb man-db nautilus networkmanager nss-mdns
+#   omarchy-power-profiles-daemon plocate qemu-user-static-binfmt sushi
+#   system-config-printer ufw
+# herdr is not listed: motanka-apps ships its binary itself.
+base-devel
+bash-completion
+bat
+brightnessctl
+btop
+dosfstools
+dotnet-runtime
+evince
+exfatprogs
+eza
+fakeroot
+?fastfetch	# resolute only
+fcitx5
+fcitx5-chewing
+fcitx5-chinese-addons
+fcitx5-gtk
+fcitx5-hangul
+fcitx5-mozc
+fcitx5-qt
+fcitx5-table-extra
+fd
+ffmpeg
+ffmpegthumbnailer
+fontconfig
+foot
+fzf
+git
+gnome-disk-utility
+gnome-keyring
+gnome-themes-extra
+grim
+?gum	# resolute only
+hyprland
+hyprland-guiutils
+?hyprland-preview-share-picker	# resolute only
+hyprpicker
+hyprsunset
+imagemagick
+imv
+inetutils
+inotify-tools
+inxi
+jq
+?lazygit	# resolute only
+less
+libreoffice-fresh
+libsecret
+libvips
+libyaml
+lua51
+luarocks
+mariadb-libs
+mpv
+mpv-mpris
+nautilus-python
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+nvim
+omasnap
+pamixer
+postgresql-libs
+python-gobject
+python-poetry-core
+qrencode
+qt6-base
+qt6-declarative
+qt6-imageformats
+qt6-svg
+qt6-wayland
+quickshell
+ripgrep
+ruby
+slurp
+socat
+?starship	# resolute only
+tesseract
+tesseract-data-eng
+tldr
+tmux
+tree-sitter-cli
+ttf-jetbrains-mono-nerd-basic
+ttfx
+udiskie
+unzip
+uwsm
+vi
+whois
+wireless-regdb
+wireplumber
+wl-clipboard
+woff2-font-awesome
+wtype
+xdg-desktop-portal-gtk
+xdg-desktop-portal-hyprland
+xdg-terminal-exec
+xorg-xsetroot
+yaru-icon-theme
+yt-dlp
+zbar
+zoxide

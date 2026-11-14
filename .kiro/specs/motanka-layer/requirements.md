@@ -42,6 +42,7 @@ Out of scope:
 - **Fingerprint**: a snapshot of Host state made of the installed package list with versions, the manually-installed package list, checksums of `/etc`, system and user unit files, `dconf dump /` per user, checksums of each home folder, the snap list, groups and `sysctl -a`.
 - **Allowlist**: the fixed list of paths excluded from Fingerprint comparison: apt caches and lists, `/var/log`, the journal, archived Motanka ledgers, each user's `~/.cache`, `~/.local/state/motanka-removed-<date>/` folders, sysctl keys whose values change without configuration, the greeter users GDM creates while it runs (`gdm-greeter`, `gdm-greeter-<n>`) in group member lists, and each user's paths of class `desktop` in `compat/home-paths.tsv`, which Ubuntu's session components create for any graphical login, together with the folders that exist only to hold them.
 - **Helper**: the single root-owned program under `/opt/motanka/libexec/` that performs Motanka's privileged package operations after polkit authorisation.
+- **Motanka_Apps**: the optional package `motanka-apps`, which depends on the part of Upstream's base package list that starts no system service and changes no system policy, and ships `herdr`.
 - **Dev_Build**: a Motanka build that does not come from a published Motanka_Repo suite, marked by the file `/opt/motanka/share/motanka/DEV_BUILD`.
 - **Protected_Host**: a machine that has the file `/etc/motanka-protected` or, for a user, `~/.config/motanka-protected`.
 - **Channel**: `stable` (follows Upstream release tags) or `edge` (follows the Upstream default branch).
@@ -78,6 +79,9 @@ Out of scope:
 6. IF the simulated apt transaction would upgrade, downgrade or remove a Foreign_Package THEN THE Installer SHALL exit with a non-zero code and list those packages.
 7. IF the Host display manager cannot start Wayland sessions THEN THE Installer SHALL exit with a non-zero code and name the display manager.
 8. WHEN preflight detects an NVIDIA GPU THEN THE Installer SHALL print the detected driver and whether the Stack supports it.
+9. WHEN the Installer runs without `--apps`, `--no-apps` and `--yes` THEN THE Installer SHALL ask once whether to install Motanka_Apps, show the download size, and treat an empty answer as no.
+10. WHEN the Installer runs with `--yes` and without `--apps` THEN THE Installer SHALL leave Motanka_Apps uninstalled.
+11. WHEN the Installer runs with `--dry-run` THEN THE printed transaction SHALL include Motanka_Apps exactly when the answer to the Motanka_Apps question is yes.
 
 ### Requirement 3: Additive installation
 
@@ -98,6 +102,8 @@ Out of scope:
 11. THE Motanka_Packages SHALL contain zero setuid files, zero setgid files and zero files with file capabilities.
 12. THE Motanka_Packages SHALL install no file under `/etc/ld.so.conf.d` and no file under `/etc/sudoers.d`.
 13. THE Motanka_Packages SHALL remove in their purge scripts every file their install scripts generated.
+14. WHEN the Installer installs Motanka_Apps on a Host whose desktop is one of the tested variants THEN THE Host's enabled and active system units, sysctl values, binfmt registrations, kernel module lists, firewall rules, name-service configuration and polkit rules SHALL equal their values before the run.
+15. WHEN the Installer runs with an answer to the Motanka_Apps question THEN THE System_Ledger SHALL record that answer.
 
 ### Requirement 4: Repository trust
 
@@ -232,6 +238,7 @@ Out of scope:
 12. WHEN the Remover runs after an interrupted install or interrupted per-user setup THEN THE Remover SHALL complete with exit code 0.
 13. WHEN other users have a User_Ledger THEN THE Remover SHALL list those users and leave their home folders unchanged.
 14. WHEN the Remover completes THEN THE display manager SHALL list the same sessions as before installation.
+15. WHEN the Remover runs on a Host with Motanka_Apps installed THEN THE Remover SHALL purge Motanka_Apps and every Foreign_Package that an install run recorded for it.
 
 ### Requirement 11: Ubuntu release upgrade
 
@@ -260,6 +267,7 @@ Out of scope:
 6. THE Motanka logs and Doctor output SHALL contain no file contents from home folders.
 7. WHEN the Doctor runs with `--json` THEN THE Doctor SHALL print its report as one JSON document.
 8. WHEN the Doctor runs THEN THE Doctor SHALL report every User_Ledger entry recorded as unplanned.
+9. WHEN the Doctor runs THEN THE Doctor SHALL report whether Motanka_Apps is installed and the answer the System_Ledger recorded.
 
 ### Requirement 13: Verification
 
