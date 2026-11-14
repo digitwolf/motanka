@@ -14,6 +14,7 @@ Package: motanka-core
 Architecture: all
 Depends: dbus-user-session,
          dconf-cli,
+         dpkg-repack,
 #if noble
          motanka-stack (>= 0.1.0-1~ubuntu24.04.1),
          motanka-stack-shell (>= 0.1.0-1~ubuntu24.04.1),

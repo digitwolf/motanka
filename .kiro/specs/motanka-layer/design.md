@@ -343,7 +343,7 @@ sequenceDiagram
 
 - Snapshot: `/var/lib/motanka/snapshots/<id>/` (root, 0700; `<id>` is the update's run ID) holds:
   - `manifest.tsv`: every installed Motanka_Package as `<package> TAB <version> TAB <architecture> TAB debs/<file>`;
-  - `debs/<file>`: the .deb of that version, copied from apt's cache, else fetched with `apt-get download <package>=<version>`, else rebuilt with `dpkg-repack` when installed; its Package and Version fields are checked, and when none of the three works the update stops before changing anything;
+  - `debs/<file>`: the .deb of that version, copied from apt's cache, else fetched with `apt-get download <package>=<version>`, else rebuilt with `dpkg-repack` (a Depends of motanka-core: after a release upgrade the old build's suite is gone and the upgrader has emptied apt's cache, so only a rebuild of the installed files can store it); its Package and Version fields are checked, and when none of the three works the update stops before changing anything;
   - `users.tsv`: one line per user (uid 1000–59999) with a User_Ledger: `<uid> TAB <gid> TAB <name> TAB <archive> TAB <paths-file>`;
   - `user-<uid>.tar.zst` (`.tar.gz` where zstd is not installed; no new dependency) with that user's Namespaced_Paths roots (`.config/dconf/motanka`, `.config/omarchy`, `.local/share/omarchy`, `.local/state/omarchy`) and the existing files the User_Ledger records Motanka writing, read as the user through `setpriv`; `user-<uid>.paths` lists what the archive holds (`root TAB <path> TAB present|absent`, `file TAB <path>`);
   - `snapper`: `<config> TAB <pre-number>` when the Updater made a snapper pre snapshot.

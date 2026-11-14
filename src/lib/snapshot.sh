@@ -11,8 +11,10 @@
 #   debs/<file>    the .deb of that version: copied from apt's cache
 #                  (/var/cache/apt/archives), else fetched with
 #                  "apt-get download <package>=<version>", else rebuilt with
-#                  dpkg-repack when that is installed. Its Package and
-#                  Version fields are checked.
+#                  dpkg-repack (a Depends of motanka-core: after a release
+#                  upgrade the old build's suite is gone and the upgrader
+#                  has emptied apt's cache). Its Package and Version fields
+#                  are checked.
 #   users.tsv      one line per user (uid 1000-59999) with a User_Ledger:
 #                    <uid> TAB <gid> TAB <name> TAB <archive> TAB <paths-file>
 #   user-<uid>.tar.zst   that user's files, read as the user with tar
