@@ -114,6 +114,12 @@
 #                                                deletes it; while Motanka
 #                                                is installed the session
 #                                                bus of every login reads it
+#   ~/.local/state/herdr/** (the herdr server, which Upstream's autostart
+#     starts in every session when herdr is installed, as motanka-apps
+#     installs it)                               app: herdr's own state;
+#                                                one that a herdr the
+#                                                user runs elsewhere made
+#                                                is left alone
 #   ~/.config/btop/themes/current.theme (theme switch)
 #                                                app (.config/btop/**)
 #   ~/.local/share/hyprland/lastVersion (the Stack's Hyprland at each
@@ -258,6 +264,8 @@ Work/tries	app
 .local/share/dbus-1/services/org.fcitx.Fcitx5.service	app
 .local/share/hyprland	app
 .local/share/hyprland/**	app
+.local/state/herdr	app
+.local/state/herdr/**	app
 
 # --- desktop: written by Ubuntu's session components at any graphical
 # login (see "Writes during the Motanka session" above). Listed before the
