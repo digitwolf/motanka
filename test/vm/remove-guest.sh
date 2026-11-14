@@ -365,7 +365,13 @@ phase_apps() {
       else
         fail "motanka-apps or motanka-herdr is not installed"
       fi
-      v=$("$PREFIX/bin/herdr" --version 2>&1) || rc=$?
+      # herdr writes ~/.local/state/herdr on every start, even for
+      # --version; a scratch home keeps that out of the user's home folder
+      # and so out of the capture and the Fingerprint.
+      mkdir -p "$T/herdr-home"
+      v=$(env HOME="$T/herdr-home" XDG_STATE_HOME="$T/herdr-home/.local/state" \
+        XDG_CONFIG_HOME="$T/herdr-home/.config" XDG_DATA_HOME="$T/herdr-home/.local/share" \
+        XDG_CACHE_HOME="$T/herdr-home/.cache" "$PREFIX/bin/herdr" --version 2>&1) || rc=$?
       if ((rc == 0)); then
         pass "$PREFIX/bin/herdr --version exits 0: $v"
       else
@@ -705,8 +711,11 @@ phase_theme() {
 phase_menu_install() {
   local map=$PREFIX/share/motanka/package-map.tsv name kind target size best="" bestsize=0 rc=0 p
   # Command-line tools whose maintainer scripts create no users, groups or
-  # services; the first one the map has and the Host lacks is used.
-  local -a prefer=(btop eza bat fd-find ripgrep fzf zoxide tldr lazygit fastfetch htop tree ncdu jq gum)
+  # services; the first one the map has and the Host lacks is used. After a
+  # `+apps` install motanka-apps has brought all the tools, so the list ends
+  # with autoconf-archive, m4 macros without maintainer scripts that
+  # motanka-apps leaves out.
+  local -a prefer=(btop eza bat fd-find ripgrep fzf zoxide tldr lazygit fastfetch htop tree ncdu jq gum autoconf-archive)
   local -A apt=()
   if [[ ! -r $map ]]; then
     fail "$map is missing"
@@ -726,7 +735,9 @@ phase_menu_install() {
   done
   if [[ -z $best ]]; then
     for target in "${!apt[@]}"; do
-      size=$(apt-cache show --no-all-versions "$target" 2>/dev/null | awk '/^Installed-Size:/ { print $2; exit }')
+      # awk reads all of apt-cache's output: an early exit would end
+      # apt-cache with SIGPIPE, which pipefail turns into a failure.
+      size=$(apt-cache show --no-all-versions "$target" 2>/dev/null | awk '/^Installed-Size:/ && s == "" { s = $2 } END { print s }')
       if [[ $size =~ ^[0-9]+$ ]] && { [[ -z $best ]] || ((size < bestsize)); }; then
         best=$target bestsize=$size
       fi
