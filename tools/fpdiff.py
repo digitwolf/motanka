@@ -17,6 +17,9 @@ File handling:
                   out of every member list (see GDM_GREETER)
   anything else   compared as a set of lines
 
+System Allowlist: apt caches and lists, /var/log, the journal, and the
+backup copies /etc/passwd-, /etc/group-, /etc/shadow- and /etc/gshadow-.
+
 Home-folder Allowlist: ~/.cache, ~/.local/state/motanka-removed-*, and the
 paths of class "desktop" in compat/home-paths.tsv (--home-paths), which
 Ubuntu's session components create at any graphical login. A path takes
@@ -45,6 +48,15 @@ SYSTEM_ALLOW = (
     "var/log",  # /var/log, which also holds archived Motanka ledgers
     "var/log/journal",  # the journal, persistent
     "run/log/journal",  # the journal, volatile
+    # The backup copies the shadow tools (useradd, groupadd, groupdel, ...)
+    # write at every account change, holding the previous version: a
+    # package that adds a system group on install and deletes it on purge
+    # (pipewire on 24.04) leaves the account files as they were but changes
+    # these. The account files themselves and groups.txt are compared.
+    "etc/passwd-",
+    "etc/group-",
+    "etc/shadow-",
+    "etc/gshadow-",
 )
 
 # Home-folder paths, matched component by component from the home folder.

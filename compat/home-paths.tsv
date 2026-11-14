@@ -141,6 +141,11 @@
 #     ~/.config/evolution/**, ~/.local/share/evolution/** and
 #     ~/.config/goa-1.0 (evolution-alarm-notify, from /etc/xdg/autostart,
 #     starts evolution-data-server, which uses GNOME Online Accounts)
+#   ~/.gnupg/** (gpg-agent creates ~/.gnupg and private-keys-v1.d when it
+#     starts; on 24.04 its socket is the session's SSH agent, so any SSH
+#     agent client starts it, such as the herdr server that Upstream's
+#     autostart runs; it holds the user's keys, which no removal may
+#     touch)
 #                                                desktop
 # omarchy-provision-user also sets the XDG user folders, GTK bookmarks and
 # default applications (~/.config/mimeapps.list), all Shared_Files; its
@@ -295,6 +300,8 @@ Videos	desktop
 .local/share/gvfs-metadata/**	desktop
 .local/share/sddm	desktop
 .local/share/sddm/**	desktop
+.gnupg	desktop
+.gnupg/**	desktop
 .local/state/wireplumber	desktop
 .local/state/wireplumber/**	desktop
 # Started by /etc/xdg/autostart in every session but KDE (update-notifier)

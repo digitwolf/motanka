@@ -129,6 +129,18 @@ fpdiff() {
   assert_success
 }
 
+@test "the shadow tools' backup copies in /etc are ignored, the account files are not" {
+  printf '/etc/group-\tf\t0644\t0:0\t%s\n/etc/gshadow-\tf\t0640\t0:42\t%s\n/etc/group\tf\t0644\t0:0\t%s\n' "$SHA_A" "$SHA_A" "$SHA_A" >>"$BEFORE/etc.sha256"
+  printf '/etc/group-\tf\t0644\t0:0\t%s\n/etc/gshadow-\tf\t0640\t0:42\t%s\n/etc/group\tf\t0644\t0:0\t%s\n' "$SHA_B" "$SHA_B" "$SHA_A" >>"$AFTER/etc.sha256"
+  fpdiff
+  assert_success
+  printf '/etc/group\tf\t0644\t0:0\t%s\n' "$SHA_B" >>"$AFTER/etc.sha256"
+  sed -i "\|^/etc/group\t.*$SHA_A\$|d" "$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  assert_output --partial 'etc.sha256: changed /etc/group:'
+}
+
 @test "a dconf change is reported with its full key" {
   printf '[org/gnome/desktop/interface]\ncolor-scheme=%s\n' "'prefer-dark'" >"$AFTER/dconf-alice.ini"
   fpdiff
