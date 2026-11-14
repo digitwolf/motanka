@@ -12,6 +12,7 @@
 /compat/overrides.tsv
 /tools/classify-migrations
 /compat/user-scripts.tsv
+/compat/bin-modules.tsv
 /compat/inventory/
 keys/motanka-archive.asc
 # The man page, pre-built from docs/motanka.1.md by tools/mkman (the build

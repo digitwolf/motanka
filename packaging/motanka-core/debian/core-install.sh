@@ -38,9 +38,12 @@
 #            /opt/motanka/libexec/motanka/keys/motanka-archive.asc
 #            /opt/motanka/share/omarchy/                       omarchy/, unchanged
 #            /opt/motanka/share/omarchy-view/                  the overlay that
-#              /usr/share/omarchy links to: bin -> ../../bin (the Wrappers),
-#              and <entry> -> ../omarchy/<entry> for every other top-level
-#              entry of omarchy/ (design.md, "Session findings")
+#              /usr/share/omarchy links to: a folder bin/ with one link per
+#              entry of omarchy/bin, to its Wrapper (../../../bin/<name>), or
+#              to the original (../../omarchy/bin/<name>) for the names in
+#              compat/bin-modules.tsv, which Upstream loads instead of
+#              running; and <entry> -> ../omarchy/<entry> for every other
+#              top-level entry of omarchy/ (design.md, "Session findings")
 #            /opt/motanka/share/motanka/inventory.tsv          compat/inventory/
 #                                                              <stable commit>.tsv
 #            /opt/motanka/bin/<Upstream command>               the Wrappers
@@ -92,7 +95,7 @@ check_inputs() {
   [[ -d omarchy/bin ]] || die "omarchy/bin is missing: the source package lacks its orig-omarchy component (packaging/build.sh adds it)"
   for f in src/motanka tools/pkgmap tools/genwrappers tools/classify-migrations packages.yaml upstream.pin \
     compat/privileged.tsv compat/home-paths.tsv compat/migrations.tsv compat/overrides.tsv \
-    compat/user-scripts.tsv keys/motanka-archive.asc; do
+    compat/user-scripts.tsv compat/bin-modules.tsv keys/motanka-archive.asc; do
     [[ -f $f ]] || die "$f is missing (debian/../build-imports lists it)"
   done
   f=$(inventory_file)
@@ -183,20 +186,71 @@ cmd_build() {
   check_fontconfig
 }
 
+# bin_modules: the names of compat/bin-modules.tsv, one per line.
+bin_modules() {
+  awk -F'\t' '!/^#/ && NF >= 1 && $1 != "" { print $1 }' compat/bin-modules.tsv
+}
+
+# view_bin_target <name>: where /$VIEW/bin/<name> links to.
+view_bin_target() {
+  if bin_modules | grep -qxF -- "$1"; then
+    printf '../../omarchy/bin/%s\n' "$1"
+  else
+    printf '../../../bin/%s\n' "$1"
+  fi
+}
+
+# check_bin_modules: every listed name is in omarchy/bin, and every literal
+# "$OMARCHY_PATH/bin/<name>" (or ".../bin/<name>") that an Upstream Python
+# file passes to SourceFileLoader, spec_from_file_location or read_text is
+# listed, and so is omarchy-agent-usage-<name> for every name of
+# omarchy-agent-usage-local's HARNESSES tuple (a computed name).
+check_bin_modules() {
+  local n bad=0 f
+  while IFS= read -r n; do
+    [[ -e omarchy/bin/$n ]] || {
+      log "compat/bin-modules.tsv names $n, which omarchy/bin does not have"
+      bad=1
+    }
+  done < <(bin_modules)
+  while IFS= read -r n; do
+    if ! bin_modules | grep -qxF -- "$n"; then
+      f=$(grep -lE "(SourceFileLoader|spec_from_file_location|read_text).*bin/$n\b" omarchy/bin/* 2>/dev/null | head -n 1)
+      log "Upstream ${f#omarchy/} loads bin/$n instead of running it; add it to compat/bin-modules.tsv"
+      bad=1
+    fi
+  done < <(grep -hoE '(SourceFileLoader|spec_from_file_location)\([^)]*bin/omarchy-[A-Za-z0-9_-]+|/ "bin/omarchy-[A-Za-z0-9_-]+"\)\.read_text' omarchy/bin/* 2>/dev/null |
+    grep -oE 'bin/omarchy-[A-Za-z0-9_-]+' | sed 's|^bin/||' | LC_ALL=C sort -u)
+  # omarchy-agent-usage-local imports omarchy-agent-usage-<name> for each
+  # name of its HARNESSES tuple.
+  while IFS= read -r n; do
+    if ! bin_modules | grep -qxF -- "omarchy-agent-usage-$n"; then
+      log "Upstream bin/omarchy-agent-usage-local imports bin/omarchy-agent-usage-$n (HARNESSES); add it to compat/bin-modules.tsv"
+      bad=1
+    fi
+  done < <(sed -n 's/^HARNESSES = (\(.*\))$/\1/p' omarchy/bin/omarchy-agent-usage-local 2>/dev/null | grep -oE '"[A-Za-z0-9_-]+"' | tr -d '"')
+  ((bad == 0)) || die "compat/bin-modules.tsv does not match what Upstream loads from bin/"
+}
+
 # install_view: the overlay /opt/motanka/share/omarchy-view.
 install_view() {
-  local e name n=0
+  local e name n=0 m=0
+  check_bin_modules
   install -d -m 0755 "$D/$VIEW"
   while IFS= read -r -d '' e; do
     name=${e##*/}
     if [[ $name == bin ]]; then
-      ln -s ../../bin "$D/$VIEW/bin"
+      install -d -m 0755 "$D/$VIEW/bin"
+      while IFS= read -r -d '' e; do
+        ln -s "$(view_bin_target "${e##*/}")" "$D/$VIEW/bin/${e##*/}"
+        m=$((m + 1))
+      done < <(find omarchy/bin -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
     else
       ln -s "../omarchy/$name" "$D/$VIEW/$name"
     fi
     n=$((n + 1))
   done < <(find omarchy -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
-  log "installed the overlay /$VIEW with $n links (bin -> /opt/motanka/bin)"
+  log "installed the overlay /$VIEW with $n entries; bin/ has $m links, $(bin_modules | wc -l) of them to originals (compat/bin-modules.tsv)"
 }
 
 cmd_test() {
@@ -333,19 +387,31 @@ cmd_verify() {
   log "package tree verified"
 }
 
-# verify_view: the overlay has one link per top-level entry of omarchy/:
-# bin to ../../bin, every other entry to ../omarchy/<entry>, and each
-# resolves inside the package tree.
+# verify_view: the overlay has one entry per top-level entry of omarchy/:
+# a folder bin/ with one link per entry of omarchy/bin (view_bin_target),
+# every other entry a link to ../omarchy/<entry>, and each link resolves
+# inside the package tree.
 verify_view() {
-  local e name want got bad=0 n
+  local e name want got bad=0 n b
   [[ -d $D/$VIEW && ! -L $D/$VIEW ]] || die "/$VIEW is missing"
+  [[ -d $D/$VIEW/bin && ! -L $D/$VIEW/bin ]] || die "/$VIEW/bin is missing or not a folder"
+  while IFS= read -r -d '' e; do
+    b=${e##*/}
+    want=$(view_bin_target "$b")
+    got=$(readlink -- "$D/$VIEW/bin/$b" 2>/dev/null || true)
+    if [[ $got != "$want" || ! -e $D/$VIEW/bin/$b ]]; then
+      log "/$VIEW/bin/$b links to ${got:-nothing}, expected $want (resolving inside the package)"
+      bad=1
+    fi
+  done < <(find omarchy/bin -mindepth 1 -maxdepth 1 -print0)
+  if [[ $(find "$D/$VIEW/bin" -mindepth 1 -maxdepth 1 | wc -l) != "$(find omarchy/bin -mindepth 1 -maxdepth 1 | wc -l)" ]]; then
+    log "/$VIEW/bin has entries that are not entries of the vendored bin/"
+    bad=1
+  fi
   while IFS= read -r -d '' e; do
     name=${e##*/}
-    if [[ $name == bin ]]; then
-      want=../../bin
-    else
-      want=../omarchy/$name
-    fi
+    [[ $name == bin ]] && continue
+    want=../omarchy/$name
     if [[ ! -L $D/$VIEW/$name ]]; then
       log "/$VIEW/$name is missing or not a link"
       bad=1
@@ -363,7 +429,7 @@ verify_view() {
     bad=1
   fi
   ((bad == 0)) || die "the overlay /$VIEW does not match the vendored tree"
-  log "/$VIEW: $n links, bin -> /opt/motanka/bin"
+  log "/$VIEW: $n entries; bin/ links to the Wrappers, and to the originals for compat/bin-modules.tsv"
 }
 
 main() {

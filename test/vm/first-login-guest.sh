@@ -17,8 +17,10 @@
 #            sizes, times, link targets, SHA-256 of every file) and the
 #            SHA-256 of alice's Shared_Files.
 #   install  apt-get install the local .debs; /usr/share/omarchy links to
-#            the overlay omarchy-view (bin: the Wrappers in /opt/motanka/bin,
-#            default: the vendored tree); per-user setup, shell integration,
+#            the overlay omarchy-view (bin: links to the Wrappers in
+#            /opt/motanka/bin and, for compat/bin-modules.tsv, to the
+#            originals, so omarchy-agent-usage-local runs; default: the
+#            vendored tree); per-user setup, shell integration,
 #            the default theme, their data files and units are installed;
 #            motanka-fonts has its 8 fonts under /opt/motanka/share/fonts and
 #            nothing in the system's font folders, no file in /etc/fonts
@@ -298,12 +300,22 @@ phase_install() {
   else
     fail "/usr/share/omarchy resolves to '$(readlink -f /usr/share/omarchy 2>/dev/null || true)', not $PREFIX/share/omarchy-view"
   fi
-  if [[ $(readlink -f /usr/share/omarchy/bin) == "$PREFIX/bin" &&
+  if [[ $(readlink -f /usr/share/omarchy/bin) == "$PREFIX/share/omarchy-view/bin" &&
   $(readlink -f /usr/share/omarchy/default) == "$PREFIX/share/omarchy/default" &&
-  $(readlink -f /usr/share/omarchy/bin/omarchy-version) == "$PREFIX/bin/omarchy-version" ]]; then
-    pass "the overlay's bin is the Wrappers and its default is the vendored tree"
+  $(readlink -f /usr/share/omarchy/bin/omarchy-version) == "$PREFIX/bin/omarchy-version" &&
+  $(readlink -f /usr/share/omarchy/bin/omarchy-agent-usage-hermes) == "$PREFIX/share/omarchy/bin/omarchy-agent-usage-hermes" ]]; then
+    pass "the overlay's bin links to the Wrappers, and to the originals for the files Upstream loads (compat/bin-modules.tsv); its default is the vendored tree"
   else
-    fail "the overlay is wrong: bin -> $(readlink -f /usr/share/omarchy/bin), default -> $(readlink -f /usr/share/omarchy/default)"
+    fail "the overlay is wrong: bin -> $(readlink -f /usr/share/omarchy/bin), bin/omarchy-version -> $(readlink -f /usr/share/omarchy/bin/omarchy-version), bin/omarchy-agent-usage-hermes -> $(readlink -f /usr/share/omarchy/bin/omarchy-agent-usage-hermes), default -> $(readlink -f /usr/share/omarchy/default)"
+  fi
+  # Upstream imports these bin/ files as Python modules; through a Wrapper
+  # it failed with SyntaxError (hands-on VM, 2026-11-13).
+  if OMARCHY_PATH=/usr/share/omarchy timeout 60 python3 "$PREFIX/share/omarchy/bin/omarchy-agent-usage-local" --limits-only \
+    >"$L/agent-usage-local.out" 2>"$L/agent-usage-local.err"; then
+    pass "omarchy-agent-usage-local --limits-only exits 0 (it imports the omarchy-agent-usage-<harness> files)"
+  else
+    fail "omarchy-agent-usage-local --limits-only failed:"
+    show "$L/agent-usage-local.err"
   fi
   for f in libexec/motanka/user-setup libexec/motanka/shell-integration libexec/motanka/default-theme; do
     if [[ -x $PREFIX/$f ]]; then

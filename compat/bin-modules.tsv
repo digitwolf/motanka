@@ -1,0 +1,18 @@
+# Upstream bin/ files that Upstream code loads or reads instead of running
+# them (task 26 follow-up, found in the hands-on 26.04 VM on 2026-11-13).
+# In /opt/motanka/share/omarchy-view/bin (which /usr/share/omarchy/bin is)
+# every other name links to its Wrapper in /opt/motanka/bin; these names
+# link to Upstream's original file, because the Wrapper is a bash script
+# (set -euo pipefail; exec run-upstream) and Python then fails with
+# SyntaxError, or reads the Wrapper's text instead of the original.
+# Running them by name still goes through the Wrapper on the session PATH.
+# packaging/motanka-core/debian/core-install.sh refuses a build when
+# Upstream passes a literal "$OMARCHY_PATH/bin/<name>" to a Python loader or
+# reader that is not listed here, and when a listed name is not in bin/.
+#
+# name	reason
+omarchy-agent-account-state	omarchy-agent-account-transfer imports it (SourceFileLoader "accounts") and sends its source (read_text) as the backend
+omarchy-agent-usage-hermes	omarchy-agent-usage-local imports it as a harness module (HARNESSES)
+omarchy-agent-usage-kimi	omarchy-agent-usage-local imports it as a harness module (HARNESSES)
+omarchy-agent-usage-qwen	omarchy-agent-usage-local imports it as a harness module (HARNESSES)
+omarchy-agent-usage-vibe	omarchy-agent-usage-local imports it as a harness module (HARNESSES)

@@ -315,9 +315,9 @@ phase_install() {
 
   target=$(readlink -f /usr/share/omarchy 2>/dev/null || true)
   if [[ -L /usr/share/omarchy && $target == "$PREFIX/share/omarchy-view" &&
-    $(readlink -f /usr/share/omarchy/bin) == "$PREFIX/bin" &&
+    $(readlink -f /usr/share/omarchy/bin/omarchy-version) == "$PREFIX/bin/omarchy-version" &&
     $(readlink -f /usr/share/omarchy/default) == "$PREFIX/share/omarchy/default" ]]; then
-    pass "/usr/share/omarchy links to the overlay $PREFIX/share/omarchy-view (bin: the Wrappers)"
+    pass "/usr/share/omarchy links to the overlay $PREFIX/share/omarchy-view (bin/: links to the Wrappers)"
   else
     fail "/usr/share/omarchy is not a link to the overlay $PREFIX/share/omarchy-view (resolves to '${target:-nothing}')"
   fi
