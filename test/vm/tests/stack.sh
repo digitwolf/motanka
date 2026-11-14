@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VM test for the Stack packages (tasks 7.1 to 7.6 and 7.9): install the Stack
+# VM test for the Stack packages (tasks 7.1 to 7.6, 7.9 and 7.10): install the Stack
 # .debs of one release (motanka-stack, motanka-qt6 and motanka-stack-shell)
 # in a fresh VM with a virgl GPU and Ubuntu's own Qt installed, check
 # library resolution, RUNPATH, the C++ runtime and debcheck, start Hyprland
@@ -57,6 +57,12 @@
 #     ttfx --version exits 0 and prints the version in
 #     stack/shell-components.tsv, and one render with the flags Upstream's
 #     omarchy-screensaver passes exits 0 within 30 s in a pseudo-terminal
+#   - on resolute, /opt/motanka/bin/hyprland-preview-share-picker (task
+#     7.10; requirements 3.4, 7.2, 7.3) belongs to motanka-stack-shell, its
+#     --version exits 0 and prints the git describe form of the version in
+#     stack/shell-components.tsv, and its schema.json under
+#     /opt/motanka/share/hyprland-preview-share-picker parses as JSON; on
+#     noble it is absent
 #   - in the running Hyprland session, Quickshell loads a config whose
 #     panel namespace comes from a function declaring `var native` (the
 #     Qt 6.10 grammar problem) and shows a magenta PanelWindow: hyprctl
@@ -128,6 +134,13 @@ ttfx_version=$(awk -F'\t' '$1 == "ttfx" { print $2 }' "$MV_REPO/stack/shell-comp
 if [[ -z $ttfx_version ]]; then
   mv_die "stack/shell-components.tsv has no ttfx line"
 fi
+# The share picker's version is an Arch git pkgver (0.3.0.r3.g07602ef);
+# its --version prints the git describe form (v0.3.0-r3-g07602ef).
+picker_version=$(awk -F'\t' '$1 == "hyprland-preview-share-picker" { print $2 }' "$MV_REPO/stack/shell-components.tsv" |
+  sed -E 's/^(.+)\.r([0-9]+)\.g([0-9a-f]+)$/\1-r\2-g\3/')
+if [[ -z $picker_version ]]; then
+  mv_die "stack/shell-components.tsv has no hyprland-preview-share-picker line"
+fi
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 # --- 1. the .debs -------------------------------------------------------------
@@ -184,7 +197,7 @@ mv_copy_to_vm "$tvm" "$stage" "$GUEST_T"
 # phase <name>: runs one guest phase, logs it and counts its checks.
 phase() {
   local name=$1 rc=0 f p
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" "$omasnap_version" "$ttfx_version" \
+  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" "$omasnap_version" "$ttfx_version" "$picker_version" \
     </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)

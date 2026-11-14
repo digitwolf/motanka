@@ -32,8 +32,18 @@
 #            PATH. motanka-session.target and motanka-session-cleanup.service
 #            are active. omarchy-version through its Wrapper does not print
 #            "dev"; pacman is not found on the session PATH; hyprctl lists
-#            Virtual-1; grim takes a screenshot; no process has
-#            LD_LIBRARY_PATH. Logout with "uwsm stop": the launcher ends,
+#            Virtual-1; grim takes a screenshot. The user manager's PATH
+#            has /opt/motanka/bin (xdg-desktop-portal-hyprland finds its
+#            custom picker there). On resolute (task 7.10) the session PATH
+#            finds /opt/motanka/bin/hyprland-preview-share-picker; started
+#            with the compositor's environment, XDPH_WINDOW_SHARING_LIST
+#            unset, stdin from /dev/null and --logs (output in
+#            logs/share-picker.log), its layer namespace
+#            ch.wysbd.hyprland-preview-share-picker appears in hyprctl -j
+#            layers (saved as logs/share-picker-layers.json) within 15 s,
+#            and after SIGTERM (SIGKILL after 10 s) to its pid it is gone.
+#            No process has LD_LIBRARY_PATH. Logout with "uwsm stop": the
+#            launcher ends,
 #            its unit links are gone, and every Session_Env_List variable of
 #            the user manager has its value from before the session again,
 #            or is unset.
@@ -61,6 +71,10 @@ PROFILE=$HOME/.bash_profile
 APT=(sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=300)
 MOTANKA_PKGS=(motanka-core motanka-stack motanka-stack-hyprland motanka-stack-tools motanka-stack-libs
   motanka-stack-shell motanka-qt6)
+# The screen share picker of motanka-stack-shell (26.04 only) and the
+# namespace of its layer-shell window (APP_ID in its src/app.rs).
+SHARE_PICKER=$PREFIX/bin/hyprland-preview-share-picker
+SHARE_PICKER_NS=ch.wysbd.hyprland-preview-share-picker
 UID_=$(id -u)
 RT=/run/user/$UID_
 export XDG_RUNTIME_DIR=$RT
@@ -130,6 +144,106 @@ no_session() {
 # environ_of <pid>: the process's environment, one variable per line.
 environ_of() {
   sudo cat "/proc/$1/environ" 2>/dev/null | tr '\0' '\n' || true
+}
+
+# layer_listed <signature> <namespace> <file>: saves "hyprctl -j layers" in
+# the file; 0 if a layer of any monitor and level has the namespace.
+layer_listed() {
+  HYPRLAND_INSTANCE_SIGNATURE=$1 "$PREFIX/bin/hyprctl" -j layers >"$3" 2>&1 || return 1
+  python3 - "$3" "$2" <<'EOF'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+except (OSError, ValueError):
+    sys.exit(1)
+monitors = data.values() if isinstance(data, dict) else []
+found = any(
+    isinstance(layer, dict) and layer.get("namespace") == sys.argv[2]
+    for mon in monitors
+    if isinstance(mon, dict) and isinstance(mon.get("levels"), dict)
+    for level in mon["levels"].values()
+    if isinstance(level, list)
+    for layer in level
+)
+sys.exit(0 if found else 1)
+EOF
+}
+
+# check_share_picker <signature> <wayland-socket> <session PATH>: on
+# resolute (task 7.10), the share picker that Upstream's xdph.conf names
+# (custom_picker_binary) is found on the session PATH and on the user
+# manager's PATH, from which xdg-desktop-portal-hyprland starts, and it
+# opens its layer-shell window in the session: started with the
+# compositor's environment, XDPH_WINDOW_SHARING_LIST unset and stdin from
+# /dev/null, hyprctl -j layers lists the namespace SHARE_PICKER_NS within
+# 15 s; then the picker is stopped by its pid.
+check_share_picker() {
+  local sig=$1 wl=$2 path=$3 ppid found=false um_path
+  local -a envs=()
+  um_path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p')
+  if [[ :$um_path: == *":$PREFIX/bin:"* ]]; then
+    pass "the user manager's PATH, which xdg-desktop-portal-hyprland gets, has $PREFIX/bin during the session: $um_path"
+  else
+    fail "the user manager's PATH lacks $PREFIX/bin during the session ('${um_path:-unset}'); xdg-desktop-portal-hyprland cannot find the share picker"
+  fi
+  if [[ $RELEASE != resolute ]]; then
+    echo "note: the share picker is built for 26.04 only; not started on $RELEASE"
+    return 0
+  fi
+  if [[ ! -x $SHARE_PICKER ]]; then
+    fail "$SHARE_PICKER is missing (motanka-stack-shell is not installed or has no share picker)"
+    return 0
+  fi
+  if [[ $(env -i PATH="$path" bash -c 'command -v hyprland-preview-share-picker' 2>/dev/null) == "$SHARE_PICKER" ]]; then
+    pass "the session PATH finds hyprland-preview-share-picker at $SHARE_PICKER"
+  else
+    fail "the session PATH does not find hyprland-preview-share-picker at $SHARE_PICKER"
+  fi
+  mapfile -t envs < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$L/hyprland-environ.txt" |
+    grep -v -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|XDG_RUNTIME_DIR|XDPH_WINDOW_SHARING_LIST)=' || true)
+  envs+=(WAYLAND_DISPLAY="$wl" HYPRLAND_INSTANCE_SIGNATURE="$sig" XDG_RUNTIME_DIR="$RT")
+  # A background setsid in a non-interactive shell does not fork, and env
+  # execs, so $! is the picker's pid.
+  setsid env -i "${envs[@]}" "$SHARE_PICKER" --logs "$L/share-picker-app.log" </dev/null >"$L/share-picker.log" 2>&1 &
+  ppid=$!
+  for _ in $(seq 15); do
+    kill -0 "$ppid" 2>/dev/null || break
+    if layer_listed "$sig" "$SHARE_PICKER_NS" "$L/share-picker-layers.json"; then
+      found=true
+      break
+    fi
+    sleep 1
+  done
+  if $found; then
+    pass "the share picker (pid $ppid) opened its layer: hyprctl -j layers lists $SHARE_PICKER_NS"
+  elif kill -0 "$ppid" 2>/dev/null; then
+    fail "hyprctl -j layers does not list $SHARE_PICKER_NS within 15 s of starting the share picker"
+    show "$L/share-picker-layers.json"
+    show "$L/share-picker.log"
+  else
+    fail "the share picker exited within 15 s without opening its layer"
+    show "$L/share-picker.log"
+    [[ -f $L/share-picker-app.log ]] && show "$L/share-picker-app.log"
+  fi
+  kill -TERM "$ppid" 2>/dev/null || true
+  for _ in $(seq 10); do
+    kill -0 "$ppid" 2>/dev/null || break
+    sleep 1
+  done
+  if kill -0 "$ppid" 2>/dev/null; then
+    echo "note: the share picker ignored SIGTERM for 10 s; sending SIGKILL"
+    kill -KILL "$ppid" 2>/dev/null || true
+    sleep 1
+  fi
+  wait "$ppid" 2>/dev/null || true
+  if [[ ! -e /proc/$ppid ]]; then
+    pass "the share picker (pid $ppid) is gone after it was stopped"
+  else
+    fail "the share picker (pid $ppid) still runs after SIGKILL"
+  fi
 }
 
 # --- phases -----------------------------------------------------------------
@@ -460,6 +574,11 @@ session_round1() {
   else
     fail "grim could not capture a screenshot (socket '${wl:-none}')"
     show "$L/grim.log"
+  fi
+  if [[ -n $sig && -n $wl ]]; then
+    check_share_picker "$sig" "$wl" "$path"
+  else
+    fail "share picker check skipped: no Hyprland instance or Wayland socket"
   fi
 
   # shellcheck disable=SC2016 # the script runs in the root shell

@@ -31,7 +31,10 @@
 #     /opt/motanka/bin first on PATH; motanka-session.target is active;
 #     omarchy-version through its Wrapper does not print "dev"; pacman is
 #     not on the session PATH; no process has LD_LIBRARY_PATH; grim takes a
-#     screenshot (copied to the results folder)
+#     screenshot (copied to the results folder); the user manager's PATH
+#     has /opt/motanka/bin; on resolute (task 7.10) the share picker opens
+#     its layer-shell window in the session within 15 s and stops on
+#     SIGTERM to its pid (motanka-stack-shell must be in the .deb cache)
 #   - after each logout every Session_Env_List variable of the user manager
 #     has its value from before the session again, or is unset
 #   - purging removes the compiled dconf database, the link and /opt/motanka

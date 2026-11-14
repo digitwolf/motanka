@@ -176,7 +176,8 @@ hyprland:
 hyprland-guiutils:
   all: {motanka: motanka-stack-hyprland, reason: "Stack build at the version Upstream expects"}
 hyprland-preview-share-picker:
-  all: {skip: "Upstream repository package; port pending"}
+  noble: {skip: "24.04 has no gtk4-layer-shell, and the Stack builds xdg-desktop-portal-hyprland, which runs the picker, for 26.04 only"}
+  resolute: {motanka: motanka-stack-shell, reason: "Stack build of the v0.3.0 commit Upstream's PKGBUILD pins, offline from the crates its Cargo.lock pins; xdg-desktop-portal-hyprland runs it for screen sharing"}
 hyprpicker:
   all: {motanka: motanka-stack-tools, reason: "Stack build at the version Upstream expects"}
 hyprsunset:

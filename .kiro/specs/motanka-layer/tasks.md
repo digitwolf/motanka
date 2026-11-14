@@ -105,6 +105,10 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - Build ttfx 0.5.1 for both releases into `/opt/motanka/bin/ttfx`; map Upstream's `ttfx` to `motanka-stack-shell`; extend the Stack VM test to run it
   - _Requirements: 3.4, 7.2, 7.3, 8.1, 8.2_
 
+- [ ] 7.10 hyprland-preview-share-picker in `motanka-stack-shell` for 26.04 (added after the port research)
+  - Build the share picker Upstream's `xdph.conf` names (commit 07602ef, the version Upstream's PKGBUILD pins) as a `cargo` component for resolute, with the Stack's hyprland-protocols 0.8.0 as its protocol source and a patched `build.rs` that needs no git; install it and its config schema under `/opt/motanka`; map Upstream's `hyprland-preview-share-picker` to `motanka-stack-shell` on 26.04 and skip it on 24.04, which has no gtk4-layer-shell and no xdg-desktop-portal-hyprland in the Stack; extend the Stack and session VM tests to run it
+  - _Requirements: 3.4, 7.2, 7.3, 8.1, 8.2_
+
 - [ ] 8. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
   - _Requirements: 13.1_
 

@@ -3,7 +3,11 @@
 # user tester (passwordless sudo in the VM). Never run it on a real machine:
 # it installs and purges packages and configures tty1 autologin.
 #
-# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version>
+# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version> <share-picker-version>
+#
+# <share-picker-version> is the text hyprland-preview-share-picker
+# --version must contain (0.3.0-r3-g07602ef: the git describe form of the
+# version in stack/shell-components.tsv).
 #
 # Work folder /tmp/motanka-stack-test (T): debs/ holds the Stack .debs
 # (motanka-stack, motanka-qt6 and motanka-stack-shell), debcheck is
@@ -36,8 +40,13 @@
 #            render of a one-line text with the flags Upstream's
 #            omarchy-screensaver passes (-i, --frame-rate, --random-effect,
 #            --no-eol, --no-restore-cursor) exits 0 within 30 s in a
-#            pseudo-terminal (script); Ubuntu's hyprland and Qt packages
-#            unchanged.
+#            pseudo-terminal (script); on resolute (task 7.10)
+#            /opt/motanka/bin/hyprland-preview-share-picker belongs to
+#            motanka-stack-shell, its --version exits 0 and prints
+#            <share-picker-version>, and
+#            /opt/motanka/share/hyprland-preview-share-picker/schema.json
+#            belongs to it and parses as JSON; on noble neither exists;
+#            Ubuntu's hyprland and Qt packages unchanged.
 #   session  start /opt/motanka/bin/start-hyprland on tty1 through getty
 #            autologin; Hyprland runs from /opt/motanka, hyprctl lists
 #            Virtual-1, grim takes a screenshot, no process has
@@ -586,6 +595,51 @@ check_ttfx_install() {
   fi
 }
 
+# check_share_picker_install: hyprland-preview-share-picker from
+# motanka-stack-shell on resolute (task 7.10), the custom picker Upstream's
+# xdph.conf names; absent on noble, where the Stack has no
+# xdg-desktop-portal-hyprland.
+check_share_picker_install() {
+  local name=hyprland-preview-share-picker v rc=0 owner
+  local bin=$PREFIX/bin/$name schema=$PREFIX/share/$name/schema.json
+  if [[ $RELEASE == noble ]]; then
+    if [[ -e $bin || -e $PREFIX/share/$name ]]; then
+      fail "noble: $bin or $PREFIX/share/$name exists; the share picker is built for 26.04 only"
+    else
+      pass "noble: no $bin (the share picker is built for 26.04 only)"
+    fi
+    return
+  fi
+  if [[ -x $bin ]]; then
+    pass "$bin is installed"
+  else
+    fail "$bin is missing or not executable"
+    return
+  fi
+  owner=$(dpkg-query -S "$bin" 2>/dev/null || true)
+  if [[ $owner == motanka-stack-shell:* ]]; then
+    pass "$bin belongs to motanka-stack-shell"
+  else
+    fail "$bin belongs to '${owner:-no package}', not motanka-stack-shell"
+  fi
+  v=$(env -u WAYLAND_DISPLAY -u DISPLAY timeout 30 "$bin" --version 2>"$L/share-picker-version.err") || rc=$?
+  if ((rc == 0)) && grep -qF "$PICKER_VERSION" <<<"$v"; then
+    pass "$name --version exits 0 and prints '$v'"
+  else
+    fail "$name --version printed '$v' (exit $rc), expected version $PICKER_VERSION"
+    show "$L/share-picker-version.err"
+  fi
+  owner=$(dpkg-query -S "$schema" 2>/dev/null || true)
+  rc=0
+  python3 -m json.tool "$schema" >"$L/share-picker-schema.json" 2>&1 || rc=$?
+  if ((rc == 0)) && [[ $owner == motanka-stack-shell:* ]]; then
+    pass "$schema belongs to motanka-stack-shell and parses as JSON ($(stat -c %s "$schema") bytes)"
+  else
+    fail "$schema is missing, not owned by motanka-stack-shell ('${owner:-no package}') or not JSON (exit $rc)"
+    head -n 5 "$L/share-picker-schema.json" | show
+  fi
+}
+
 phase_install() {
   local p rc=0 v
   mkdir -p "$L"
@@ -620,6 +674,7 @@ phase_install() {
   check_shell_install
   check_omasnap_install
   check_ttfx_install
+  check_share_picker_install
   v=$("$PREFIX/bin/Hyprland" --version 2>&1 | head -n 3 || true)
   if grep -qF "$HYPR_VERSION" <<<"$v"; then
     pass "Hyprland --version reports $HYPR_VERSION"
@@ -1019,8 +1074,8 @@ set_pkgs() {
 }
 
 main() {
-  (($# == 7)) || {
-    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version>" >&2
+  (($# == 8)) || {
+    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version> <share-picker-version>" >&2
     exit 2
   }
   PHASE=$1
@@ -1030,6 +1085,7 @@ main() {
   QT_VERSION=$5
   OMASNAP_VERSION=$6
   TTFX_VERSION=$7
+  PICKER_VERSION=$8
   case $RELEASE in
     noble | resolute) ;;
     *)

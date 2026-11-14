@@ -54,10 +54,11 @@ done'
   assert_output "$(printf '%s\n' wayland wayland-protocols libdwarf-lite cpptrace quickshell cmake extra-cmake-modules layer-shell-qt omasnap ttfx)"
 }
 
-@test "resolute builds neither the staged wayland nor CMake" {
+@test "resolute builds neither the staged wayland nor CMake, but the share picker with its protocols" {
   sb resolute "$ORDER_CODE"
   assert_success
-  assert_output "$(printf '%s\n' wayland-protocols libdwarf-lite cpptrace quickshell extra-cmake-modules layer-shell-qt omasnap ttfx)"
+  assert_output "$(printf '%s\n' wayland-protocols libdwarf-lite cpptrace quickshell extra-cmake-modules layer-shell-qt omasnap ttfx \
+    hyprland-protocols hyprland-preview-share-picker)"
 }
 
 @test "version_of reads the omasnap and layer-shell-qt versions" {
@@ -550,5 +551,321 @@ cargo_source() {
       END { exit !found }
     ' "$PKGDIR/debian/control.in"
     assert_success
+  done
+}
+
+# --- the share picker (hyprland-preview-share-picker, task 7.10) ---------------
+
+PICKER=hyprland-preview-share-picker
+PICKER_PATCH=hyprland-preview-share-picker-build-rs.patch
+PICKER_PROTOCOL=protocols/hyprland-toplevel-export-v1.xml
+# The build.rs of Upstream's PKGBUILD, which the patch puts in place.
+PICKER_BUILD_RS='fn main() {
+    println!("cargo::rustc-env=GIT_VERSION=v0.3.0-r3-g07602ef");
+}'
+
+# picker_source [no-protocols] [unpatched] [full-submodule]: the unpacked
+# hyprland-preview-share-picker/, its crates folder and hyprland-protocols/
+# of the source tree. The picker's lib/hyprland-protocols is the empty
+# folder of the git submodule, as in the tarball.
+picker_source() {
+  local s="$TREE/$PICKER"
+  mkdir -p "$s/src" "$s/lib/src" "$s/lib/hyprland-protocols" "$TREE/$PICKER-crates/gtk4-0.9.6"
+  printf '[workspace]\nmembers = ["lib"]\n' >"$s/Cargo.toml"
+  printf 'version = 4\n' >"$s/Cargo.lock"
+  if [[ " $* " == *" unpatched "* ]]; then
+    printf 'use std::process::Command;\nfn main() {\n    let o = Command::new("git").output().unwrap();\n}\n' >"$s/build.rs"
+  else
+    printf '%s\n' "$PICKER_BUILD_RS" >"$s/build.rs"
+  fi
+  if [[ " $* " == *" full-submodule "* ]]; then
+    printf 'x\n' >"$s/lib/hyprland-protocols/README.md"
+  fi
+  if [[ " $* " != *" no-protocols "* ]]; then
+    mkdir -p "$TREE/hyprland-protocols/protocols"
+    printf '<protocol name="hyprland_toplevel_export_v1"/>\n' >"$TREE/hyprland-protocols/$PICKER_PROTOCOL"
+  fi
+}
+
+# stub_picker_rust: cargo-1.91 and rustc-1.91 stubs whose build writes the
+# share picker: "schema" prints $STUBDATA/schema.out (a JSON object by
+# default), "--version" prints the patched build.rs's version.
+stub_picker_rust() {
+  printf '{\n  "type": "object"\n}\n' >"$STUBDATA/schema.out"
+  cat >"$STUBDATA/picker" <<'EOF'
+#!/bin/sh
+case $1 in
+  schema) cat "$STUBDATA/schema.out" ;;
+  --version) echo "hyprland-preview-share-picker v0.3.0-r3-g07602ef" ;;
+  *) exit 2 ;;
+esac
+EOF
+  cat >"$STUBS/cargo-1.91" <<'EOF'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  echo "cargo 1.91.1 (stub)"
+  exit 0
+fi
+printf 'pwd=%s\n' "$(pwd)" >"$STUBDATA/cargo.log"
+mkdir -p "$CARGO_TARGET_DIR/release"
+cp "$STUBDATA/picker" "$CARGO_TARGET_DIR/release/hyprland-preview-share-picker"
+chmod +x "$CARGO_TARGET_DIR/release/hyprland-preview-share-picker"
+EOF
+  printf '#!/bin/sh\necho "rustc 1.91.1 (stub)"\n' >"$STUBS/rustc-1.91"
+  chmod +x "$STUBS/cargo-1.91" "$STUBS/rustc-1.91" "$STUBDATA/picker"
+}
+
+BUILD_PICKER_CODE='for i in "${!C_NAME[@]}"; do if [[ ${C_NAME[$i]} == hyprland-preview-share-picker ]]; then build_one "$i"; fi; done'
+
+@test "the share picker is a resolute-only cargo component of motanka-stack-shell, with a resolute-only protocol source" {
+  sb resolute 'for i in "${!C_NAME[@]}"; do
+    case ${C_NAME[$i]} in hyprland-protocols | hyprland-preview-share-picker)
+      echo "${C_NAME[$i]} ${C_VERSION[$i]} ${C_BUILD[$i]} ${C_SUITES[$i]} ${C_PACKAGE[$i]}" ;;
+    esac
+  done'
+  assert_success
+  assert_output "$(printf '%s\n' \
+    'hyprland-protocols 0.8.0 source resolute -' \
+    'hyprland-preview-share-picker 0.3.0.r3.g07602ef cargo resolute motanka-stack-shell')"
+}
+
+@test "noble skips the share picker and hyprland-protocols in the build, test and install steps" {
+  sb noble 'for i in "${!C_NAME[@]}"; do
+    case ${C_NAME[$i]} in hyprland-protocols | hyprland-preview-share-picker)
+      if in_suite "$i"; then echo "built ${C_NAME[$i]}"; else echo "skipped ${C_NAME[$i]}"; fi ;;
+    esac
+  done'
+  assert_success
+  assert_output "$(printf '%s\n' 'skipped hyprland-protocols' 'skipped hyprland-preview-share-picker')"
+}
+
+@test "version_text gives the git describe form of an Arch git pkgver and leaves other versions alone" {
+  sb resolute 'version_text 0.3.0.r3.g07602ef; version_text 0.5.1; version_text 6.8.3; version_text 1.0.r12.gabc123'
+  assert_success
+  assert_output "$(printf '%s\n' 0.3.0-r3-g07602ef 0.5.1 6.8.3 1.0-r12-gabc123)"
+}
+
+@test "the share picker's prepare step links lib/hyprland-protocols to the hyprland-protocols folder" {
+  local link="$TREE/$PICKER/lib/hyprland-protocols"
+  picker_source
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_success
+  assert_output --partial 'lib/hyprland-protocols -> hyprland-protocols 0.8.0'
+  [[ -L $link ]] || fail "lib/hyprland-protocols is not a symbolic link"
+  [[ $(readlink "$link") == ../../hyprland-protocols ]] || fail "lib/hyprland-protocols points at '$(readlink "$link")'"
+  [[ -f $link/$PICKER_PROTOCOL ]] || fail "the protocol XML does not resolve through the link"
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_success
+  [[ $(readlink "$link") == ../../hyprland-protocols ]] || fail "a second run did not keep the link"
+}
+
+@test "the share picker's prepare step fails clearly without the hyprland-protocols folder" {
+  picker_source no-protocols
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_failure 1
+  assert_output --partial 'component source hyprland-protocols/ is missing'
+  assert_output --partial 'orig-hyprland-protocols.tar.gz'
+  [[ -d $TREE/$PICKER/lib/hyprland-protocols && ! -L $TREE/$PICKER/lib/hyprland-protocols ]] ||
+    fail "the empty submodule folder was changed although the build stopped"
+}
+
+@test "the share picker's prepare step fails when hyprland-protocols lacks the toplevel export protocol" {
+  picker_source
+  rm -f "$TREE/hyprland-protocols/$PICKER_PROTOCOL"
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_failure 1
+  assert_output --partial "hyprland-protocols/$PICKER_PROTOCOL is missing"
+}
+
+@test "the share picker's prepare step refuses the unpatched build.rs and a version other than the pinned one" {
+  picker_source unpatched
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_failure 1
+  assert_output --partial "build.rs still runs git; debian/patches/$PICKER_PATCH is not applied"
+  printf 'fn main() {\n    println!("cargo::rustc-env=GIT_VERSION=v0.2.0");\n}\n' >"$TREE/$PICKER/build.rs"
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_failure 1
+  assert_output --partial 'does not set GIT_VERSION=v0.3.0-r3-g07602ef'
+}
+
+@test "the share picker's prepare step refuses a non-empty lib/hyprland-protocols" {
+  picker_source full-submodule
+  sb resolute 'share_picker_prepare "$TOP/hyprland-preview-share-picker"'
+  assert_failure 1
+  assert_output --partial 'lib/hyprland-protocols/ is not empty'
+}
+
+@test "build_one builds the share picker with the cargo recipe and stages its binary and schema.json" {
+  local st="$TREE/debian/shell-build/stage/opt/motanka"
+  stub_picker_rust
+  picker_source
+  sb resolute "$BUILD_PICKER_CODE"
+  assert_success
+  assert_output --partial "$PICKER: lib/hyprland-protocols -> hyprland-protocols 0.8.0"
+  assert_output --partial "$PICKER: config schema in /opt/motanka/share/$PICKER/schema.json"
+  run cat "$STUBDATA/cargo.log"
+  assert_line "pwd=$TREE/$PICKER"
+  [[ -x $st/bin/$PICKER ]] || fail "bin/$PICKER is not in the staging tree"
+  cmp "$STUBDATA/schema.out" "$st/share/$PICKER/schema.json"
+  [[ $(stat -c %a "$st/share/$PICKER/schema.json") == 644 ]] || fail "schema.json is not mode 644"
+  [[ -L $TREE/$PICKER/lib/hyprland-protocols ]] || fail "the build did not link lib/hyprland-protocols"
+}
+
+@test "build_one builds hyprland-protocols as source only" {
+  picker_source
+  sb resolute 'for i in "${!C_NAME[@]}"; do if [[ ${C_NAME[$i]} == hyprland-protocols ]]; then build_one "$i"; fi; done'
+  assert_success
+  assert_output --partial "hyprland-protocols: source only; $PICKER reads its protocol XML"
+  [[ ! -e $TREE/debian/shell-build/stage/opt/motanka/share/hyprland-protocols ]] || fail "hyprland-protocols was staged"
+}
+
+@test "a share picker whose schema subcommand fails or prints no JSON object stops the build" {
+  stub_picker_rust
+  picker_source
+  printf 'error: no such subcommand\n' >"$STUBDATA/schema.out"
+  sb resolute "$BUILD_PICKER_CODE"
+  assert_failure 1
+  assert_output --partial "$PICKER schema printed no JSON object"
+  printf '#!/bin/sh\nexit 4\n' >"$STUBDATA/picker"
+  sb resolute "$BUILD_PICKER_CODE"
+  assert_failure 1
+  assert_output --partial "$PICKER schema failed with exit code 4"
+}
+
+@test "the test step accepts the share picker's git describe version on resolute" {
+  local bin="$TREE/debian/shell-build/stage/opt/motanka/bin"
+  mkdir -p "$bin"
+  printf '#!/bin/sh\necho "ttfx 0.5.1"\n' >"$bin/ttfx"
+  printf '#!/bin/sh\necho "hyprland-preview-share-picker v0.3.0-r3-g07602ef"\n' >"$bin/$PICKER"
+  chmod +x "$bin/ttfx" "$bin/$PICKER"
+  sb resolute test_cargo_components
+  assert_success
+  assert_output --partial "$PICKER --version: hyprland-preview-share-picker v0.3.0-r3-g07602ef"
+  printf '#!/bin/sh\necho "hyprland-preview-share-picker v0.3.0"\n' >"$bin/$PICKER"
+  sb resolute test_cargo_components
+  assert_failure 1
+  assert_output --partial 'does not name version 0.3.0-r3-g07602ef'
+  rm -f "$bin/$PICKER"
+  sb noble test_cargo_components
+  assert_success
+  refute_output --partial "$PICKER"
+}
+
+@test "the install step requires the share picker's binary and schema.json on resolute only" {
+  local d="$TREE/debian/shell-build/dest/$PICKER/opt/motanka"
+  mkdir -p "$TREE/debian/shell-build/stamps" "$d/bin"
+  touch "$TREE/debian/shell-build/stamps/$PICKER"
+  printf '#!/bin/sh\n' >"$d/bin/$PICKER"
+  chmod +x "$d/bin/$PICKER"
+  # Only the share picker is "built": every other shipped component is
+  # moved out of the suite, and REQUIRED_FILES is emptied.
+  sb resolute 'for i in "${!C_NAME[@]}"; do
+      if [[ ${C_PACKAGE[$i]} == motanka-stack-shell && ${C_NAME[$i]} != hyprland-preview-share-picker ]]; then
+        C_SUITES[i]=noble
+      fi
+    done
+    REQUIRED_FILES=()
+    cmd_install'
+  assert_failure 1
+  assert_output --partial "motanka-stack-shell would not ship /opt/motanka/share/$PICKER/schema.json"
+}
+
+@test "the share picker patch is in the series, has a DEP-3 header and puts the PKGBUILD's build.rs in place" {
+  local patch="$PKGDIR/debian/patches/$PICKER_PATCH"
+  run grep -x "$PICKER_PATCH" "$PKGDIR/debian/patches/series"
+  assert_success
+  run grep -E '^(Description|Origin|Forwarded):' "$patch"
+  assert_line --regexp '^Description: .+'
+  assert_line 'Origin: https://github.com/omacom/omarchy-pkgs/blob/master/pkgbuilds/hyprland-preview-share-picker/PKGBUILD'
+  assert_line 'Forwarded: not-needed'
+  run grep -xF -- "--- a/$PICKER/build.rs" "$patch"
+  assert_success
+  run grep -xF -- "+++ b/$PICKER/build.rs" "$patch"
+  assert_success
+  # The new side of the hunk (context and added lines) is the whole file.
+  run awk '/^@@ /{ h = 1; next } h && /^[ +]/ { print substr($0, 2) }' "$patch"
+  assert_success
+  assert_output "$PICKER_BUILD_RS"
+  run awk '/^@@ /{ n++ } END { print n + 0 }' "$patch"
+  assert_output 1
+  run grep -c '^@@ -1,[0-9]* +1,3 @@$' "$patch"
+  assert_output 1
+  run awk '/^@@ /{ h = 1; next } h && /^-/ { n++ } END { print n + 0 }' "$patch"
+  (($(tail -n 1 <<<"$output") > 0)) || fail "the patch removes no line of the original build.rs"
+}
+
+@test "the share picker patch's hunk headers match their line counts (dpkg-source applies it with fuzz 0)" {
+  run awk '
+    function check() { if (inh && (old != wo || new != wn)) bad = 1 }
+    /^@@ / {
+      check()
+      inh = 1; old = 0; new = 0; wo = 1; wn = 1
+      if (match($0, /-[0-9]+(,[0-9]+)?/)) { n = split(substr($0, RSTART + 1, RLENGTH - 1), a, ","); if (n == 2) wo = a[2] }
+      if (match($0, /\+[0-9]+(,[0-9]+)?/)) { n = split(substr($0, RSTART + 1, RLENGTH - 1), b, ","); if (n == 2) wn = b[2] }
+      hunks++; next
+    }
+    !inh { next }
+    /^\\/ { next }
+    /^ / || /^$/ { old++; new++; next }
+    /^-/ { old++; next }
+    /^\+/ { new++; next }
+    END {
+      check()
+      if (hunks == 0) { print "no hunk"; exit 1 }
+      if (bad) { print "a hunk header does not match its lines"; exit 1 }
+      print hunks " hunk(s) match"
+    }
+  ' "$PKGDIR/debian/patches/$PICKER_PATCH"
+  assert_success
+  assert_output --regexp '^[0-9]+ hunk\(s\) match$'
+}
+
+@test "the share picker's GTK 4 and gtk4-layer-shell Build-Depends are for resolute only" {
+  run awk '
+    /^#if/ { blk = $0; next }
+    /^#endif/ { blk = ""; next }
+    /^Build-Depends:/ { bd = 1 }
+    bd && /^[A-Z]/ && !/^Build-Depends:/ { bd = 0 }
+    bd {
+      line = $0; sub(/^Build-Depends:/, "", line); gsub(/[ ,]/, " ", line)
+      n = split(line, w, " ")
+      for (i = 1; i <= n; i++) if (w[i] == "libgtk-4-dev" || w[i] == "libgtk4-layer-shell-dev") print w[i] " in " (blk == "" ? "every suite" : blk)
+    }
+  ' "$PKGDIR/debian/control.in"
+  assert_success
+  assert_output "$(printf '%s\n' 'libgtk-4-dev in #if resolute' 'libgtk4-layer-shell-dev in #if resolute')"
+  run grep -E '^[[:space:]]+motanka-stack-hyprland' "$PKGDIR/debian/control.in"
+  assert_failure
+}
+
+# licence_of <Files value>: the License field of that Files stanza.
+licence_of() {
+  awk -v f="Files: $1" '$0 == f { s = 1; next } s && /^License:/ { sub(/^License: /, ""); print; exit }' "$PKGDIR/debian/copyright"
+}
+
+@test "debian/copyright gives the share picker Expat, its crates Expat or Apache-2.0 and hyprland-protocols BSD-3-clause" {
+  [[ $(licence_of "$PICKER/*") == Expat ]] || fail "$PICKER/* is '$(licence_of "$PICKER/*")'"
+  [[ $(licence_of "$PICKER-crates/*") == "Expat or Apache-2.0" ]] || fail "$PICKER-crates/* is '$(licence_of "$PICKER-crates/*")'"
+  [[ $(licence_of "hyprland-protocols/*") == BSD-3-clause ]] || fail "hyprland-protocols/* is '$(licence_of "hyprland-protocols/*")'"
+  run awk -v f="Files: $PICKER/*" '$0 == f { s = 1; next } s && /^Copyright:/ { print; exit }' "$PKGDIR/debian/copyright"
+  assert_output 'Copyright: 2025 WhySoBad'
+}
+
+@test "every License name in debian/copyright has a stand-alone License paragraph" {
+  local name
+  local -a names
+  # The License fields of Files stanzas, except one followed by its own
+  # licence text (the repository's LicenseRef-motanka-no-license-yet).
+  mapfile -t names < <(awk '
+    /^Files:/ { s = 1; next }
+    /^$/ { if (p != "") print p; s = 0; p = ""; just = 0; next }
+    s && just { just = 0; if (/^ /) p = "" }
+    s && /^License:/ { p = substr($0, 10); just = 1 }
+    END { if (p != "") print p }
+  ' "$PKGDIR/debian/copyright" | tr ' ' '\n' | grep -vxE 'or|and|' | LC_ALL=C sort -u)
+  ((${#names[@]} > 0))
+  for name in "${names[@]}"; do
+    awk -v l="License: $name" '$0 == l && prev == "" { found = 1 } { prev = $0 } END { exit !found }' "$PKGDIR/debian/copyright" ||
+      fail "debian/copyright has no stand-alone 'License: $name' paragraph"
   done
 }

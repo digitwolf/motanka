@@ -117,6 +117,108 @@ Files: ttfx-crates/unicode-ident-*
 Copyright: David Tolnay
 License: Expat and Unicode-3.0 or Apache-2.0 and Unicode-3.0
 
+Files: hyprland-protocols/*
+Copyright: 2022-2026 Hypr Development and contributors
+License: BSD-3-clause
+Comment: Used at build time only (26.04): the share picker generates its
+ Wayland protocol code from protocols/hyprland-toplevel-export-v1.xml;
+ no file of this folder is shipped as it is.
+
+Files: hyprland-preview-share-picker/*
+Copyright: 2025 WhySoBad
+License: Expat
+Comment: LICENSE (MIT) of commit 07602ef (v0.3.0 plus pull request 30),
+ built for 26.04 only into /opt/motanka/bin/hyprland-preview-share-picker.
+
+Files: hyprland-preview-share-picker-crates/*
+Copyright: the authors of each crate, as named in its Cargo.toml
+License: Expat or Apache-2.0
+Comment: The crates.io crates that the share picker's Cargo.lock pins, one
+ folder <crate>-<version> each, made by stack/fetch-sources from the lock
+ file and compiled statically into
+ /opt/motanka/bin/hyprland-preview-share-picker (26.04 only). The license
+ of each comes from its Cargo.toml; the stanzas below list the crates whose
+ license is not "MIT OR Apache-2.0".
+
+Files: hyprland-preview-share-picker-crates/gl-0.14.0/* hyprland-preview-share-picker-crates/gl_generator-0.14.0/* hyprland-preview-share-picker-crates/khronos_api-3.1.0/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0
+
+Files: hyprland-preview-share-picker-crates/unicode-ident-1.0.24/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0 and Unicode-3.0 or Expat and Unicode-3.0
+
+Files: hyprland-preview-share-picker-crates/moxcms-0.8.1/* hyprland-preview-share-picker-crates/pxfm-0.1.30/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0 or BSD-3-clause
+
+Files: hyprland-preview-share-picker-crates/ryu-1.0.23/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0 or BSL-1.0
+
+Files: hyprland-preview-share-picker-crates/imgref-1.12.3/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0 or CC0-1.0
+
+Files: hyprland-preview-share-picker-crates/target-lexicon-0.13.5/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Apache-2.0-with-LLVM-exception
+
+Files: hyprland-preview-share-picker-crates/av1-grain-0.2.5/* hyprland-preview-share-picker-crates/rav1e-0.8.1/* hyprland-preview-share-picker-crates/v_frame-0.3.9/*
+Copyright: the authors named in each crate's Cargo.toml
+License: BSD-2-clause
+
+Files: hyprland-preview-share-picker-crates/avif-serialize-0.8.9/* hyprland-preview-share-picker-crates/exr-1.74.2/* hyprland-preview-share-picker-crates/lebe-0.5.3/* hyprland-preview-share-picker-crates/ravif-0.13.0/*
+Copyright: the authors named in each crate's Cargo.toml
+License: BSD-3-clause
+
+Files: hyprland-preview-share-picker-crates/aligned-vec-0.6.4/* hyprland-preview-share-picker-crates/arg_enum_proc_macro-0.3.4/* hyprland-preview-share-picker-crates/av-scenechange-0.14.1/* hyprland-preview-share-picker-crates/built-0.8.1/* hyprland-preview-share-picker-crates/cairo-rs-0.20.12/* hyprland-preview-share-picker-crates/cairo-sys-rs-0.20.10/* hyprland-preview-share-picker-crates/color_quant-1.1.0/* hyprland-preview-share-picker-crates/crunchy-0.2.4/* hyprland-preview-share-picker-crates/darling-0.20.11/* hyprland-preview-share-picker-crates/darling_core-0.20.11/* hyprland-preview-share-picker-crates/darling_macro-0.20.11/* hyprland-preview-share-picker-crates/equator-0.4.2/* hyprland-preview-share-picker-crates/equator-macro-0.4.2/* hyprland-preview-share-picker-crates/fax-0.2.7/* hyprland-preview-share-picker-crates/gdk-pixbuf-0.20.10/* hyprland-preview-share-picker-crates/gdk-pixbuf-sys-0.20.10/* hyprland-preview-share-picker-crates/gdk4-0.9.6/* hyprland-preview-share-picker-crates/gdk4-sys-0.9.6/* hyprland-preview-share-picker-crates/gio-0.20.12/* hyprland-preview-share-picker-crates/gio-sys-0.20.10/* hyprland-preview-share-picker-crates/glib-0.20.12/* hyprland-preview-share-picker-crates/glib-macros-0.20.12/* hyprland-preview-share-picker-crates/glib-sys-0.20.10/* hyprland-preview-share-picker-crates/gobject-sys-0.20.10/* hyprland-preview-share-picker-crates/graphene-rs-0.20.10/* hyprland-preview-share-picker-crates/graphene-sys-0.20.10/* hyprland-preview-share-picker-crates/gsk4-0.9.6/* hyprland-preview-share-picker-crates/gsk4-sys-0.9.6/* hyprland-preview-share-picker-crates/gtk4-0.9.7/* hyprland-preview-share-picker-crates/gtk4-layer-shell-0.4.0/* hyprland-preview-share-picker-crates/gtk4-layer-shell-sys-0.3.0/* hyprland-preview-share-picker-crates/gtk4-macros-0.9.5/* hyprland-preview-share-picker-crates/gtk4-sys-0.9.6/* hyprland-preview-share-picker-crates/interpolate_name-0.2.4/* hyprland-preview-share-picker-crates/libm-0.2.16/* hyprland-preview-share-picker-crates/libredox-0.1.24/* hyprland-preview-share-picker-crates/loop9-0.1.5/* hyprland-preview-share-picker-crates/maybe-rayon-0.1.1/* hyprland-preview-share-picker-crates/memoffset-0.9.1/* hyprland-preview-share-picker-crates/new_debug_unreachable-1.0.6/* hyprland-preview-share-picker-crates/nom-8.0.0/* hyprland-preview-share-picker-crates/nom-language-0.1.0/* hyprland-preview-share-picker-crates/noop_proc_macro-0.3.0/* hyprland-preview-share-picker-crates/pango-0.20.12/* hyprland-preview-share-picker-crates/pango-sys-0.20.10/* hyprland-preview-share-picker-crates/pulp-0.22.3/* hyprland-preview-share-picker-crates/pulp-wasm-simd-flag-0.1.1/* hyprland-preview-share-picker-crates/quick-xml-0.41.0/* hyprland-preview-share-picker-crates/raw-cpuid-11.6.0/* hyprland-preview-share-picker-crates/reborrow-0.5.5/* hyprland-preview-share-picker-crates/redox_users-0.5.2/* hyprland-preview-share-picker-crates/rgb-0.8.53/* hyprland-preview-share-picker-crates/schemars-0.8.22/* hyprland-preview-share-picker-crates/schemars_derive-0.8.22/* hyprland-preview-share-picker-crates/simd-adler32-0.3.10/* hyprland-preview-share-picker-crates/simd_helpers-0.1.0/* hyprland-preview-share-picker-crates/slab-0.4.12/* hyprland-preview-share-picker-crates/strsim-0.11.1/* hyprland-preview-share-picker-crates/tiff-0.11.3/* hyprland-preview-share-picker-crates/tokio-1.53.1/* hyprland-preview-share-picker-crates/tokio-macros-2.7.2/* hyprland-preview-share-picker-crates/tracing-0.1.44/* hyprland-preview-share-picker-crates/tracing-core-0.1.36/* hyprland-preview-share-picker-crates/unsafe-libyaml-0.2.11/* hyprland-preview-share-picker-crates/version-compare-0.2.1/* hyprland-preview-share-picker-crates/wayland-backend-0.3.17/* hyprland-preview-share-picker-crates/wayland-client-0.31.15/* hyprland-preview-share-picker-crates/wayland-protocols-0.32.13/* hyprland-preview-share-picker-crates/wayland-protocols-wlr-0.3.12/* hyprland-preview-share-picker-crates/wayland-scanner-0.31.11/* hyprland-preview-share-picker-crates/wayland-sys-0.31.11/* hyprland-preview-share-picker-crates/winnow-1.0.4/* hyprland-preview-share-picker-crates/xml-rs-0.8.29/* hyprland-preview-share-picker-crates/y4m-0.8.0/* hyprland-preview-share-picker-crates/zmij-1.0.23/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat
+
+Files: hyprland-preview-share-picker-crates/adler2-2.0.1/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or 0BSD or Apache-2.0
+
+Files: hyprland-preview-share-picker-crates/linux-raw-sys-0.12.1/* hyprland-preview-share-picker-crates/rustix-1.1.4/* hyprland-preview-share-picker-crates/wasi-0.11.1+wasi-snapshot-preview1/* hyprland-preview-share-picker-crates/wasip2-1.0.4+wasi-0.2.12/* hyprland-preview-share-picker-crates/wit-bindgen-0.57.1/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or Apache-2.0 or Apache-2.0-with-LLVM-exception
+
+Files: hyprland-preview-share-picker-crates/zerocopy-0.8.57/* hyprland-preview-share-picker-crates/zerocopy-derive-0.8.57/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or Apache-2.0 or BSD-2-clause
+
+Files: hyprland-preview-share-picker-crates/r-efi-5.3.0/* hyprland-preview-share-picker-crates/r-efi-6.0.0/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or Apache-2.0 or LGPL-2.1+
+
+Files: hyprland-preview-share-picker-crates/bytemuck-1.25.2/* hyprland-preview-share-picker-crates/miniz_oxide-0.8.9/* hyprland-preview-share-picker-crates/miniz_oxide-0.9.1/* hyprland-preview-share-picker-crates/zune-core-0.5.3/* hyprland-preview-share-picker-crates/zune-inflate-0.2.54/* hyprland-preview-share-picker-crates/zune-jpeg-0.5.15/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or Apache-2.0 or Zlib
+
+Files: hyprland-preview-share-picker-crates/aho-corasick-1.1.5/* hyprland-preview-share-picker-crates/byteorder-lite-0.1.0/* hyprland-preview-share-picker-crates/jiff-0.2.37/* hyprland-preview-share-picker-crates/jiff-core-0.1.1/* hyprland-preview-share-picker-crates/jiff-static-0.2.37/* hyprland-preview-share-picker-crates/memchr-2.8.3/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Expat or Unlicense
+
+Files: hyprland-preview-share-picker-crates/option-ext-0.2.0/*
+Copyright: the authors named in each crate's Cargo.toml
+License: MPL-2.0
+
+Files: hyprland-preview-share-picker-crates/zlib-rs-0.6.7/*
+Copyright: the authors named in each crate's Cargo.toml
+License: Zlib
+
+Files: hyprland-preview-share-picker-crates/libfuzzer-sys-0.4.13/*
+Copyright: the authors named in its Cargo.toml
+License: Expat or Apache-2.0
+Comment: Cargo.toml says "(MIT OR Apache-2.0) AND NCSA"; the NCSA part is
+ the bundled libFuzzer, whose sources now carry LLVM's license (below).
+
+Files: hyprland-preview-share-picker-crates/libfuzzer-sys-0.4.13/libfuzzer/*
+Copyright: the LLVM Project contributors
+License: Apache-2.0-with-LLVM-exception
+Comment: SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception in every source file.
+
 License: Apache-2.0-with-LLVM-exception
  The Apache License, Version 2.0 (see the Apache-2.0 paragraph), with
  these exceptions:
@@ -200,6 +302,124 @@ License: Expat
  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: 0BSD
+ Permission to use, copy, modify, and/or distribute this software for
+ any purpose with or without fee is hereby granted.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: BSD-2-clause
+ All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+ .
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: BSL-1.0
+ Boost Software License - Version 1.0 - August 17th, 2003
+ .
+ Permission is hereby granted, free of charge, to any person or organization
+ obtaining a copy of the software and accompanying documentation covered by
+ this license (the "Software") to use, reproduce, display, distribute,
+ execute, and transmit the Software, and to prepare derivative works of the
+ Software, and to permit third-parties to whom the Software is furnished to
+ do so, all subject to the following:
+ .
+ The copyright notices in the Software and this entire statement, including
+ the above license grant, this restriction and the following disclaimer,
+ must be included in all copies of the Software, in whole or in part, and
+ all derivative works of the Software, unless such copies or derivative
+ works are solely in the form of machine-executable object code generated by
+ a source language processor.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: CC0-1.0
+ On Debian systems, the complete text of the Creative Commons CC0 1.0 Universal
+ can be found in /usr/share/common-licenses/CC0-1.0.
+
+License: LGPL-2.1+
+ On Debian systems, the complete text of the GNU Lesser General Public License, version 2.1
+ can be found in /usr/share/common-licenses/LGPL-2.1.
+
+License: MPL-2.0
+ On Debian systems, the complete text of the Mozilla Public License, Version 2.0
+ can be found in /usr/share/common-licenses/MPL-2.0.
+
+License: Unlicense
+ This is free and unencumbered software released into the public domain.
+ .
+ Anyone is free to copy, modify, publish, use, compile, sell, or
+ distribute this software, either in source code form or as a compiled
+ binary, for any purpose, commercial or non-commercial, and by any
+ means.
+ .
+ In jurisdictions that recognize copyright laws, the author or authors
+ of this software dedicate any and all copyright interest in the
+ software to the public domain. We make this dedication for the benefit
+ of the public at large and to the detriment of our heirs and
+ successors. We intend this dedication to be an overt act of
+ relinquishment in perpetuity of all present and future rights to this
+ software under copyright law.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+ .
+ For more information, please refer to <http://unlicense.org/>
+
+License: Zlib
+ This software is provided 'as-is', without any express or implied
+ warranty. In no event will the authors be held liable for any damages
+ arising from the use of this software.
+ .
+ Permission is granted to anyone to use this software for any purpose,
+ including commercial applications, and to alter it and redistribute it
+ freely, subject to the following restrictions:
+ .
+ 1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+ .
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+ .
+ 3. This notice may not be removed or altered from any source distribution.
 
 License: Apache-2.0
  Licensed under the Apache License, Version 2.0 (the "License"); you may

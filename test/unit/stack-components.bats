@@ -269,6 +269,39 @@ sline_of() {
   assert_output --partial '  all: {motanka: motanka-stack-shell, reason: "'
 }
 
+@test "the shell builds the share picker from the PKGBUILD's commit with cargo, for resolute only, after ttfx" {
+  local c=hyprland-preview-share-picker
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 2) == 0.3.0.r3.g07602ef ]]
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 3) == https://github.com/WhySoBad/hyprland-preview-share-picker/archive/07602efe7a65dcef5399e22c162edf9fc331c46d.tar.gz ]]
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 4) == e4716b0f3ed45923eb92dc788e6772efecafdd2a9f4c0b1527f1b03c2433e8e4 ]]
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 5) == cargo ]]
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 6) == resolute ]]
+  [[ $(cfield "$SHELL_TSV_REL" "$c" 7) == motanka-stack-shell ]]
+  (($(sline_of ttfx) < $(sline_of "$c"))) || fail "$c is listed before ttfx"
+  [[ -z $(cfield "$SHELL_TSV_REL" "$c-crates" 1) ]] || fail "$c-crates is made by fetch-sources, not listed"
+}
+
+@test "the share picker's hyprland-protocols is the Stack's 0.8.0 tarball, source only, resolute only, before the picker" {
+  local c
+  for c in 2 3 4; do
+    [[ $(cfield "$SHELL_TSV_REL" hyprland-protocols "$c") == "$(field hyprland-protocols "$c")" ]] ||
+      fail "column $c differs from stack/components.tsv"
+  done
+  [[ $(cfield "$SHELL_TSV_REL" hyprland-protocols 2) == 0.8.0 ]]
+  [[ $(cfield "$SHELL_TSV_REL" hyprland-protocols 5) == source ]]
+  [[ $(cfield "$SHELL_TSV_REL" hyprland-protocols 6) == resolute ]]
+  [[ $(cfield "$SHELL_TSV_REL" hyprland-protocols 7) == - ]]
+  (($(sline_of hyprland-protocols) < $(sline_of hyprland-preview-share-picker))) ||
+    fail "hyprland-protocols is listed after hyprland-preview-share-picker"
+}
+
+@test "the Package_Map gives the share picker to motanka-stack-shell on resolute and skips it on noble" {
+  run grep -A2 -x 'hyprland-preview-share-picker:' "$REPO/packages.yaml"
+  assert_line --regexp '^  noble: \{skip: ".*gtk4-layer-shell.*"\}$'
+  assert_line --regexp '^  resolute: \{motanka: motanka-stack-shell, reason: ".+"\}$'
+  refute_output --partial 'all:'
+}
+
 @test "--tsv is still accepted as the old name of --components" {
   run python3 "$FETCH" --tsv "$REPO/$QT6_TSV_REL" --check
   assert_success

@@ -33,6 +33,10 @@ Build-Depends: debhelper-compat (= 13),
                motanka-qt6-dev,
                spirv-tools,
                zlib1g-dev,
+#if resolute
+               libgtk-4-dev,
+               libgtk4-layer-shell-dev,
+#endif
                fontconfig <!nocheck>,
                fonts-dejavu-core <!nocheck>,
                tesseract-ocr <!nocheck>,
@@ -67,3 +71,9 @@ Description: Hyprland stack for Motanka - desktop shell, screenshots, screensave
  .
  It also holds ttfx, the terminal text effects program that upstream
  Omarchy's idle screensaver runs.
+#if resolute
+ .
+ On Ubuntu 26.04 it holds hyprland-preview-share-picker as well, the
+ window and screen picker with previews that xdg-desktop-portal-hyprland
+ shows for screen sharing in the Motanka session.
+#endif

@@ -14,8 +14,11 @@
 #          (shared, libunwind, with the bundled libdwarf-lite source
 #          instead of a git fetch), Quickshell, CMake (noble, build time
 #          only, into debian/shell-build/tools), extra-cmake-modules (build
-#          time only), layer-shell-qt, omasnap and ttfx.
-#          A component of build "cargo" (ttfx) is compiled offline with
+#          time only), layer-shell-qt, omasnap, ttfx and, on resolute,
+#          hyprland-preview-share-picker (with the hyprland-protocols
+#          source, which is not built on its own).
+#          A component of build "cargo" (ttfx, hyprland-preview-share-picker)
+#          is compiled offline with
 #          cargo-1.91 and rustc-1.91: CARGO_HOME in
 #          debian/shell-build/build/<name>/cargo-home has a config.toml that
 #          replaces crates.io with the directory source <name>-crates/ (the
@@ -26,6 +29,14 @@
 #          libc and libgcc_s from the host and has no RUNPATH; rustc's
 #          defaults give it PIE and full RELRO (dpkg-buildflags has no
 #          flags for Rust).
+#          hyprland-preview-share-picker has two more steps around that
+#          recipe: before it, the patched build.rs is checked and the empty
+#          git-submodule folder lib/hyprland-protocols becomes a relative
+#          symbolic link to the hyprland-protocols component folder (the
+#          build fails when that folder or its
+#          protocols/hyprland-toplevel-export-v1.xml is missing); after it,
+#          the built program's "schema" subcommand writes
+#          /opt/motanka/share/hyprland-preview-share-picker/schema.json.
 #          Each is configured out of tree in debian/shell-build/build/<name>,
 #          installed with DESTDIR into debian/shell-build/dest/<name> and
 #          merged into the staging tree debian/shell-build/stage, where the
@@ -40,8 +51,10 @@
 #          into debian/shell-build/tools when it exists (noble) and with
 #          the archive's CMake otherwise (resolute); cpptrace and Quickshell
 #          always use the archive's CMake.
-# test     runs "<name> --version" of every cargo component from the
-#          staging tree (it must print the component's version), then
+# test     runs "<name> --version" of every cargo component of the suite
+#          from the staging tree (it must print the component's version;
+#          an Arch git pkgver such as 0.3.0.r3.g07602ef in its git describe
+#          form 0.3.0-r3-g07602ef), then
 #          omasnap's smoke suite (its test binary, offscreen) as
 #          Upstream's PKGBUILD check() does: QT_QPA_PLATFORM=offscreen, a
 #          private XDG_RUNTIME_DIR, and HOME, XDG_* and TMPDIR in
@@ -51,8 +64,10 @@
 #          code. The suite's
 #          clang-tidy test (omasnap_lint) exists only when run-clang-tidy
 #          is installed, which the chroot does not have.
-# install  copies the shipped files of cpptrace, Quickshell, layer-shell-qt
-#          and omasnap into debian/motanka-stack-shell/opt/motanka, leaving
+# install  copies the shipped files of cpptrace, Quickshell, layer-shell-qt,
+#          omasnap and the cargo components of the suite (on resolute with
+#          the share picker's schema.json, which must be there) into
+#          debian/motanka-stack-shell/opt/motanka, leaving
 #          out headers, .pc and CMake files, static libraries and build-only
 #          data, puts omasnap's font and icon licence files in
 #          /usr/share/doc/motanka-stack-shell/omasnap, and checks that
@@ -95,6 +110,12 @@ OMASNAP_PROTOCOLS=(
   staging/ext-image-capture-source/ext-image-capture-source-v1.xml
   staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml
 )
+# The screen share picker (resolute only), the hyprland-protocols file it
+# generates code from (relative to the hyprland-protocols folder) and its
+# patch.
+SHARE_PICKER=hyprland-preview-share-picker
+SHARE_PICKER_PROTOCOL=protocols/hyprland-toplevel-export-v1.xml
+SHARE_PICKER_PATCH=hyprland-preview-share-picker-build-rs.patch
 # Shipped files the package must contain (relative to /opt/motanka), and
 # the ELF files whose Qt libraries must resolve from /opt/motanka/lib.
 REQUIRED_FILES=(
@@ -375,6 +396,71 @@ EOF
   install -D -m 0755 "$bin" "$DEST/$name$PREFIX/bin/$name"
 }
 
+# version_text <version>: the version as a cargo component's --version
+# prints it. An Arch pkgver of a git commit (0.3.0.r3.g07602ef) is printed
+# in git describe form (0.3.0-r3-g07602ef); other versions as they are.
+version_text() {
+  if [[ $1 =~ ^(.+)\.r([0-9]+)\.g([0-9a-f]+)$ ]]; then
+    printf '%s-r%s-g%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+# share_picker_prepare <src>: runs before build_cargo of the share picker.
+# build.rs must be the patched one, which names the pinned version and runs
+# no git. lib/hyprland-protocols, the empty folder of the git submodule in
+# the tarball, becomes the relative symbolic link ../../hyprland-protocols
+# to the hyprland-protocols component folder, as Upstream's PKGBUILD links
+# the submodule: the XML is read from the one checksum-pinned copy, and
+# debian/rules clean puts the empty folder back.
+share_picker_prepare() {
+  local src=$1 link=$1/lib/hyprland-protocols want text
+  want=$(version_of hyprland-protocols) ||
+    die "stack/shell-components.tsv has no hyprland-protocols line; $SHARE_PICKER needs it"
+  [[ -d $TOP/hyprland-protocols ]] ||
+    die "component source hyprland-protocols/ is missing; the source package lacks ${PKG}_*.orig-hyprland-protocols.tar.gz, which $SHARE_PICKER needs"
+  [[ -f $TOP/hyprland-protocols/$SHARE_PICKER_PROTOCOL ]] ||
+    die "hyprland-protocols/$SHARE_PICKER_PROTOCOL is missing; hyprland-protocols $want does not have the protocol $SHARE_PICKER needs"
+  [[ -f $src/build.rs ]] || die "$SHARE_PICKER/build.rs is missing"
+  if grep -q 'Command' "$src/build.rs"; then
+    die "$SHARE_PICKER/build.rs still runs git; debian/patches/$SHARE_PICKER_PATCH is not applied"
+  fi
+  text=$(version_text "$(version_of "$SHARE_PICKER")")
+  grep -qF "cargo::rustc-env=GIT_VERSION=v$text\"" "$src/build.rs" ||
+    die "$SHARE_PICKER/build.rs does not set GIT_VERSION=v$text, the version stack/shell-components.tsv pins; update debian/patches/$SHARE_PICKER_PATCH"
+  [[ -d $src/lib ]] || die "$SHARE_PICKER/lib/ is missing"
+  if [[ -L $link ]]; then
+    rm -f -- "$link"
+  elif [[ -d $link ]]; then
+    rmdir -- "$link" 2>/dev/null ||
+      die "$SHARE_PICKER/lib/hyprland-protocols/ is not empty; expected the empty folder of the git submodule"
+  elif [[ -e $link ]]; then
+    die "$SHARE_PICKER/lib/hyprland-protocols is neither a folder nor a symbolic link"
+  fi
+  ln -s ../../hyprland-protocols "$link"
+  [[ -f $link/$SHARE_PICKER_PROTOCOL ]] ||
+    die "$SHARE_PICKER/lib/hyprland-protocols/$SHARE_PICKER_PROTOCOL does not resolve after linking"
+  log "$SHARE_PICKER: lib/hyprland-protocols -> hyprland-protocols $want"
+}
+
+# share_picker_finish <name>: runs after build_cargo of the share picker.
+# The built program's hidden "schema" subcommand, which needs no display,
+# writes its config file's JSON schema to
+# /opt/motanka/share/<name>/schema.json, as Upstream's PKGBUILD installs it.
+share_picker_finish() {
+  local name=$1 bin=$DEST/$1$PREFIX/bin/$1 tmp=$BUILD/$1/schema.json rc=0 out
+  [[ -x $bin ]] || die "$bin is missing; build_cargo installs it"
+  mkdir -p "${tmp%/*}"
+  env -u LD_LIBRARY_PATH -u WAYLAND_DISPLAY -u DISPLAY timeout 60 "$bin" schema >"$tmp" || rc=$?
+  ((rc == 0)) || die "$name schema failed with exit code $rc"
+  out=$(<"$tmp")
+  out=${out#"${out%%[![:space:]]*}"}
+  [[ $out == "{"* ]] || die "$name schema printed no JSON object"
+  install -D -m 0644 "$tmp" "$DEST/$name$PREFIX/share/$name/schema.json"
+  log "$name: config schema in $PREFIX/share/$name/schema.json ($(wc -c <"$tmp") bytes)"
+}
+
 # build_one <index>
 build_one() {
   local i=$1 name version build src
@@ -445,6 +531,20 @@ build_one() {
         -DOMASNAP_VERSION="$version" \
         -DOMASNAP_WAYLAND_PROTOCOLS_DIR="$STAGE$PREFIX/share/wayland-protocols"
       ;;
+    hyprland-protocols)
+      # resolute only (stack/shell-components.tsv).
+      [[ $build == source ]] || die "hyprland-protocols must have build 'source'"
+      log "hyprland-protocols: source only; $SHARE_PICKER reads its protocol XML"
+      return 0
+      ;;
+    "$SHARE_PICKER")
+      # resolute only: the cargo recipe with the share picker's own steps
+      # before and after it.
+      [[ $build == cargo ]] || die "$SHARE_PICKER must have build 'cargo'"
+      share_picker_prepare "$src"
+      build_cargo "$name" "$src"
+      share_picker_finish "$name"
+      ;;
     *)
       # A Rust program: the recipe is the same for every cargo component.
       [[ $build == cargo ]] || die "no recipe for component $name"
@@ -506,7 +606,7 @@ test_cargo_components() {
     in_suite "$i" || continue
     [[ ${C_BUILD[$i]} == cargo ]] || continue
     name=${C_NAME[$i]}
-    version=${C_VERSION[$i]}
+    version=$(version_text "${C_VERSION[$i]}")
     bin=$STAGE$PREFIX/bin/$name
     [[ -x $bin ]] || die "$bin is missing; run the build step first"
     rc=0
@@ -715,6 +815,13 @@ cmd_install() {
   for rel in "${REQUIRED_FILES[@]}"; do
     f=$TOP/debian/$PKG$PREFIX/$rel
     [[ -e $f || -L $f ]] || die "$PKG would not ship $PREFIX/$rel"
+  done
+  for i in "${!C_NAME[@]}"; do
+    if in_suite "$i" && [[ ${C_NAME[$i]} == "$SHARE_PICKER" ]]; then
+      for rel in "bin/$SHARE_PICKER" "share/$SHARE_PICKER/schema.json"; do
+        [[ -f $TOP/debian/$PKG$PREFIX/$rel ]] || die "$PKG would not ship $PREFIX/$rel"
+      done
+    fi
   done
   compgen -G "$TOP/debian/$PKG$PREFIX/lib/libcpptrace.so.*" >/dev/null || die "$PKG would not ship libcpptrace"
   install_omasnap_licences

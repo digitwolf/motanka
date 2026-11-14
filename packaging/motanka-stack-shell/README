@@ -3,7 +3,9 @@ upstream Omarchy v4.5.0, and cpptrace 1.0.4 (shared, with libunwind and a
 bundled libdwarf-lite); omasnap 1.26.2, Upstream's screenshot tool, and
 layer-shell-qt 6.8.3, the Qt library omasnap draws its capture overlay
 with; ttfx 0.5.1, the text effects program of Upstream's screensaver. All
-under /opt/motanka, for both suites.
+under /opt/motanka, for both suites. On resolute only it also has
+hyprland-preview-share-picker 0.3.0.r3.g07602ef, the screen share picker
+of Upstream's xdg-desktop-portal-hyprland configuration.
 
 The upstream tarballs are listed in stack/shell-components.tsv (imported by
 build-imports); test/vm/build fetches them with stack/fetch-sources
@@ -79,6 +81,43 @@ ttfx:
   - Installed file: /opt/motanka/bin/ttfx. It loads only libc and libgcc_s
     from the host, so it has no RUNPATH; rustc's defaults give it PIE and
     full RELRO. The test step runs ttfx --version from the staging tree.
+
+hyprland-preview-share-picker (resolute only):
+  - Upstream's config/hypr/xdph.conf sets screencopy:custom_picker_binary
+    to hyprland-preview-share-picker, and xdg-desktop-portal-hyprland 1.5.0
+    fails the share request ("Could not open the share picker.") when that
+    program cannot start; there is no fallback. The Stack builds xdph for
+    26.04 only and 24.04 has no gtk4-layer-shell, so noble gets neither,
+    and packages.yaml skips the picker there.
+  - Pinned to the commit of Upstream's PKGBUILD (omacom/omarchy-pkgs):
+    v0.3.0 plus WhySoBad/hyprland-preview-share-picker#30 (shm pool sizing).
+    Build "cargo", like ttfx, with the crates component
+    hyprland-preview-share-picker-crates; the components file lists it for
+    resolute, so noble's build unpacks it but skips it.
+  - debian/patches/hyprland-preview-share-picker-build-rs.patch replaces
+    build.rs with the PKGBUILD's, which sets GIT_VERSION to
+    v0.3.0-r3-g07602ef; the original asks git and panics without a
+    repository.
+  - lib/hyprland-protocols is an empty git-submodule folder in the tarball.
+    The build replaces it with a symbolic link to the hyprland-protocols
+    component (the Stack's 0.8.0 tarball, build "source", resolute only);
+    the one file it reads, protocols/hyprland-toplevel-export-v1.xml, is
+    byte-identical to the submodule commit the PKGBUILD uses. debian/rules
+    clean puts the empty folder back.
+  - Build-Depends on resolute: libgtk-4-dev and libgtk4-layer-shell-dev
+    (#if resolute in debian/control.in). The run-time libraries (GTK 4,
+    gtk4-layer-shell, GLib, cairo, pango, ...) come from ${shlibs:Depends}.
+  - Installed files: /opt/motanka/bin/hyprland-preview-share-picker (no
+    RUNPATH, host libraries only) and
+    /opt/motanka/share/hyprland-preview-share-picker/schema.json, written by
+    the built program's schema subcommand during the build. The test step
+    checks that --version prints v0.3.0-r3-g07602ef.
+  - It runs only through xdg-desktop-portal-hyprland, which finds it on the
+    PATH of the systemd user manager; the Motanka session puts
+    /opt/motanka/bin there. xdph and hyprland are in motanka-stack-hyprland,
+    which motanka-stack pulls in; this package does not depend on it.
+    Upstream's optional dependency slurp (region selection) is not a
+    dependency either.
 
 layer-shell-qt ships libLayerShellQtInterface in /opt/motanka/lib, the Qt
 Wayland shell integration plugin in

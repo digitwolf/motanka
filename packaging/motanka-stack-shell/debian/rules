@@ -1,8 +1,10 @@
 #!/usr/bin/make -f
 # Builds the components of stack/shell-components.tsv (cpptrace, Quickshell,
-# layer-shell-qt, omasnap and ttfx, with wayland-protocols, libdwarf-lite,
-# extra-cmake-modules and, on noble, wayland and CMake at build time; ttfx
-# offline from the crates of the ttfx-crates component) for
+# layer-shell-qt, omasnap, ttfx and, on resolute,
+# hyprland-preview-share-picker, with wayland-protocols, libdwarf-lite,
+# extra-cmake-modules, on noble wayland and CMake, and on resolute
+# hyprland-protocols at build time; the cargo components offline from the
+# crates of their <name>-crates components) for
 # the suite in the changelog (noble or resolute, stamped by
 # packaging/build.sh) with prefix /opt/motanka, into motanka-stack-shell.
 # The work is done by debian/shell-build.sh; see the comment at its top.
@@ -17,15 +19,23 @@ STAGE_LIB := $(CURDIR)/debian/shell-build/stage/opt/motanka/lib
 %:
 	dh $@
 
+# The share picker's build replaces the empty git-submodule folder
+# lib/hyprland-protocols with a symbolic link to hyprland-protocols/;
+# clean puts the empty folder of the orig tarball back.
+SHARE_PICKER_PROTOCOLS := hyprland-preview-share-picker/lib/hyprland-protocols
+
 override_dh_auto_clean:
 	rm -rf debian/shell-build debian/shlibs.local
+	if [ -L $(SHARE_PICKER_PROTOCOLS) ]; then \
+		rm -f $(SHARE_PICKER_PROTOCOLS) && mkdir $(SHARE_PICKER_PROTOCOLS); \
+	fi
 
 override_dh_auto_configure:
 
 override_dh_auto_build:
 	bash debian/shell-build.sh build $(DIST)
 
-# ttfx --version, then omasnap's smoke suite, offscreen (Upstream's
+# --version of the cargo components, then omasnap's smoke suite, offscreen (Upstream's
 # PKGBUILD check()).
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
