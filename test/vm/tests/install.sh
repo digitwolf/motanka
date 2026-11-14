@@ -28,7 +28,7 @@
 #     motanka-cli.tar.gz next to pool/ and dists/
 #
 # Test VMs, each from a fresh overlay:
-#   resolute: fresh (install through the bootstrap), gnome-snaps and
+#   resolute: fresh (install through the bootstrap), gnome-snaps, kde and
 #             multiuser (install through the CLI), and a second fresh VM
 #             for the interrupted install
 #   noble:    fresh (install through the bootstrap)
@@ -365,6 +365,7 @@ run_variant() {
 if [[ $release == resolute ]]; then
   run_variant fresh full bootstrap
   run_variant gnome-snaps full cli
+  run_variant kde full cli
   run_variant multiuser full cli
   run_variant fresh interrupt cli
 else
