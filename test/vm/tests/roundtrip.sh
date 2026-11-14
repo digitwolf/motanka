@@ -11,8 +11,9 @@
 #
 # Environment:
 #   MOTANKA_VM_RELEASE       resolute (default: variants fresh,
-#                            gnome-snaps+apps, kde+apps, multiuser) or noble
-#                            (variants fresh, fresh+apps)
+#                            fresh+apps, gnome-snaps+apps, kde+apps,
+#                            multiuser) or noble (variants fresh,
+#                            fresh+apps, gnome-snaps+apps, kde+apps)
 #   MOTANKA_VM_RESULTS       log folder
 #   MOTANKA_ROUNDTRIP_LOGIN  0 to skip the first login
 #   MOTANKA_ROUNDTRIP_VARIANTS  space-separated subset of the variants; a
@@ -97,9 +98,9 @@ finish() {
 }
 
 if [[ $release == resolute ]]; then
-  variants=(fresh gnome-snaps+apps kde+apps multiuser)
+  variants=(fresh fresh+apps gnome-snaps+apps kde+apps multiuser)
 else
-  variants=(fresh fresh+apps)
+  variants=(fresh fresh+apps gnome-snaps+apps kde+apps)
 fi
 if [[ -n ${MOTANKA_ROUNDTRIP_VARIANTS:-} ]]; then
   read -r -a variants <<<"$MOTANKA_ROUNDTRIP_VARIANTS"
