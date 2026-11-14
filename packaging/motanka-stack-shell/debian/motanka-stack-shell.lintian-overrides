@@ -9,3 +9,7 @@ custom-library-search-path
 # libcpptrace and libLayerShellQtInterface are private libraries of the
 # shell and of omasnap, not library packages.
 package-name-doesnt-match-sonames
+# The share picker's serde_yaml uses unsafe-libyaml, a Rust translation of
+# libyaml compiled in with the rest of the crates (no copy of the C library);
+# Debian's own Rust packages override this tag for the same reason.
+embedded-library libyaml [opt/motanka/bin/hyprland-preview-share-picker]
