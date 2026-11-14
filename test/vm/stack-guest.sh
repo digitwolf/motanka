@@ -3,7 +3,7 @@
 # user tester (passwordless sudo in the VM). Never run it on a real machine:
 # it installs and purges packages and configures tty1 autologin.
 #
-# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version>
+# Usage: bash stack-guest.sh <phase> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version>
 #
 # Work folder /tmp/motanka-stack-test (T): debs/ holds the Stack .debs
 # (motanka-stack, motanka-qt6 and motanka-stack-shell), debcheck is
@@ -29,8 +29,15 @@
 #            from /opt/motanka/lib; its menu entry and icon are under
 #            /opt/motanka/share and not in /usr/share; motanka-stack-shell
 #            depends on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and
-#            xdg-utils, which are installed; Ubuntu's hyprland and Qt
-#            packages unchanged.
+#            xdg-utils, which are installed; /opt/motanka/bin/ttfx
+#            (task 7.9; requirements 3.4, 7.2, 7.3) belongs to
+#            motanka-stack-shell, loads no library from /opt/motanka/lib,
+#            "ttfx --version" exits 0 and prints <ttfx-version>, and one
+#            render of a one-line text with the flags Upstream's
+#            omarchy-screensaver passes (-i, --frame-rate, --random-effect,
+#            --no-eol, --no-restore-cursor) exits 0 within 30 s in a
+#            pseudo-terminal (script); Ubuntu's hyprland and Qt packages
+#            unchanged.
 #   session  start /opt/motanka/bin/start-hyprland on tty1 through getty
 #            autologin; Hyprland runs from /opt/motanka, hyprctl lists
 #            Virtual-1, grim takes a screenshot, no process has
@@ -533,6 +540,52 @@ check_omasnap_install() {
   done
 }
 
+# check_ttfx_install: ttfx from motanka-stack-shell (task 7.9), the text
+# effects program Upstream's omarchy-screensaver runs.
+check_ttfx_install() {
+  local bin=$PREFIX/bin/ttfx v rc=0 owner libs
+  if [[ -x $bin ]]; then
+    pass "$bin is installed"
+  else
+    fail "$bin is missing or not executable"
+    return
+  fi
+  owner=$(dpkg-query -S "$bin" 2>/dev/null || true)
+  if [[ $owner == motanka-stack-shell:* ]]; then
+    pass "$bin belongs to motanka-stack-shell"
+  else
+    fail "$bin belongs to '${owner:-no package}', not motanka-stack-shell"
+  fi
+  libs=$(ldd "$bin" 2>&1 || true)
+  if grep -qF "$PREFIX/lib/" <<<"$libs"; then
+    fail "ttfx loads libraries from $PREFIX/lib:"
+    grep -F "$PREFIX/lib/" <<<"$libs" | show
+  else
+    pass "ttfx loads only host libraries: $(awk '$2 == "=>" { print $1 }' <<<"$libs" | xargs)"
+  fi
+  v=$(timeout 30 "$bin" --version 2>"$L/ttfx-version.err") || rc=$?
+  if ((rc == 0)) && grep -qF "$TTFX_VERSION" <<<"$v"; then
+    pass "ttfx --version exits 0 and prints '$v'"
+  else
+    fail "ttfx --version printed '$v' (exit $rc), expected version $TTFX_VERSION"
+    show "$L/ttfx-version.err"
+  fi
+  # One render in a pseudo-terminal of 80x24 (script gives its pty no size
+  # when its own input is not a terminal), as the screensaver's terminal
+  # would run it; --frame-rate 0 renders without frame limit.
+  printf 'motanka\n' >"$T/ss.txt"
+  rc=0
+  TERM=xterm-256color timeout 30 script -qec \
+    "stty rows 24 cols 80 2>/dev/null; exec $bin -i $T/ss.txt --frame-rate 0 --random-effect --no-eol --no-restore-cursor" \
+    /dev/null </dev/null >"$L/ttfx-render.log" 2>&1 || rc=$?
+  if ((rc == 0)); then
+    pass "ttfx rendered $T/ss.txt with a random effect in a pseudo-terminal ($(stat -c %s "$L/ttfx-render.log") bytes of output)"
+  else
+    fail "ttfx render in a pseudo-terminal exited $rc (124: still running after 30 s)"
+    tail -c 2000 "$L/ttfx-render.log" | cat -v | show
+  fi
+}
+
 phase_install() {
   local p rc=0 v
   mkdir -p "$L"
@@ -566,6 +619,7 @@ phase_install() {
   check_stack_qt
   check_shell_install
   check_omasnap_install
+  check_ttfx_install
   v=$("$PREFIX/bin/Hyprland" --version 2>&1 | head -n 3 || true)
   if grep -qF "$HYPR_VERSION" <<<"$v"; then
     pass "Hyprland --version reports $HYPR_VERSION"
@@ -965,8 +1019,8 @@ set_pkgs() {
 }
 
 main() {
-  (($# == 6)) || {
-    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version>" >&2
+  (($# == 7)) || {
+    echo "usage: bash stack-guest.sh <prepare|install|session|purge> <release> <hyprland-version> <quickshell-version> <qt-version> <omasnap-version> <ttfx-version>" >&2
     exit 2
   }
   PHASE=$1
@@ -975,6 +1029,7 @@ main() {
   QS_VERSION=$4
   QT_VERSION=$5
   OMASNAP_VERSION=$6
+  TTFX_VERSION=$7
   case $RELEASE in
     noble | resolute) ;;
     *)

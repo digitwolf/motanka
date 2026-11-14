@@ -30,7 +30,9 @@
 # stack/fetch-sources --components <file>, which runs on the host (it only
 # downloads and verifies) and caches them in
 # ~/.cache/motanka-vm/stack-src-tarballs/, so a rebuild downloads nothing.
-# Only the tarballs of the packages being built are copied into the VM.
+# Only the tarballs of the packages being built are copied into the VM; a
+# cargo component's orig-<name>-crates tarball (its crates.io crates, which
+# fetch-sources caches in downloads/crates/) is one of them.
 # Unpinned checksums stop the build; pin them with
 # stack/fetch-sources --components <file> --update-checksums after review.
 # A package whose suites file lists none of the requested suites is not

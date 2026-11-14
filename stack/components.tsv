@@ -16,9 +16,14 @@
 #             cmake-tool (CMake built with the release's own CMake into a
 #             build-only prefix; noble's CMake 3.28 is older than the 3.30
 #             Hyprland and the 3.31 glaze require). Other components files
-#             also use qt, source and files (plain files installed as
+#             also use qt, source, files (plain files installed as
 #             they are, from a tarball that may have no top-level folder;
-#             stack/fonts-components.tsv)
+#             stack/fonts-components.tsv) and cargo (a Rust program whose
+#             tarball has a Cargo.lock at its top: stack/fetch-sources
+#             downloads every crates.io crate it lists, checks each against
+#             the lock file's SHA-256 and packs them into one more orig
+#             component <name>-crates, so the build compiles offline;
+#             stack/shell-components.tsv)
 #   suites    noble | resolute | both: the suites that build the component
 #   package   binary package for the component's programs and data, or '-'
 #             for build-time only. Shared libraries (lib/*.so.*) always go

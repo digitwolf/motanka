@@ -2,7 +2,8 @@
 #@packages motanka-stack-shell
 # Upstream components of motanka-stack-shell: Quickshell, the desktop shell
 # of upstream Omarchy v4.5.0, and cpptrace, which its crash handler needs;
-# omasnap, Upstream's screenshot tool, and layer-shell-qt, which it needs.
+# omasnap, Upstream's screenshot tool, and layer-shell-qt, which it needs;
+# ttfx, the text effects program of Upstream's screensaver.
 #
 # Same format as stack/components.tsv (see the comment there). Built by
 # packaging/motanka-stack-shell/debian/shell-build.sh in file order, for
@@ -59,6 +60,20 @@
 #                      debian/patches/omasnap-wayland-protocols-dir.patch
 #                      makes that folder a cache variable, which the build
 #                      points at the staged wayland-protocols.
+#   ttfx               Upstream's Rust port of terminaltexteffects
+#                      (omacom/ttfx); Upstream's bin/omarchy-screensaver
+#                      runs it in a loop and polls for it, so without it
+#                      the idle screensaver spins and cannot be dismissed.
+#                      Build "cargo": stack/fetch-sources reads the
+#                      tarball's Cargo.lock, downloads every crates.io
+#                      crate it lists, checks each against the lock file's
+#                      SHA-256 and packs them into the extra component
+#                      ttfx-crates (orig-ttfx-crates.tar.gz, no pin of its
+#                      own: Cargo.lock is inside the pinned tarball). The
+#                      build compiles offline with the archive's cargo-1.91
+#                      and rustc-1.91 against that folder. ttfx loads only
+#                      libc and libgcc_s from the host, so it has no
+#                      RUNPATH.
 #
 # Download, verify and pin: stack/fetch-sources --components stack/shell-components.tsv
 #
@@ -72,3 +87,4 @@ cmake	4.5.0	https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.
 extra-cmake-modules	6.32.0	https://download.kde.org/stable/frameworks/6.32/extra-cmake-modules-6.32.0.tar.xz	305f4e2b82eb073be6ac3e50ace85578b3c0c409be262ccc51d445449e3d9312	cmake	both	-
 layer-shell-qt	6.8.3	https://download.kde.org/stable/plasma/6.8.3/layer-shell-qt-6.8.3.tar.xz	af3e56be10eb95a5993600449d6c811a08d491f7905c40a1203040b5baf98f9e	cmake	both	motanka-stack-shell
 omasnap	1.26.2	https://github.com/omacom/omasnap/archive/refs/tags/v1.26.2.tar.gz	e173edd4f2e797273c967513f24c360b6f00733792b9708757a82c39fbc43bf9	cmake	both	motanka-stack-shell
+ttfx	0.5.1	https://github.com/omacom/ttfx/archive/refs/tags/v0.5.1.tar.gz	3f10b987b7690aa3caa2fa4f1749d8c7904e177380eff3e000d3422da8eb0134	cargo	both	motanka-stack-shell

@@ -14,5 +14,8 @@ motanka-stack-shell (0.1.0-1) UNRELEASED; urgency=medium
     during the build. Its menu entry and icon go under /opt/motanka/share,
     the font and icon licences to /usr/share/doc/motanka-stack-shell/omasnap.
     Depend on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and xdg-utils.
+  * Add ttfx 0.5.1, the text effects program of Upstream's screensaver,
+    built offline with cargo-1.91 and rustc-1.91 from the crates of the new
+    orig-ttfx-crates component, as /opt/motanka/bin/ttfx.
 
  -- Ruslan Babych <1285978+digitwolf@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000

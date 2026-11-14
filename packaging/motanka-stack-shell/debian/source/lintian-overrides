@@ -1,6 +1,8 @@
 # The orig-<component> tarballs are upstream release tarballs and tag
 # archives, used unmodified and pinned by SHA-256 in
-# stack/shell-components.tsv. Their test data, documentation and bundled
+# stack/shell-components.tsv; orig-ttfx-crates holds the crates.io crates
+# that ttfx's Cargo.lock pins, unmodified and checked against the lock
+# file's SHA-256 by stack/fetch-sources. Their test data, documentation and bundled
 # third-party trees (for example CMake's test suite) are not rebuilt from
 # source because nothing from them is built or shipped.
 source-is-missing

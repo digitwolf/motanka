@@ -2,7 +2,8 @@ Source of motanka-stack-shell: Quickshell 0.3.2, the desktop shell of
 upstream Omarchy v4.5.0, and cpptrace 1.0.4 (shared, with libunwind and a
 bundled libdwarf-lite); omasnap 1.26.2, Upstream's screenshot tool, and
 layer-shell-qt 6.8.3, the Qt library omasnap draws its capture overlay
-with. All under /opt/motanka, for both suites.
+with; ttfx 0.5.1, the text effects program of Upstream's screensaver. All
+under /opt/motanka, for both suites.
 
 The upstream tarballs are listed in stack/shell-components.tsv (imported by
 build-imports); test/vm/build fetches them with stack/fetch-sources
@@ -58,6 +59,26 @@ omasnap:
     package depends on tesseract-ocr, tesseract-ocr-eng, wl-clipboard and
     xdg-utils, as Upstream's package does. It captures the screen through
     the compositor's ext-image-copy-capture-v1.
+
+ttfx:
+  - Upstream's Rust port of terminaltexteffects (omacom/ttfx).
+    bin/omarchy-screensaver runs it in a loop and polls for it with pgrep,
+    so without it the idle screensaver spins and cannot be dismissed.
+  - Its component has build "cargo". stack/fetch-sources reads the
+    Cargo.lock inside the ttfx tarball, refuses any package not from the
+    crates.io registry, downloads every crate it lists, checks each against
+    the lock file's SHA-256 and packs them reproducibly into one more orig
+    component, motanka-stack-shell_<V>.orig-ttfx-crates.tar.gz (folder
+    ttfx-crates/<crate>-<version>/ with a .cargo-checksum.json each).
+    packaging/build.sh refuses to build without it.
+  - The build runs cargo-1.91 build --release --frozen --offline with
+    rustc-1.91 (both releases carry Rust 1.91 in the archive; noble's
+    unversioned cargo is too old for some crates). CARGO_HOME has a
+    config.toml that replaces crates.io with the directory source
+    ttfx-crates/; the network-less chroot is never asked for anything.
+  - Installed file: /opt/motanka/bin/ttfx. It loads only libc and libgcc_s
+    from the host, so it has no RUNPATH; rustc's defaults give it PIE and
+    full RELRO. The test step runs ttfx --version from the staging tree.
 
 layer-shell-qt ships libLayerShellQtInterface in /opt/motanka/lib, the Qt
 Wayland shell integration plugin in

@@ -14,7 +14,18 @@
 #          (shared, libunwind, with the bundled libdwarf-lite source
 #          instead of a git fetch), Quickshell, CMake (noble, build time
 #          only, into debian/shell-build/tools), extra-cmake-modules (build
-#          time only), layer-shell-qt and omasnap.
+#          time only), layer-shell-qt, omasnap and ttfx.
+#          A component of build "cargo" (ttfx) is compiled offline with
+#          cargo-1.91 and rustc-1.91: CARGO_HOME in
+#          debian/shell-build/build/<name>/cargo-home has a config.toml that
+#          replaces crates.io with the directory source <name>-crates/ (the
+#          orig-<name>-crates component that stack/fetch-sources makes from
+#          the component's Cargo.lock), the target folder is
+#          debian/shell-build/build/<name>/target, and target/release/<name>
+#          is installed as /opt/motanka/bin/<name>. Its binary loads only
+#          libc and libgcc_s from the host and has no RUNPATH; rustc's
+#          defaults give it PIE and full RELRO (dpkg-buildflags has no
+#          flags for Rust).
 #          Each is configured out of tree in debian/shell-build/build/<name>,
 #          installed with DESTDIR into debian/shell-build/dest/<name> and
 #          merged into the staging tree debian/shell-build/stage, where the
@@ -29,7 +40,9 @@
 #          into debian/shell-build/tools when it exists (noble) and with
 #          the archive's CMake otherwise (resolute); cpptrace and Quickshell
 #          always use the archive's CMake.
-# test     runs omasnap's smoke suite (its test binary, offscreen) as
+# test     runs "<name> --version" of every cargo component from the
+#          staging tree (it must print the component's version), then
+#          omasnap's smoke suite (its test binary, offscreen) as
 #          Upstream's PKGBUILD check() does: QT_QPA_PLATFORM=offscreen, a
 #          private XDG_RUNTIME_DIR, and HOME, XDG_* and TMPDIR in
 #          throwaway folders (the runtime and temporary ones short, under
@@ -44,7 +57,9 @@
 #          data, puts omasnap's font and icon licence files in
 #          /usr/share/doc/motanka-stack-shell/omasnap, and checks that
 #          every Qt library the shipped programs, libraries and plugins
-#          load resolves from /opt/motanka/lib.
+#          load resolves from /opt/motanka/lib. Every shipped ELF has
+#          RUNPATH /opt/motanka/lib, except the files of cargo
+#          components, which must have none.
 # shlibs   writes debian/shlibs.local: the libraries this package ships
 #          (libcpptrace) and every library that installed Motanka packages
 #          put in /opt/motanka/lib (motanka-qt6; on noble also
@@ -85,6 +100,7 @@ OMASNAP_PROTOCOLS=(
 REQUIRED_FILES=(
   bin/quickshell
   bin/omasnap
+  bin/ttfx
   lib/libLayerShellQtInterface.so.6
   lib/qt6/plugins/wayland-shell-integration/liblayer-shell.so
   lib/qt6/qml/org/kde/layershell/qmldir
@@ -97,12 +113,19 @@ QT_CHECKED_FILES=(
   lib/qt6/plugins/wayland-shell-integration/liblayer-shell.so
 )
 
+# The Rust toolchain of both archives (Build-Depends); the unversioned cargo
+# of noble is too old for some crates.
+CARGO_BIN=cargo-1.91
+RUSTC_BIN=rustc-1.91
+
 C_NAME=()
 C_VERSION=()
 C_BUILD=()
 C_SUITES=()
 C_PACKAGE=()
 JOBS=1
+# Shipped files (relative to /opt/motanka) of cargo components: no RUNPATH.
+declare -A NO_RUNPATH=()
 
 log() {
   printf 'shell-build: %s\n' "$*" >&2
@@ -315,6 +338,43 @@ check_libdwarf_pin() {
   fi
 }
 
+# build_cargo <name> <src>: a Rust program, offline, with the crates of the
+# component <name>-crates as Cargo's only source. CARGO_HOME and the target
+# folder are below debian/shell-build/build/<name>, so nothing is written
+# into the unpacked source. Paths of the source tree are remapped in the
+# binary, so the build folder does not end up in it.
+build_cargo() {
+  local name=$1 src=$2 crates=$TOP/$1-crates work=$BUILD/$1 bin
+  local home=$work/cargo-home target=$work/target
+  command -v "$CARGO_BIN" >/dev/null || die "$CARGO_BIN is missing (Build-Depends)"
+  command -v "$RUSTC_BIN" >/dev/null || die "$RUSTC_BIN is missing (Build-Depends)"
+  [[ -f $src/Cargo.lock ]] || die "$name/Cargo.lock is missing; a cargo component builds only what its lock file pins"
+  [[ -d $crates ]] || die "component source $name-crates/ is missing; the source package lacks ${PKG}_*.orig-$name-crates.tar.gz (stack/fetch-sources makes it)"
+  if [[ $crates == *[\"\\]* || $TOP == *[[:space:]]* ]]; then
+    die "the build path $TOP cannot be used in Cargo's configuration"
+  fi
+  rm -rf -- "$home" "$target"
+  mkdir -p "$home" "$target"
+  cat >"$home/config.toml" <<EOF
+[source.crates-io]
+replace-with = "motanka-vendored"
+
+[source.motanka-vendored]
+directory = "$crates"
+
+[net]
+offline = true
+EOF
+  log "$name: $("$CARGO_BIN" --version), $("$RUSTC_BIN" --version)"
+  (cd "$src" && env -u LD_LIBRARY_PATH \
+    CARGO_HOME="$home" CARGO_TARGET_DIR="$target" RUSTC="$RUSTC_BIN" \
+    RUSTFLAGS="--remap-path-prefix=$TOP=/usr/src/$PKG" CARGO_TERM_COLOR=never \
+    "$CARGO_BIN" build --release --frozen --offline -j "$JOBS" --verbose)
+  bin=$target/release/$name
+  [[ -f $bin && -x $bin ]] || die "$CARGO_BIN built no target/release/$name"
+  install -D -m 0755 "$bin" "$DEST/$name$PREFIX/bin/$name"
+}
+
 # build_one <index>
 build_one() {
   local i=$1 name version build src
@@ -385,7 +445,11 @@ build_one() {
         -DOMASNAP_VERSION="$version" \
         -DOMASNAP_WAYLAND_PROTOCOLS_DIR="$STAGE$PREFIX/share/wayland-protocols"
       ;;
-    *) die "no recipe for component $name" ;;
+    *)
+      # A Rust program: the recipe is the same for every cargo component.
+      [[ $build == cargo ]] || die "no recipe for component $name"
+      build_cargo "$name" "$src"
+      ;;
   esac
   post_install "$name"
 }
@@ -426,12 +490,38 @@ cmd_build() {
   done
   [[ -x $STAGE$PREFIX/bin/quickshell ]] || die "Quickshell installed no bin/quickshell"
   [[ -x $STAGE$PREFIX/bin/omasnap ]] || die "omasnap installed no bin/omasnap"
+  for i in "${!C_NAME[@]}"; do
+    if in_suite "$i" && [[ ${C_BUILD[$i]} == cargo ]]; then
+      [[ -x $STAGE$PREFIX/bin/${C_NAME[$i]} ]] || die "${C_NAME[$i]} installed no bin/${C_NAME[$i]}"
+    fi
+  done
   log "all components built for $SUITE"
 }
 
-# cmd_test: omasnap's smoke suite, as in Upstream's PKGBUILD check().
+# test_cargo_components: "<name> --version" of every cargo component, run
+# from the staging tree, prints the component's version.
+test_cargo_components() {
+  local i name version bin out rc
+  for i in "${!C_NAME[@]}"; do
+    in_suite "$i" || continue
+    [[ ${C_BUILD[$i]} == cargo ]] || continue
+    name=${C_NAME[$i]}
+    version=${C_VERSION[$i]}
+    bin=$STAGE$PREFIX/bin/$name
+    [[ -x $bin ]] || die "$bin is missing; run the build step first"
+    rc=0
+    out=$(env -u LD_LIBRARY_PATH timeout 60 "$bin" --version 2>&1) || rc=$?
+    ((rc == 0)) || die "$name --version failed with exit code $rc: $out"
+    grep -qF -- "$version" <<<"$out" || die "$name --version printed '$out', which does not name version $version"
+    log "$name --version: $out"
+  done
+}
+
+# cmd_test: the cargo components' --version, then omasnap's smoke suite, as
+# in Upstream's PKGBUILD check().
 cmd_test() {
   local bin=$BUILD/omasnap/omasnap_tests t=$W/test rt tmp rc attempt
+  test_cargo_components
   [[ -e $STAMPS/omasnap && -d $BUILD/omasnap ]] || die "omasnap was not built; run the build step first"
   [[ -x $bin ]] || die "$bin is missing: omasnap's build has no test binary"
   set_env
@@ -572,8 +662,35 @@ install_omasnap_licences() {
   log "omasnap: $n licence files in /usr/share/doc/$PKG/omasnap"
 }
 
+# check_runpaths: no shipped ELF has an RPATH. Every shipped ELF has
+# RUNPATH /opt/motanka/lib, except the files of cargo components
+# (NO_RUNPATH), which load only host libraries and must have none.
+check_runpaths() {
+  local f rel dyn runpath bad=0
+  while IFS= read -r -d '' f; do
+    is_elf "$f" || continue
+    rel=${f#"$TOP/debian/$PKG$PREFIX/"}
+    dyn=$(readelf -d "$f" 2>/dev/null || true)
+    if grep -q '(RPATH)' <<<"$dyn"; then
+      log "${f#"$TOP"/}: has an RPATH"
+      bad=$((bad + 1))
+    fi
+    runpath=$(sed -n 's/.*(RUNPATH).*\[\(.*\)\]$/\1/p' <<<"$dyn")
+    if [[ -n ${NO_RUNPATH["$rel"]:-} ]]; then
+      if [[ -n $runpath ]]; then
+        log "${f#"$TOP"/}: RUNPATH '$runpath', expected none (a cargo component loads only host libraries)"
+        bad=$((bad + 1))
+      fi
+    elif [[ $runpath != "$PREFIX/lib" ]]; then
+      log "${f#"$TOP"/}: RUNPATH '${runpath:-none}', expected $PREFIX/lib"
+      bad=$((bad + 1))
+    fi
+  done < <(find "$TOP/debian/$PKG$PREFIX" -type f -print0)
+  ((bad == 0)) || die "$bad ELF problem(s) in $PKG"
+}
+
 cmd_install() {
-  local i name d rel n leaks=0 f dyn runpath bad=0
+  local i name d rel n leaks=0 f
   rm -rf -- "${TOP:?}/debian/$PKG$PREFIX"
   for i in "${!C_NAME[@]}"; do
     in_suite "$i" || continue
@@ -588,6 +705,9 @@ cmd_install() {
       f=$TOP/debian/$PKG$PREFIX/$rel
       install -d "${f%/*}"
       cp -a "$d$PREFIX/$rel" "$f"
+      if [[ ${C_BUILD[$i]} == cargo ]]; then
+        NO_RUNPATH["$rel"]=1
+      fi
       n=$((n + 1))
     done < <(cd "$d$PREFIX" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\0' | LC_ALL=C sort -z)
     log "$name: $n files"
@@ -599,20 +719,7 @@ cmd_install() {
   compgen -G "$TOP/debian/$PKG$PREFIX/lib/libcpptrace.so.*" >/dev/null || die "$PKG would not ship libcpptrace"
   install_omasnap_licences
 
-  while IFS= read -r -d '' f; do
-    is_elf "$f" || continue
-    dyn=$(readelf -d "$f" 2>/dev/null || true)
-    if grep -q '(RPATH)' <<<"$dyn"; then
-      log "${f#"$TOP"/}: has an RPATH"
-      bad=$((bad + 1))
-    fi
-    runpath=$(sed -n 's/.*(RUNPATH).*\[\(.*\)\]$/\1/p' <<<"$dyn")
-    if [[ $runpath != "$PREFIX/lib" ]]; then
-      log "${f#"$TOP"/}: RUNPATH '${runpath:-none}', expected $PREFIX/lib"
-      bad=$((bad + 1))
-    fi
-  done < <(find "$TOP/debian/$PKG$PREFIX" -type f -print0)
-  ((bad == 0)) || die "$bad ELF problem(s) in $PKG"
+  check_runpaths
   check_qt_resolution
 
   while IFS= read -r f; do

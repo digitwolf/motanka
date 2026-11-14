@@ -1,7 +1,8 @@
 #!/usr/bin/make -f
 # Builds the components of stack/shell-components.tsv (cpptrace, Quickshell,
-# layer-shell-qt and omasnap, with wayland-protocols, libdwarf-lite,
-# extra-cmake-modules and, on noble, wayland and CMake at build time) for
+# layer-shell-qt, omasnap and ttfx, with wayland-protocols, libdwarf-lite,
+# extra-cmake-modules and, on noble, wayland and CMake at build time; ttfx
+# offline from the crates of the ttfx-crates component) for
 # the suite in the changelog (noble or resolute, stamped by
 # packaging/build.sh) with prefix /opt/motanka, into motanka-stack-shell.
 # The work is done by debian/shell-build.sh; see the comment at its top.
@@ -24,7 +25,8 @@ override_dh_auto_configure:
 override_dh_auto_build:
 	bash debian/shell-build.sh build $(DIST)
 
-# omasnap's smoke suite, offscreen (Upstream's PKGBUILD check()).
+# ttfx --version, then omasnap's smoke suite, offscreen (Upstream's
+# PKGBUILD check()).
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	bash debian/shell-build.sh test $(DIST)

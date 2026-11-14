@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VM test for the Stack packages (tasks 7.1 to 7.6): install the Stack
+# VM test for the Stack packages (tasks 7.1 to 7.6 and 7.9): install the Stack
 # .debs of one release (motanka-stack, motanka-qt6 and motanka-stack-shell)
 # in a fresh VM with a virgl GPU and Ubuntu's own Qt installed, check
 # library resolution, RUNPATH, the C++ runtime and debcheck, start Hyprland
@@ -22,8 +22,8 @@
 # packaging/motanka-qt6 and packaging/motanka-stack-shell.
 # motanka-qt6-dev is needed for the shell build only and is not installed.
 #
-# Checks (requirements 1.3, 3.4, 5.14, 8.1, 8.2, 8.4, 8.5, 8.8; the guest
-# half is test/vm/stack-guest.sh):
+# Checks (requirements 1.3, 3.4, 5.14, 7.2, 7.3, 8.1, 8.2, 8.4, 8.5, 8.8;
+# the guest half is test/vm/stack-guest.sh):
 #   - the Stack packages install from local files with apt
 #   - tools/debcheck passes on every Stack .deb
 #   - every file is under /opt/motanka, apart from /usr/share/doc/<pkg> and
@@ -52,6 +52,11 @@
 #     omasnap's menu entry is under /opt/motanka/share/applications, and
 #     motanka-stack-shell depends on tesseract-ocr, tesseract-ocr-eng,
 #     wl-clipboard and xdg-utils
+#   - /opt/motanka/bin/ttfx (task 7.9; requirements 3.4, 7.2, 7.3) belongs
+#     to motanka-stack-shell and loads no library from /opt/motanka/lib;
+#     ttfx --version exits 0 and prints the version in
+#     stack/shell-components.tsv, and one render with the flags Upstream's
+#     omarchy-screensaver passes exits 0 within 30 s in a pseudo-terminal
 #   - in the running Hyprland session, Quickshell loads a config whose
 #     panel namespace comes from a function declaring `var native` (the
 #     Qt 6.10 grammar problem) and shows a magenta PanelWindow: hyprctl
@@ -119,6 +124,10 @@ omasnap_version=$(awk -F'\t' '$1 == "omasnap" { print $2 }' "$MV_REPO/stack/shel
 if [[ -z $omasnap_version ]]; then
   mv_die "stack/shell-components.tsv has no omasnap line"
 fi
+ttfx_version=$(awk -F'\t' '$1 == "ttfx" { print $2 }' "$MV_REPO/stack/shell-components.tsv")
+if [[ -z $ttfx_version ]]; then
+  mv_die "stack/shell-components.tsv has no ttfx line"
+fi
 ver=$(bash "$MV_REPO/packaging/version.sh" "$release")
 
 # --- 1. the .debs -------------------------------------------------------------
@@ -175,7 +184,7 @@ mv_copy_to_vm "$tvm" "$stage" "$GUEST_T"
 # phase <name>: runs one guest phase, logs it and counts its checks.
 phase() {
   local name=$1 rc=0 f p
-  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" "$omasnap_version" \
+  "$MV_LIB_DIR/run" "$tvm" -- bash "$GUEST_T/stack-guest.sh" "$name" "$release" "$hypr_version" "$qs_version" "$qt_version" "$omasnap_version" "$ttfx_version" \
     </dev/null >"$results/guest-$name.log" 2>&1 || rc=$?
   cat "$results/guest-$name.log" >&2
   f=$(grep -c '^FAIL:' "$results/guest-$name.log" || true)

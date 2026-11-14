@@ -33,7 +33,9 @@
 #      --orig-dir next to it and unpack it into <component>/ (dpkg-source
 #      3.0 (quilt) multi-orig). A package that imports a components file
 #      (/stack/*components.tsv) needs one such tarball per component listed
-#      there. A package that imports /upstream.pin needs the component
+#      there, and a component of build cargo also its <name>-crates
+#      tarball (stack/fetch-sources makes it from the component's
+#      Cargo.lock). A package that imports /upstream.pin needs the component
 #      omarchy, the Upstream tarball (tools/fetch-upstream makes it); it is
 #      unpacked by tools/vendor, which first checks it against the stable
 #      pin (7.1);
@@ -273,10 +275,13 @@ unpack_components() {
   local -a tsvs=("$tree"/stack/*components.tsv)
   shopt -u nullglob
   for f in "${tsvs[@]}"; do
-    while IFS=$'\t' read -r name _; do
+    while IFS=$'\t' read -r name _ _ _ build _; do
       [[ -z $name || $name == \#* ]] && continue
       if [[ ! " ${found[*]} " == *" $name "* ]]; then
         missing+=("$name")
+      fi
+      if [[ ${build:-} == cargo && ! " ${found[*]} " == *" $name-crates "* ]]; then
+        missing+=("$name-crates")
       fi
     done <"$f"
   done

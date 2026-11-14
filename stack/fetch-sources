@@ -26,6 +26,34 @@ alone, so one DIR serves every components file. The main orig tarball
 (<source>_<V>.orig.tar.xz) is made by packaging/build.sh from the package
 folder, like for every other package, so it always matches the folder.
 
+A component of build "cargo" (a Rust program) also gets its crates. After
+its tarball passed the checks above, the tool reads <top>/Cargo.lock from
+inside the tarball and refuses (exit 1) every package whose source is not
+the crates.io registry: git sources, other registries, and packages without
+a source that no Cargo.toml in the tarball names (path dependencies outside
+the source). Each crates.io crate (one per name and version) is downloaded
+into DIR/downloads/crates/<crate>-<version>.crate (skipped when a file with
+the lock file's SHA-256 is already there), checked against the SHA-256 that
+Cargo.lock records for it (exit 6 on a mismatch, as for tarballs) and
+checked to hold one folder <crate>-<version>/ with only files and folders
+and no absolute or '..' paths. The crates are then packed into one more
+component of the source package:
+
+  <source>_<V>.orig-<name>-crates.tar.gz
+
+whose single top folder <name>-crates/ holds <crate>-<version>/ for every
+crate, plus the .cargo-checksum.json that Cargo's directory source needs
+({"files":{},"package":"<crate sha256>"}, as Debian's dh-cargo writes it).
+The tarball is reproducible: members sorted by path, mtime 0, owner and
+group 0 with empty names, file modes from the crate, folders 0755, and a
+gzip header with mtime 0 and no file name, so two runs give the same bytes.
+It has no pin of its own: every crate in it is checked against Cargo.lock,
+which is inside the pinned component tarball. Crates are downloaded from
+https://static.crates.io/crates/<crate>/<crate>-<version>.crate; the
+environment variable MOTANKA_CRATES_BASE_URL (an https:// or file:// URL)
+replaces https://static.crates.io/crates, for the unit tests. A component
+may not be called <name>-crates when a cargo component <name> exists.
+
 Directives (lines starting with '#@', before or between components):
   #@source <name>           source package the components belong to
   #@packages <pkg>...       binary packages the package field may name
@@ -44,17 +72,24 @@ Options:
   --check              validate the components file only; no network, no writes
 
 Exit codes: 0 success, 1 a component is unpinned, failed to download or is
-malformed, 2 usage error or invalid components.tsv, 6 checksum mismatch.
+malformed (for cargo components also: no Cargo.lock, a package from a
+source other than crates.io, a malformed crate), 2 usage error, invalid
+components.tsv or invalid MOTANKA_CRATES_BASE_URL, 6 checksum mismatch of
+a tarball or a crate.
 
 It only downloads and verifies: it installs nothing and runs nothing it
 downloads, so it may run on the development host or in a test VM. It
 writes only inside DIR and, with --update-checksums, the components file.
 Written in Python because the host tool set has python3 but no curl, and
-the tarball checks need a tar reader.
+the tarball checks need a tar reader. Cargo.lock is read with tomllib
+(Python 3.11 or later).
 """
 
 import argparse
+import gzip
 import hashlib
+import io
+import json
 import os
 import re
 import shutil
@@ -63,6 +98,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -75,8 +111,16 @@ FIELDS = ("name", "version", "url", "sha256", "build", "suites", "package")
 # qt: a Qt submodule (motanka-qt6). source: not built on its own; another
 # component's build uses its folder (libdwarf-lite for cpptrace). files:
 # plain files installed as they are (fonts, motanka-fonts); the tarball may
-# hold them without a top-level folder.
-BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source", "files"}
+# hold them without a top-level folder. cargo: a Rust program built offline
+# with the archive's cargo; its crates become the component <name>-crates.
+BUILDS = {"cmake", "meson", "autotools", "lua", "python-meson", "headers", "cmake-tool", "qt", "source", "files", "cargo"}
+CARGO_BUILDS = {"cargo"}
+CRATES_SUFFIX = "-crates"
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+CRATES_BASE_ENV = "MOTANKA_CRATES_BASE_URL"
+DEFAULT_CRATES_BASE = "https://static.crates.io/crates"
+CRATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+CRATE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$")
 FLAT_OK_BUILDS = {"files"}
 SUITES = {"noble", "resolute", "both"}
 DEFAULT_PACKAGES = {"-", "motanka-stack-libs", "motanka-stack-hyprland", "motanka-stack-tools"}
@@ -177,6 +221,12 @@ def parse_tsv(path):
         if c["package"] not in meta["packages"]:
             allowed = ", ".join(sorted(meta["packages"]))
             raise TsvError(f"{path}:{c['line'] + 1}: unknown package '{c['package']}' (allowed: {allowed})")
+    for c in comps:
+        if c["build"] in CARGO_BUILDS and c["name"] + CRATES_SUFFIX in seen:
+            raise TsvError(
+                f"{path}:{c['line'] + 1}: the crates of cargo component '{c['name']}' are the component "
+                f"'{c['name']}{CRATES_SUFFIX}', which the file also lists"
+            )
     if not comps:
         raise TsvError(f"{path}: no components")
     del meta["seen"]
@@ -256,6 +306,238 @@ def check_tar(path, flat_ok=False):
     return None
 
 
+# --- cargo components -------------------------------------------------------
+
+
+def crates_base_url():
+    base = os.environ.get(CRATES_BASE_ENV) or DEFAULT_CRATES_BASE
+    if not (base.startswith("https://") or base.startswith("file://")):
+        raise TsvError(f"{CRATES_BASE_ENV} must be an https:// or file:// URL, got '{base}'")
+    return base.rstrip("/")
+
+
+def load_tomllib():
+    try:
+        import tomllib  # pylint: disable=import-outside-toplevel
+    except ImportError as e:
+        raise TsvError("reading Cargo.lock needs Python 3.11 or later (tomllib)") from e
+    return tomllib
+
+
+def read_cargo_files(path):
+    """Returns (bytes of <top>/Cargo.lock or None, set of package names the
+    tarball's Cargo.toml files declare) of a cargo component tarball that
+    passed check_tar. A Cargo.toml that does not parse names nothing."""
+    tomllib = load_tomllib()
+    lock = None
+    local = set()
+    with tarfile.open(path, "r:*") as tar:
+        for m in tar:
+            if not m.isfile():
+                continue
+            parts = [p for p in m.name.split("/") if p not in ("", ".")]
+            if len(parts) == 2 and parts[1] == "Cargo.lock":
+                lock = tar.extractfile(m).read()
+            elif len(parts) >= 2 and parts[-1] == "Cargo.toml":
+                try:
+                    doc = tomllib.loads(tar.extractfile(m).read().decode("utf-8"))
+                except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                    continue
+                pkg = doc.get("package")
+                if isinstance(pkg, dict) and isinstance(pkg.get("name"), str):
+                    local.add(pkg["name"])
+    return lock, local
+
+
+def lock_crates(comp, data, local):
+    """Returns (crates, problems) from the bytes of a Cargo.lock: one dict
+    (name, version, sha256) per crates.io package and version, sorted by
+    folder name <name>-<version>."""
+    tomllib = load_tomllib()
+    try:
+        doc = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        return [], [f"{comp}: Cargo.lock is not valid TOML: {e}"]
+    pkgs = doc.get("package")
+    if not isinstance(pkgs, list) or not pkgs:
+        return [], [f"{comp}: Cargo.lock lists no packages"]
+    seen = {}
+    problems = []
+    for p in pkgs:
+        if not isinstance(p, dict):
+            problems.append(f"{comp}: Cargo.lock has a malformed [[package]] entry")
+            continue
+        n, v, src, ck = p.get("name"), p.get("version"), p.get("source"), p.get("checksum")
+        if not (isinstance(n, str) and CRATE_NAME_RE.match(n) and isinstance(v, str) and CRATE_VERSION_RE.match(v)):
+            problems.append(f"{comp}: Cargo.lock has a package with an invalid name or version ({n!r} {v!r})")
+            continue
+        if src is None:
+            if n not in local:
+                problems.append(
+                    f"{comp}: Cargo.lock package {n} {v} has no source, and no Cargo.toml in the tarball "
+                    "declares it (a path dependency outside the source); it cannot be vendored"
+                )
+            continue
+        if src != CRATES_IO_SOURCE:
+            kind = "git" if str(src).startswith("git+") else "non-crates.io"
+            problems.append(
+                f"{comp}: Cargo.lock package {n} {v} comes from a {kind} source ({src}); "
+                "only crates from the crates.io registry can be vendored"
+            )
+            continue
+        if not (isinstance(ck, str) and SHA_RE.match(ck)):
+            problems.append(
+                f"{comp}: Cargo.lock package {n} {v} has no SHA-256 checksum field "
+                "(lock file format 1 keeps checksums in [metadata], which is not supported)"
+            )
+            continue
+        key = (n, v)
+        if key in seen:
+            if seen[key] != ck:
+                problems.append(f"{comp}: Cargo.lock lists {n} {v} twice with different checksums")
+            continue
+        seen[key] = ck
+    crates = [{"name": n, "version": v, "sha256": ck} for (n, v), ck in seen.items()]
+    crates.sort(key=lambda k: f"{k['name']}-{k['version']}")
+    return crates, problems
+
+
+def check_crate(path, folder):
+    """Returns None if the .crate file holds only files and folders below
+    <folder>/, including <folder>/Cargo.toml, else a reason."""
+    has_toml = False
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            for m in tar:
+                name = m.name
+                if name.startswith("/") or ".." in name.split("/"):
+                    return f"unsafe member path '{name}'"
+                parts = [p for p in name.split("/") if p not in ("", ".")]
+                if not parts:
+                    continue
+                if parts[0] != folder:
+                    return f"member '{name}' is outside the folder {folder}/"
+                if not (m.isfile() or m.isdir()):
+                    return f"'{name}' is neither a regular file nor a folder"
+                if parts == [folder, "Cargo.toml"] and m.isfile():
+                    has_toml = True
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
+        return f"unreadable crate: {e}"
+    if not has_toml:
+        return f"no {folder}/Cargo.toml"
+    return None
+
+
+def fetch_crates(comp, path, cdir, base):
+    """Downloads and verifies the crates.io crates that the Cargo.lock in
+    the component tarball names. Returns (crates, problems, mismatch); each
+    crate dict gets 'path', the verified .crate file."""
+    try:
+        data, local = read_cargo_files(path)
+        if data is None:
+            return [], [f"{comp}: the tarball has no Cargo.lock in its top folder; a cargo component needs one"], False
+        crates, problems = lock_crates(comp, data, local)
+    except TsvError as e:
+        return [], [f"{comp}: {e}"], False
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
+        return [], [f"{comp}: cannot read Cargo.lock: {e}"], False
+    if problems:
+        return [], problems, False
+    os.makedirs(cdir, exist_ok=True)
+    mismatch = False
+    fetched = 0
+    for k in crates:
+        folder = f"{k['name']}-{k['version']}"
+        dest = os.path.join(cdir, folder + ".crate")
+        if os.path.exists(dest) and sha256_of(dest) != k["sha256"]:
+            log(f"{comp}: cached crate {folder} does not match Cargo.lock; downloading again")
+            os.unlink(dest)
+        if not os.path.exists(dest):
+            url = f"{base}/{k['name']}/{folder}.crate"
+            log(f"{comp}: downloading crate {url}")
+            try:
+                download(url, dest)
+            except OSError as e:
+                problems.append(f"{comp}: crate {folder}: {e}")
+                continue
+            fetched += 1
+            digest = sha256_of(dest)
+            if digest != k["sha256"]:
+                os.unlink(dest)
+                mismatch = True
+                problems.append(
+                    f"{comp}: crate {folder}: sha256 {digest} does not match Cargo.lock's {k['sha256']}; download deleted"
+                )
+                continue
+        reason = check_crate(dest, folder)
+        if reason:
+            problems.append(f"{comp}: crate {folder}: {reason}")
+            continue
+        k["path"] = dest
+    if not problems:
+        log(f"{comp}: {len(crates)} crates of Cargo.lock verified ({fetched} downloaded, {len(crates) - fetched} cached)")
+    return crates, problems, mismatch
+
+
+def checksum_json(sha):
+    return json.dumps({"files": {}, "package": sha}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def tar_entry(name, mode, size=None):
+    info = tarfile.TarInfo(name)
+    info.mode = mode
+    info.mtime = 0
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    if size is None:
+        info.type = tarfile.DIRTYPE
+    else:
+        info.type = tarfile.REGTYPE
+        info.size = size
+    return info
+
+
+def pack_crates(dest, top, crates):
+    """Writes the reproducible crates tarball <dest> (top folder <top>/)."""
+    tmp = dest + ".tmp"
+    try:
+        with open(tmp, "wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, compresslevel=9, mtime=0) as gz:
+                with tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as out:
+                    out.addfile(tar_entry(top, 0o755))
+                    for k in crates:
+                        folder = f"{k['name']}-{k['version']}"
+                        files = {}
+                        with tarfile.open(k["path"], "r:gz") as tar:
+                            for m in tar:
+                                if not m.isfile():
+                                    continue
+                                rel = tuple(p for p in m.name.split("/") if p not in ("", "."))[1:]
+                                if not rel or rel == (".cargo-checksum.json",):
+                                    continue
+                                files[rel] = (m.mode & 0o777, tar.extractfile(m).read())
+                        files[(".cargo-checksum.json",)] = (0o644, checksum_json(k["sha256"]))
+                        dirs = {()}
+                        for rel in files:
+                            for i in range(1, len(rel)):
+                                dirs.add(rel[:i])
+                        items = [(d, None) for d in dirs] + list(files.items())
+                        items.sort(key=lambda item: item[0])
+                        for rel, val in items:
+                            name = "/".join((top, folder) + rel)
+                            if val is None:
+                                out.addfile(tar_entry(name, 0o755))
+                            else:
+                                out.addfile(tar_entry(name, val[0], len(val[1])), io.BytesIO(val[1]))
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def read_version():
     try:
         with open(VERSION_FILE, encoding="utf-8") as f:
@@ -319,6 +601,14 @@ def main(argv=None):
         log(f"{tsv}: {len(comps)} components, valid (source {source})")
         return 0
 
+    base = None
+    if any(c["build"] in CARGO_BUILDS for c in comps):
+        try:
+            base = crates_base_url()
+        except TsvError as e:
+            log(str(e))
+            return EXIT_USAGE
+
     out = os.path.abspath(args.out)
     dl = os.path.join(out, "downloads")
     os.makedirs(dl, exist_ok=True)
@@ -327,6 +617,7 @@ def main(argv=None):
     mismatch = False
     updates = {}
     files = {}
+    crates_of = {}
     for c in comps:
         name, pinned = c["name"], c["sha256"]
         path = os.path.join(dl, f"{name}-{c['version']}.tar.{c['ext']}")
@@ -359,6 +650,13 @@ def main(argv=None):
         if reason:
             problems.append(f"{name}: {reason}")
             continue
+        if c["build"] in CARGO_BUILDS:
+            crates, cprobs, cmis = fetch_crates(name, path, os.path.join(dl, "crates"), base)
+            if cprobs:
+                problems.extend(cprobs)
+                mismatch = mismatch or cmis
+                continue
+            crates_of[name] = crates
         files[name] = path
 
     if updates:
@@ -370,7 +668,19 @@ def main(argv=None):
         return EXIT_MISMATCH if mismatch else EXIT_PROBLEM
 
     orig = layout(out, source, version, comps, files)
-    log(f"{len(comps)} components of {source} verified; orig tarballs in {orig}")
+    for c in comps:
+        if c["build"] not in CARGO_BUILDS:
+            continue
+        top = c["name"] + CRATES_SUFFIX
+        dest = os.path.join(orig, f"{source}_{version}.orig-{top}.tar.gz")
+        try:
+            pack_crates(dest, top, crates_of[c["name"]])
+        except (OSError, tarfile.TarError, EOFError, zlib.error) as e:
+            log(f"error: {c['name']}: cannot write {dest}: {e}")
+            return EXIT_PROBLEM
+        log(f"{c['name']}: {len(crates_of[c['name']])} crates packed into {os.path.basename(dest)}")
+    extra = f" plus {len(crates_of)} crates component(s)" if crates_of else ""
+    log(f"{len(comps)} components of {source} verified{extra}; orig tarballs in {orig}")
     print(orig)
     return 0
 

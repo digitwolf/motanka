@@ -96,6 +96,15 @@ Rules for every task: nothing is built, installed, removed or run with `sudo` on
   - Move `motanka-qt6` to Qt 6.12.0 with qtimageformats, build it for noble and resolute, build `motanka-stack-shell` against it on both, map Upstream's qt6-* names to `motanka-qt6` on both, and extend `test/vm/tests/stack.sh` with a QML file that declares `var native` and a WebP image (design.md, "Qt for both releases")
   - _Requirements: 1.2, 1.3, 3.4, 8.1, 8.2_
 
+- [x] 7.8 omasnap in `motanka-stack-shell` for both releases (added after the first-login VM test)
+  - Add omasnap 1.26.2, layer-shell-qt 6.8.3 and extra-cmake-modules 6.32.0 (with CMake 4.5.0 on noble) to `stack/shell-components.tsv`; map Upstream's `omasnap` to `motanka-stack-shell`; run omasnap's smoke suite at build time; have the first-login VM test capture the screen with it
+  - _Requirements: 7.2, 7.3, 8.1, 8.2_
+
+- [ ] 7.9 Rust components and ttfx in `motanka-stack-shell` (added after the port research)
+  - Add build type `cargo` to the components files: `stack/fetch-sources` reads the component's `Cargo.lock`, downloads every crates.io crate it lists, checks each against the lock file's checksum and packs them into a reproducible `orig-<name>-crates` component; the package build compiles offline with the archive's `cargo-1.91` against that folder
+  - Build ttfx 0.5.1 for both releases into `/opt/motanka/bin/ttfx`; map Upstream's `ttfx` to `motanka-stack-shell`; extend the Stack VM test to run it
+  - _Requirements: 3.4, 7.2, 7.3, 8.1, 8.2_
+
 - [ ] 8. Checkpoint — run `test/run-all` and `test/run-all --release noble`, stop for questions
   - _Requirements: 13.1_
 

@@ -51,13 +51,13 @@ done'
 @test "noble builds CMake before extra-cmake-modules, layer-shell-qt and omasnap" {
   sb noble "$ORDER_CODE"
   assert_success
-  assert_output "$(printf '%s\n' wayland wayland-protocols libdwarf-lite cpptrace quickshell cmake extra-cmake-modules layer-shell-qt omasnap)"
+  assert_output "$(printf '%s\n' wayland wayland-protocols libdwarf-lite cpptrace quickshell cmake extra-cmake-modules layer-shell-qt omasnap ttfx)"
 }
 
 @test "resolute builds neither the staged wayland nor CMake" {
   sb resolute "$ORDER_CODE"
   assert_success
-  assert_output "$(printf '%s\n' wayland-protocols libdwarf-lite cpptrace quickshell extra-cmake-modules layer-shell-qt omasnap)"
+  assert_output "$(printf '%s\n' wayland-protocols libdwarf-lite cpptrace quickshell extra-cmake-modules layer-shell-qt omasnap ttfx)"
 }
 
 @test "version_of reads the omasnap and layer-shell-qt versions" {
@@ -134,7 +134,8 @@ done'
     lib/qt6/qml/org/kde/layershell/qmldir \
     lib/qt6/qml/org/kde/layershell/libLayerShellQtQml.so \
     share/applications/omasnap.desktop \
-    share/icons/hicolor/scalable/apps/omasnap.svg
+    share/icons/hicolor/scalable/apps/omasnap.svg \
+    bin/ttfx
   assert_success
   refute_line --regexp '^out '
 }
@@ -248,7 +249,12 @@ LICENCES=(Neucha-OFL.txt JetBrainsMono-OFL.txt Inter-OFL.txt Lucide-ISC.txt)
   for f in "${LICENCES[@]}"; do
     grep -qF "/usr/share/doc/motanka-stack-shell/omasnap/$f" "$PKGDIR/debian/copyright" || fail "debian/copyright does not name $f"
   done
-  for c in Expat ISC OFL-1.1 LGPL-2.1 LGPL-3 BSD-3-clause LicenseRef-KDE-Accepted-LGPL; do
+  for name in "${names[@]}"; do
+    if [[ $(awk -F'\t' -v n="$name" '$1 == n { print $5 }' "$REPO/stack/shell-components.tsv") == cargo ]]; then
+      grep -qxF "Files: $name-crates/*" "$PKGDIR/debian/copyright" || fail "debian/copyright has no 'Files: $name-crates/*' stanza"
+    fi
+  done
+  for c in Expat ISC OFL-1.1 LGPL-2.1 LGPL-3 BSD-3-clause LicenseRef-KDE-Accepted-LGPL Apache-2.0; do
     awk -v l="License: $c" '$0 == l && prev == "" { found = 1 } { prev = $0 } END { exit !found }' "$PKGDIR/debian/copyright" ||
       fail "debian/copyright has no stand-alone 'License: $c' paragraph"
   done
@@ -305,6 +311,10 @@ stub_tools() {
   cat >"$STUBS/readelf" <<'EOF'
 #!/bin/sh
 f=$2
+r=$STUBDATA/${f##*/}.runpath
+if [ -f "$r" ]; then
+  printf ' 0x000000000000001d (RUNPATH)            Library runpath: [%s]\n' "$(cat "$r")"
+fi
 n=$STUBDATA/${f##*/}.needed
 [ -f "$n" ] || exit 0
 while IFS= read -r l; do
@@ -391,4 +401,154 @@ good_tree() {
   sb resolute check_qt_resolution
   assert_failure 1
   assert_output --partial 'no ELF of the org.kde.layershell QML module'
+}
+
+# --- cargo components (ttfx, task 7.9) -----------------------------------------
+
+# stub_rust: cargo-1.91 and rustc-1.91 stubs. The cargo stub records its
+# arguments, folder and environment in $STUBDATA/cargo.log and writes an
+# executable target/release/ttfx.
+stub_rust() {
+  cat >"$STUBS/cargo-1.91" <<'EOF'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  echo "cargo 1.91.1 (stub)"
+  exit 0
+fi
+{
+  printf 'args=%s\n' "$*"
+  printf 'pwd=%s\n' "$(pwd)"
+  printf 'CARGO_HOME=%s\n' "$CARGO_HOME"
+  printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR"
+  printf 'RUSTC=%s\n' "$RUSTC"
+  printf 'RUSTFLAGS=%s\n' "$RUSTFLAGS"
+  printf 'LD_LIBRARY_PATH=%s\n' "${LD_LIBRARY_PATH-unset}"
+} >"$STUBDATA/cargo.log"
+mkdir -p "$CARGO_TARGET_DIR/release"
+printf '#!/bin/sh\necho "ttfx 0.5.1"\n' >"$CARGO_TARGET_DIR/release/ttfx"
+chmod +x "$CARGO_TARGET_DIR/release/ttfx"
+EOF
+  printf '#!/bin/sh\necho "rustc 1.91.1 (stub)"\n' >"$STUBS/rustc-1.91"
+  chmod +x "$STUBS/cargo-1.91" "$STUBS/rustc-1.91"
+}
+
+# cargo_source [no-lock] [no-crates]: the unpacked ttfx/ and ttfx-crates/
+# folders of the source tree.
+cargo_source() {
+  mkdir -p "$TREE/ttfx/src"
+  printf '[package]\nname = "ttfx"\nversion = "0.5.1"\n' >"$TREE/ttfx/Cargo.toml"
+  if [[ " $* " != *" no-lock "* ]]; then
+    printf 'version = 4\n' >"$TREE/ttfx/Cargo.lock"
+  fi
+  if [[ " $* " != *" no-crates "* ]]; then
+    mkdir -p "$TREE/ttfx-crates/clap-4.6.6"
+  fi
+}
+
+@test "ttfx is a cargo component of motanka-stack-shell for both releases" {
+  sb noble 'for i in "${!C_NAME[@]}"; do if [[ ${C_NAME[$i]} == ttfx ]]; then echo "${C_VERSION[$i]} ${C_BUILD[$i]} ${C_SUITES[$i]} ${C_PACKAGE[$i]}"; fi; done'
+  assert_success
+  assert_output '0.5.1 cargo both motanka-stack-shell'
+}
+
+@test "a cargo component is built offline by cargo-1.91 against its crates folder" {
+  local w="$TREE/debian/shell-build/build/ttfx"
+  stub_rust
+  cargo_source
+  sb resolute 'export LD_LIBRARY_PATH=/stage/lib; build_cargo ttfx "$TOP/ttfx"'
+  assert_success
+  assert_output --partial 'ttfx: cargo 1.91.1 (stub), rustc 1.91.1 (stub)'
+  run cat "$w/cargo-home/config.toml"
+  assert_line '[source.crates-io]'
+  assert_line 'replace-with = "motanka-vendored"'
+  assert_line '[source.motanka-vendored]'
+  assert_line "directory = \"$TREE/ttfx-crates\""
+  assert_line '[net]'
+  assert_line 'offline = true'
+  run cat "$STUBDATA/cargo.log"
+  assert_line 'args=build --release --frozen --offline -j 1 --verbose'
+  assert_line "pwd=$TREE/ttfx"
+  assert_line "CARGO_HOME=$w/cargo-home"
+  assert_line "CARGO_TARGET_DIR=$w/target"
+  assert_line 'RUSTC=rustc-1.91'
+  assert_line "RUSTFLAGS=--remap-path-prefix=$TREE=/usr/src/motanka-stack-shell"
+  assert_line 'LD_LIBRARY_PATH=unset'
+  [[ -x $TREE/debian/shell-build/dest/ttfx/opt/motanka/bin/ttfx ]] || fail "bin/ttfx was not installed into the component's DESTDIR"
+  [[ ! -e $TREE/ttfx/target ]] || fail "cargo wrote into the unpacked source"
+}
+
+@test "build_one builds a cargo component and stages its binary" {
+  stub_rust
+  cargo_source
+  sb resolute 'for i in "${!C_NAME[@]}"; do if [[ ${C_NAME[$i]} == ttfx ]]; then build_one "$i"; fi; done'
+  assert_success
+  [[ -x $TREE/debian/shell-build/stage/opt/motanka/bin/ttfx ]] || fail "bin/ttfx is not in the staging tree"
+}
+
+@test "a cargo component without its crates folder stops the build" {
+  stub_rust
+  cargo_source no-crates
+  sb resolute 'build_cargo ttfx "$TOP/ttfx"'
+  assert_failure 1
+  assert_output --partial 'component source ttfx-crates/ is missing'
+  assert_output --partial 'orig-ttfx-crates.tar.gz'
+}
+
+@test "a cargo component without Cargo.lock stops the build" {
+  stub_rust
+  cargo_source no-lock
+  sb resolute 'build_cargo ttfx "$TOP/ttfx"'
+  assert_failure 1
+  assert_output --partial 'ttfx/Cargo.lock is missing'
+}
+
+@test "the test step runs the cargo component's --version from the staging tree" {
+  local bin="$TREE/debian/shell-build/stage/opt/motanka/bin/ttfx"
+  mkdir -p "${bin%/*}"
+  printf '#!/bin/sh\necho "ttfx 0.5.1"\n' >"$bin"
+  chmod +x "$bin"
+  sb noble test_cargo_components
+  assert_success
+  assert_output --partial 'ttfx --version: ttfx 0.5.1'
+  printf '#!/bin/sh\necho "ttfx 0.4.0"\n' >"$bin"
+  sb noble test_cargo_components
+  assert_failure 1
+  assert_output --partial 'does not name version 0.5.1'
+  printf '#!/bin/sh\nexit 3\n' >"$bin"
+  sb resolute test_cargo_components
+  assert_failure 1
+  assert_output --partial 'ttfx --version failed with exit code 3'
+}
+
+@test "cargo binaries have no RUNPATH; every other ELF has RUNPATH /opt/motanka/lib" {
+  stub_tools
+  fake_elf bin/quickshell libQt6Core.so.6
+  printf '/opt/motanka/lib\n' >"$STUBDATA/quickshell.runpath"
+  fake_elf bin/ttfx libc.so.6 libgcc_s.so.1
+  sb resolute 'NO_RUNPATH["bin/ttfx"]=1; check_runpaths'
+  assert_success
+  printf '/opt/motanka/lib\n' >"$STUBDATA/ttfx.runpath"
+  sb resolute 'NO_RUNPATH["bin/ttfx"]=1; check_runpaths'
+  assert_failure 1
+  assert_output --partial "bin/ttfx: RUNPATH '/opt/motanka/lib', expected none"
+  rm -f "$STUBDATA/ttfx.runpath" "$STUBDATA/quickshell.runpath"
+  sb resolute 'NO_RUNPATH["bin/ttfx"]=1; check_runpaths'
+  assert_failure 1
+  assert_output --partial "bin/quickshell: RUNPATH 'none', expected /opt/motanka/lib"
+  refute_output --partial "bin/ttfx: RUNPATH"
+}
+
+@test "the shell builds with the archive's cargo-1.91 and rustc-1.91 on both suites" {
+  local d
+  for d in cargo-1.91 rustc-1.91; do
+    run awk -v d="$d" '
+      /^#if/ { blk = 1; next }
+      /^#endif/ { blk = 0; next }
+      /^Build-Depends:/ { bd = 1 }
+      bd && /^[A-Z]/ && !/^Build-Depends:/ { bd = 0 }
+      bd && !blk { line = $0; sub(/^Build-Depends:/, "", line); gsub(/[ ,]/, " ", line); n = split(line, w, " "); for (i = 1; i <= n; i++) if (w[i] == d) found = 1 }
+      END { exit !found }
+    ' "$PKGDIR/debian/control.in"
+    assert_success
+  done
 }

@@ -407,7 +407,7 @@ ttf-ia-writer:
 ttf-jetbrains-mono-nerd-basic:
   all: {motanka: motanka-fonts, reason: "Nerd Fonts 3.5.1 JetBrainsMono in /opt/motanka/share/fonts, seen only by the Motanka session's fontconfig"}
 ttfx:
-  all: {skip: "Upstream repository package; port pending"}
+  all: {motanka: motanka-stack-shell, reason: "Stack build of ttfx 0.5.1 with the archive's Rust 1.91, offline from the crates its Cargo.lock pins; Upstream's screensaver runs it"}
 tuxedo-drivers-nocompatcheck-dkms:
   all: {skip: "host drivers stay the host's"}
 tzupdate:

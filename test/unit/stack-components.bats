@@ -254,6 +254,21 @@ sline_of() {
   assert_output --partial '  all: {motanka: motanka-stack-shell, reason: "'
 }
 
+@test "the shell builds ttfx 0.5.1 with cargo for both releases, after omasnap" {
+  [[ $(cfield "$SHELL_TSV_REL" ttfx 2) == 0.5.1 ]]
+  [[ $(cfield "$SHELL_TSV_REL" ttfx 3) == https://github.com/omacom/ttfx/archive/refs/tags/v0.5.1.tar.gz ]]
+  [[ $(cfield "$SHELL_TSV_REL" ttfx 5) == cargo ]]
+  [[ $(cfield "$SHELL_TSV_REL" ttfx 6) == both ]]
+  [[ $(cfield "$SHELL_TSV_REL" ttfx 7) == motanka-stack-shell ]]
+  (($(sline_of omasnap) < $(sline_of ttfx))) || fail "ttfx is listed before omasnap"
+  [[ -z $(cfield "$SHELL_TSV_REL" ttfx-crates 1) ]] || fail "ttfx-crates is made by fetch-sources, not listed"
+}
+
+@test "the Package_Map gives ttfx to motanka-stack-shell" {
+  run grep -A1 -x 'ttfx:' "$REPO/packages.yaml"
+  assert_output --partial '  all: {motanka: motanka-stack-shell, reason: "'
+}
+
 @test "--tsv is still accepted as the old name of --components" {
   run python3 "$FETCH" --tsv "$REPO/$QT6_TSV_REL" --check
   assert_success

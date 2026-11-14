@@ -10,6 +10,8 @@ Build-Depends: debhelper-compat (= 13),
                ninja-build,
                pkgconf,
                binutils,
+               cargo-1.91,
+               rustc-1.91,
                libcli11-dev,
                libdeflate-dev,
                libdrm-dev,
@@ -50,7 +52,7 @@ Depends: motanka-qt6,
          xdg-utils,
          ${shlibs:Depends},
          ${misc:Depends},
-Description: Hyprland stack for Motanka - desktop shell and screenshot tool
+Description: Hyprland stack for Motanka - desktop shell, screenshots, screensaver
  Motanka is an Omarchy-compatible Hyprland layer for Ubuntu. Its Stack is
  the Hyprland compositor with its companion programs and libraries at the
  versions upstream Omarchy expects, installed under /opt/motanka.
@@ -62,3 +64,6 @@ Description: Hyprland stack for Motanka - desktop shell and screenshot tool
  with. They run on the Qt 6.12 in motanka-qt6 on both Ubuntu 24.04 and 26.04
  and never load Ubuntu's own Qt. omasnap's menu entry is visible only in
  the Motanka session.
+ .
+ It also holds ttfx, the terminal text effects program that upstream
+ Omarchy's idle screensaver runs.
