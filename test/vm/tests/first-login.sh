@@ -19,10 +19,11 @@
 # (packaging/version.sh) from ~/.cache/motanka-vm/debs/<release>/:
 # motanka-stack-libs, motanka-stack-hyprland, motanka-stack-tools,
 # motanka-stack, motanka-qt6, motanka-stack-shell, motanka-fonts and
-# motanka-core. It
-# fails with the list of missing files and the build commands when any is
-# missing. The VM is the multiuser variant
-# (users alice and bob) started with MOTANKA_VM_GPU=gl.
+# motanka-core. It fails with the list of missing files and the build
+# commands when any is missing, and when the motanka-core .deb is older
+# than a file of packaging/motanka-core or of its build-imports (a stale
+# .deb would test earlier code). The VM is the multiuser variant (users
+# alice and bob) started with MOTANKA_VM_GPU=gl.
 #
 # The guest half is test/vm/first-login-guest.sh; its header lists every
 # check.
@@ -88,6 +89,29 @@ if ((${#missing[@]} > 0)); then
   mv_log "build them first, for example:"
   mv_log "  test/vm/build --suite $release packaging/motanka-stack"
   mv_log "  test/vm/build --suite $release packaging/motanka-qt6 packaging/motanka-stack-shell"
+  mv_log "  test/vm/build --suite $release packaging/motanka-fonts packaging/motanka-core"
+  finish
+fi
+
+# A cached motanka-core .deb older than its inputs would test earlier code
+# (packaging/motanka-core and the files its build-imports list copy in).
+# stale_core_input <deb>: prints the first input newer than <deb>.
+stale_core_input() {
+  local line path inputs=("$MV_REPO/packaging/motanka-core")
+  while IFS= read -r line; do
+    [[ -z $line || $line == \#* ]] && continue
+    if [[ $line == /* ]]; then
+      path=$MV_REPO$line
+    else
+      path=$MV_REPO/packaging/$line
+    fi
+    [[ -e ${path%/} ]] && inputs+=("${path%/}")
+  done <"$MV_REPO/packaging/motanka-core/build-imports"
+  find "${inputs[@]}" -type f -newer "$1" -print -quit
+}
+core_deb=$(deb_of motanka-core)
+if newer=$(stale_core_input "$core_deb") && [[ -n $newer ]]; then
+  fail "$core_deb is older than ${newer#"$MV_REPO"/}; rebuild it first:"
   mv_log "  test/vm/build --suite $release packaging/motanka-fonts packaging/motanka-core"
   finish
 fi
