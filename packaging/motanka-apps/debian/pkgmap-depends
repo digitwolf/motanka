@@ -18,7 +18,9 @@
 #   gvfs-nfs gvfs-smb man-db nautilus networkmanager nss-mdns
 #   omarchy-power-profiles-daemon plocate qemu-user-static-binfmt sushi
 #   system-config-printer ufw
-# herdr is not listed: motanka-apps ships its binary itself.
+# herdr is not listed: motanka-apps ships its binary itself. inetutils is
+# not listed either: its outcome is hostname, an Essential package that is on
+# every Ubuntu system, and Debian policy forbids an unversioned Depends on it.
 base-devel
 bash-completion
 bat
@@ -58,7 +60,6 @@ hyprpicker
 hyprsunset
 imagemagick
 imv
-inetutils
 inotify-tools
 inxi
 jq

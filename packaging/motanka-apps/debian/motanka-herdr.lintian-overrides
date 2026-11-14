@@ -1,3 +1,10 @@
 # Motanka's files live in /opt/motanka by design (DESIGN.md, "Linux
 # practices: Filesystem layout"), so they never shadow a host package.
 dir-or-file-in-opt
+# herdr is Upstream's pinned release binary, shipped byte for byte as
+# stack/fetch-sources verified it (debian/rules skips dh_strip and dh_dwz and
+# compares the file), so it keeps its symbols. It is a static PIE: it has a
+# dynamic section but needs no library, which lintian reads as a shared
+# library without prerequisites.
+unstripped-binary-or-object [opt/motanka/bin/herdr]
+shared-library-lacks-prerequisites [opt/motanka/bin/herdr]
