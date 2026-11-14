@@ -203,7 +203,9 @@ phase_upgrade_check() {
   hits=$(grep -ihE 'motanka' "$L"/dist-upgrade/main.log "$L"/dist-upgrade/apt.log 2>/dev/null || true)
   echo "upgrader log lines about Motanka packages:"
   printf '%s\n' "${hits:-none}" | head -n 40 | sed 's/^/    /'
-  if printf '%s\n' "$hits" | grep -qiE 'conflict|broken|unmet|held|error|E: '; then
+  # apt's error lines start with "E: " (case matters: "Obsolete: " in the
+  # upgrader's DEBUG lines must not match); the words are matched whole.
+  if printf '%s\n' "$hits" | grep -qE '(^|[[:space:]])E: |\b([Cc]onflicts?|CONFLICT|[Bb]roken|[Uu]nmet|[Hh]eld|[Ee]rror|ERROR)\b'; then
     fail "the upgrader logged a package conflict that names a Motanka package (11.1)"
   else
     pass "the upgrader logged no package conflict caused by a Motanka package (11.1)"
