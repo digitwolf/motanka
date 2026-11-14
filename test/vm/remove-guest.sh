@@ -269,15 +269,125 @@ phase_serve() {
   fi
 }
 
+# phase_install [apps]: 'motanka install --yes', with --apps when asked.
 phase_install() {
   local rc=0
-  sudo env MOTANKA_APT_URI="$URI" bash "$CLI" install --yes </dev/null >"$L/install.log" 2>&1 || rc=$?
+  local -a flags=(--yes)
+  if [[ ${ARGS[0]:-} == apps ]]; then
+    flags+=(--apps)
+  fi
+  sudo env MOTANKA_APT_URI="$URI" bash "$CLI" install "${flags[@]}" </dev/null >"$L/install.log" 2>&1 || rc=$?
   if ((rc == 0)) && installed motanka && installed motanka-core; then
-    pass "'motanka install --yes' exited 0; motanka and motanka-core are installed"
+    pass "'motanka install ${flags[*]}' exited 0; motanka and motanka-core are installed"
   else
-    fail "'motanka install --yes' exited $rc"
+    fail "'motanka install ${flags[*]}' exited $rc"
     show "$L/install.log"
   fi
+}
+
+# policy_snapshot <name>: the system state that 3.14 says installing
+# Motanka_Apps must leave unchanged, in $S/policy-<name>/: enabled and
+# active system units, sysctl -a, binfmt registrations, modules-load.d
+# files, the firewall rules (counters stripped), nsswitch.conf and the
+# polkit rules, plus the installed package list for attributing new units.
+policy_snapshot() {
+  local d=$S/policy-$1
+  sudo rm -rf "$d"
+  mkdir -p "$d"
+  systemctl list-unit-files --type=service,socket,timer,path --state=enabled --no-legend --no-pager |
+    awk '{ print $1 }' | sort >"$d/units-enabled.txt"
+  systemctl list-units --type=service,socket,timer,path --state=active --no-legend --no-pager --plain |
+    awk '{ print $1 }' | sort >"$d/units-active.txt"
+  sudo sysctl -a 2>/dev/null | sort >"$d/sysctl.txt" || true
+  sudo find /proc/sys/fs/binfmt_misc -mindepth 1 -maxdepth 1 ! -name register ! -name status \
+    -printf '%f\n' 2>/dev/null | sort >"$d/binfmt.txt" || true
+  sudo find /etc/modules-load.d /usr/lib/modules-load.d /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d \
+    /etc/nsswitch.conf -type f -exec sha256sum {} + 2>/dev/null | sort -k2 >"$d/files.txt" || true
+  {
+    if command -v nft >/dev/null; then
+      sudo nft list ruleset 2>/dev/null | sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter/'
+    fi
+    if command -v iptables-save >/dev/null; then
+      sudo iptables-save 2>/dev/null | sed -E '/^#/d; s/\[[0-9]+:[0-9]+\]/[0:0]/'
+    fi
+  } >"$d/firewall.txt"
+  dpkg-query -W -f='${Package}\n' | sort >"$d/packages.txt"
+}
+
+# phase_policy_compare <a> <b>: 3.14. Every part must be equal, except that
+# a unit that is active in <b> only counts when a package installed between
+# <a> and <b> owns its unit file (units such as packagekit.service turn
+# active from apt's own hooks). sysctl keys that change by themselves are
+# left out with tools/fpdiff.py's list, copied next to this script.
+phase_policy_compare() {
+  local a=$S/policy-${ARGS[0]} b=$S/policy-${ARGS[1]} part u frag owner bad=0
+  local -a new_pkgs=()
+  for part in units-enabled.txt binfmt.txt files.txt firewall.txt; do
+    if cmp -s "$a/$part" "$b/$part"; then
+      pass "3.14: $part is unchanged by the install"
+    else
+      fail "3.14: $part changed during the install (< before, > after):"
+      diff "$a/$part" "$b/$part" | show
+    fi
+  done
+  if python3 -I "$T/policy-sysctl.py" "$a/sysctl.txt" "$b/sysctl.txt" >"$L/policy-sysctl.diff" 2>&1; then
+    pass "3.14: no sysctl value changed (apart from the keys that change by themselves)"
+  else
+    fail "3.14: sysctl values changed during the install:"
+    show "$L/policy-sysctl.diff"
+  fi
+  mapfile -t new_pkgs < <(comm -13 "$a/packages.txt" "$b/packages.txt")
+  while IFS= read -r u; do
+    frag=$(systemctl show -P FragmentPath "$u" 2>/dev/null || true)
+    owner=""
+    if [[ -n $frag ]]; then
+      owner=$(dpkg-query -S "$frag" 2>/dev/null | cut -d: -f1 || true)
+    fi
+    if [[ -n $owner ]] && printf '%s\n' "${new_pkgs[@]}" | grep -qxF "$owner"; then
+      fail "3.14: $u turned active; its unit file $frag belongs to $owner, which the install added"
+      bad=1
+    else
+      echo "note: $u turned active during the install; its unit file (${frag:-none}) belongs to ${owner:-no package} installed before"
+    fi
+  done < <(comm -13 "$a/units-active.txt" "$b/units-active.txt")
+  if ((bad == 0)); then
+    pass "3.14: no unit of a package the install added turned active"
+  fi
+}
+
+# phase_apps <installed|gone>: motanka-apps, motanka-herdr and herdr.
+phase_apps() {
+  local v rc=0
+  case ${ARGS[0]:-} in
+    installed)
+      if installed motanka-apps && installed motanka-herdr; then
+        pass "motanka-apps and motanka-herdr are installed"
+      else
+        fail "motanka-apps or motanka-herdr is not installed"
+      fi
+      v=$("$PREFIX/bin/herdr" --version 2>&1) || rc=$?
+      if ((rc == 0)); then
+        pass "$PREFIX/bin/herdr --version exits 0: $v"
+      else
+        fail "$PREFIX/bin/herdr --version exited $rc: $v"
+      fi
+      if sudo grep -qP '\tapps-answer\tyes(\t|$)' "$LEDGER" 2>/dev/null; then
+        pass "the System_Ledger records the answer yes to the Motanka_Apps question (3.15)"
+      else
+        fail "the System_Ledger has no apps-answer yes record (3.15)"
+      fi
+      ;;
+    gone)
+      if ! installed motanka-apps && ! installed motanka-herdr && [[ ! -e $PREFIX/bin/herdr ]]; then
+        pass "motanka-apps, motanka-herdr and $PREFIX/bin/herdr are gone after the removal (10.15)"
+      else
+        fail "motanka-apps, motanka-herdr or $PREFIX/bin/herdr is still there after the removal (10.15)"
+      fi
+      ;;
+    *)
+      fail "phase apps needs installed or gone"
+      ;;
+  esac
 }
 
 phase_interrupt() {
@@ -850,6 +960,12 @@ case $phase in
     pass "snapshot ${ARGS[0]:-before}: $(wc -l <"$S/${ARGS[0]:-before}.pkgs") packages"
     ;;
   install) phase_install ;;
+  policy)
+    policy_snapshot "${ARGS[0]:-before}"
+    pass "policy snapshot ${ARGS[0]:-before}: $(wc -l <"$S/policy-${ARGS[0]:-before}/units-enabled.txt") enabled units"
+    ;;
+  policy-compare) phase_policy_compare ;;
+  apps) phase_apps ;;
   interrupt) phase_interrupt ;;
   partial-setup) phase_partial_setup ;;
   ledger-start) phase_ledger_start ;;

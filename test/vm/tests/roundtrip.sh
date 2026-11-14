@@ -10,11 +10,14 @@
 # Usage: test/vm/tests/roundtrip.sh     (test/run-all runs it)
 #
 # Environment:
-#   MOTANKA_VM_RELEASE       resolute (default: variants fresh, gnome-snaps,
-#                            kde, multiuser) or noble (variant fresh)
+#   MOTANKA_VM_RELEASE       resolute (default: variants fresh,
+#                            gnome-snaps+apps, kde+apps, multiuser) or noble
+#                            (variants fresh, fresh+apps)
 #   MOTANKA_VM_RESULTS       log folder
 #   MOTANKA_ROUNDTRIP_LOGIN  0 to skip the first login
-#   MOTANKA_ROUNDTRIP_VARIANTS  space-separated subset of the variants
+#   MOTANKA_ROUNDTRIP_VARIANTS  space-separated subset of the variants; a
+#                            variant with the suffix +apps installs with
+#                            'motanka install --yes --apps' (task 26.3)
 #
 # Packages and repository: test/vm/local-repo.sh builds them once from the
 # working tree (and reuses an earlier build of the same tree), so all
@@ -47,6 +50,14 @@
 #   and left out of the "before"/"after" comparison. The comparison applies
 #   the Allowlist and nothing else; tools/fpdiff.py reads the desktop class
 #   of the Allowlist from compat/home-paths.tsv.
+#
+# A "+apps" pass (requirements 3.14, 3.15, 10.15) also takes a policy
+# snapshot right before and right after the install and requires them to be
+# equal (enabled system units, sysctl values, binfmt, modules-load.d,
+# firewall rules, nsswitch.conf, polkit rules; a unit that turns active only
+# counts when a package of the install owns it), checks motanka-apps,
+# motanka-herdr, herdr and the ledgered answer after the install, and that
+# all three are gone after the removal. Its label ends in "-apps".
 set -euo pipefail
 # shellcheck source=../lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
@@ -86,14 +97,14 @@ finish() {
 }
 
 if [[ $release == resolute ]]; then
-  variants=(fresh gnome-snaps kde multiuser)
+  variants=(fresh gnome-snaps+apps kde+apps multiuser)
 else
-  variants=(fresh)
+  variants=(fresh fresh+apps)
 fi
 if [[ -n ${MOTANKA_ROUNDTRIP_VARIANTS:-} ]]; then
   read -r -a variants <<<"$MOTANKA_ROUNDTRIP_VARIANTS"
   for v in "${variants[@]}"; do
-    mv_check_variant "$v"
+    mv_check_variant "${v%+apps}"
   done
 fi
 
@@ -131,6 +142,8 @@ stage=$results/stage
 rm -rf -- "$stage"
 mkdir -p "$stage/guest" "$stage/cli/packaging/keys"
 cp -f "$MV_LIB_DIR/remove-guest.sh" "$stage/guest/remove-guest.sh"
+cp -f "$MV_LIB_DIR/policy-sysctl.py" "$stage/guest/policy-sysctl.py"
+cp -f "$MV_REPO/tools/fpdiff.py" "$stage/guest/fpdiff.py"
 cp -a "$MV_REPO/src" "$stage/cli/src"
 cp -f "$MV_REPO/packaging/keys/motanka-archive.asc" "$stage/cli/packaging/keys/"
 
@@ -199,9 +212,11 @@ fp_equal() {
 }
 
 run_variant() {
-  local variant=$1 label tvm fp_before fp_pre fp_after logged_in=0 do_login=$login rc=0
+  local variant=${1%+apps} apps=0 label tvm fp_before fp_pre fp_after logged_in=0 do_login=$login rc=0
   local -a others=()
+  [[ $1 == *+apps ]] && apps=1
   label=$release-$variant
+  ((apps)) && label+=-apps
   if [[ $variant == multiuser ]]; then
     others=(alice)
   fi
@@ -230,10 +245,20 @@ run_variant() {
   guest_phase "$tvm" "$label" snapshot before || true
   fp_before=$(fingerprint "$tvm" "$label-before")
 
-  if ! guest_phase "$tvm" "$label" install; then
+  local -a install_args=()
+  if ((apps)); then
+    install_args=(apps)
+    guest_phase "$tvm" "$label" policy before || true
+  fi
+  if ! guest_phase "$tvm" "$label" install "${install_args[@]}"; then
     mv_copy_from_vm "$tvm" "$GUEST_T/logs" "$results/$label-guest-logs" || true
     mv_destroy "$tvm"
     return 0
+  fi
+  if ((apps)); then
+    guest_phase "$tvm" "$label" policy after-install || true
+    guest_phase "$tvm" "$label" policy-compare before after-install || true
+    guest_phase "$tvm" "$label" apps installed || true
   fi
   if ((${#others[@]} > 0)); then
     guest_phase "$tvm" "$label" other-ledger "${others[@]}" || true
@@ -273,6 +298,9 @@ run_variant() {
   fp_pre=$(fingerprint "$tvm" "$label-pre-remove")
   guest_phase "$tvm" "$label" remove installed online --purge || true
   fp_after=$(fingerprint "$tvm" "$label-after")
+  if ((apps)); then
+    guest_phase "$tvm" "$label" apps gone || true
+  fi
 
   if ((${#others[@]} > 0)); then
     fp_equal "$label" "$fp_before" "$fp_after" \

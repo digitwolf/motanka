@@ -290,6 +290,17 @@ phase_install() {
     fail "the install ($arg) exited $rc"
     show "$L/install.log"
   fi
+  # 2.10: --yes without --apps installs no applications and ledgers "no".
+  if dpkg-query -W -f='${Status}' motanka-apps 2>/dev/null | grep -q 'install ok installed'; then
+    fail "--yes without --apps installed motanka-apps (2.10)"
+  else
+    pass "--yes without --apps left motanka-apps uninstalled (2.10)"
+  fi
+  if sudo grep -qP '\tapps-answer\tno\tdefault$' /var/lib/motanka/ledger 2>/dev/null; then
+    pass "the System_Ledger records the answer no, by default (3.15)"
+  else
+    fail "the System_Ledger has no 'apps-answer no default' record (3.15)"
+  fi
 }
 
 phase_check() {
