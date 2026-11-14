@@ -854,3 +854,34 @@ $(cut -f2- "$LEDGER")"
   assert_output "$r/etc/apparmor.d
 $r/etc/apparmor.d/disable"
 }
+
+@test "the Remover deletes the directories of purged packages that dpkg left empty and no installed package lists (10.1)" {
+  local r=$BATS_TEST_TMPDIR/root
+  mkdir -p "$r/var/lib/dpkg/info" "$r/etc/libreoffice/registry/res" "$r/etc/xdg/kept" "$r/usr/share/lo"
+  printf '/.\n/etc\n/etc/libreoffice\n/etc/libreoffice/registry\n/etc/xdg\n/usr\n/usr/share\n/usr/share/lo\n' \
+    >"$r/var/lib/dpkg/info/libreoffice-common.list"
+  printf '/etc\n/etc/libreoffice/registry/res\n/etc/libreoffice/registry/res/x.xcd\n/etc/xdg/kept\n' \
+    >"$r/var/lib/dpkg/info/libreoffice-calc:amd64.list"
+  printf '/etc\n/etc/xdg\n/etc/xdg/kept\n' >"$r/var/lib/dpkg/info/stays.list"
+  touch "$r/usr/share/lo/user-file"
+  run bash -c 'set -euo pipefail
+    source "$1/src/lib/common.sh"; source "$1/src/cmd/remove.sh"
+    export MOTANKA_ROOT=$2
+    _mk_rm_purged_dirs libreoffice-common libreoffice-calc >"$2/purged.txt"
+    rm -f "$2/var/lib/dpkg/info/libreoffice-common.list" "$2/var/lib/dpkg/info/libreoffice-calc:amd64.list"
+    _mk_rm_prune_dirs "$2/purged.txt"' _ "$REPO" "$r"
+  assert_success
+  assert_output --partial 'deleted /etc/libreoffice/registry/res, an empty directory of the purged packages'
+  assert_output --partial 'deleted /etc/libreoffice, an empty directory'
+  [[ ! -e $r/etc/libreoffice ]]
+  # listed by a package that stays installed, or not empty: kept
+  [[ -d $r/etc/xdg/kept && -d $r/usr/share/lo && -d $r/etc && -d $r/usr/share ]]
+  run cat "$r/purged.txt"
+  assert_output "/etc/libreoffice
+/etc/libreoffice/registry
+/etc/libreoffice/registry/res
+/etc/xdg
+/etc/xdg/kept
+/usr/share
+/usr/share/lo"
+}

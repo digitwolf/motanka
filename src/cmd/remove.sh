@@ -82,7 +82,10 @@
 #      directories under /etc of the packages that stay installed, listed
 #      before step 11, are recreated with their mode and owner if a
 #      maintainer script deleted them (dh_apparmor's postrm deletes
-#      /etc/apparmor.d/disable on purge)
+#      /etc/apparmor.d/disable on purge), and the directories of the
+#      purged packages, also listed before step 11, that are left empty
+#      and that no installed package lists are deleted (dpkg leaves a
+#      directory behind when packages purged after its owner filled it)
 #  13. run-end ok; the System_Ledger is archived to
 #      /var/log/motanka-ledger-<date> and /var/lib/motanka is deleted
 # Other users' home folders are listed and never touched (10.13). The
@@ -1441,6 +1444,59 @@ _mk_rm_restore_dirs() {
   done <"$1"
 }
 
+# _mk_rm_purged_dirs <package>...: the directories under /etc, /opt, /usr
+# and /var that dpkg lists for the named packages (the ones the Remover
+# purges) and that exist now, one dpkg path per line, sorted. After the
+# purge, _mk_rm_prune_dirs deletes those it left empty: dpkg deletes a
+# directory of a package only when it is empty at the moment that package
+# is purged, so a directory whose files belong to packages purged after it
+# stays behind (/etc/libreoffice/registry belongs to libreoffice-common,
+# and libreoffice-calc and others put their files in it) (10.1).
+_mk_rm_purged_dirs() {
+  local info name f root=${MOTANKA_ROOT:-}
+  local -a lists=()
+  info=$(mk_path /var/lib/dpkg/info)
+  for name in "$@"; do
+    for f in "$info/$name.list" "$info/$name":*.list; do
+      if [[ -e $f ]]; then
+        lists+=("$f")
+      fi
+    done
+  done
+  ((${#lists[@]} > 0)) || return 0
+  grep -hE '^/(etc|opt|usr|var)/.' "${lists[@]}" 2>/dev/null | LC_ALL=C sort -u |
+    while IFS= read -r f; do
+      if [[ -d $root$f && ! -L $root$f ]]; then
+        printf '%s\n' "$f"
+      fi
+    done
+}
+
+# _mk_rm_prune_dirs <file>: deletes, deepest first, each directory of the
+# _mk_rm_purged_dirs list in <file> that is empty and that no installed
+# package lists (as dpkg would have, had it purged the packages in the
+# other order), and says so.
+_mk_rm_prune_dirs() {
+  local info d root=${MOTANKA_ROOT:-}
+  local -a lists=()
+  info=$(mk_path /var/lib/dpkg/info)
+  for d in "$info"/*.list; do
+    if [[ -e $d ]]; then
+      lists+=("$d")
+    fi
+  done
+  LC_ALL=C sort -r -- "$1" | while IFS= read -r d; do
+    [[ -n $d && -d $root$d && ! -L $root$d ]] || continue
+    [[ -z $(ls -A -- "$root$d" 2>/dev/null) ]] || continue
+    if ((${#lists[@]} > 0)) && grep -qxF -- "$d" "${lists[@]}" 2>/dev/null; then
+      continue
+    fi
+    if rmdir -- "$root$d" 2>/dev/null; then
+      mk_info "deleted $d, an empty directory of the purged packages that dpkg left behind"
+    fi
+  done
+}
+
 _mk_rm_run() {
   local version marker p rc=0
   local -a planned=() target=() final=() left=() kept=() vanished=()
@@ -1487,6 +1543,8 @@ _mk_rm_run() {
   mapfile -t target < <(_mk_rm_intersect "${planned[*]}" "${MK_RM_FOREIGN[@]}")
   _mk_rm_shared_dirs "${MK_RM_MOTANKA[@]}" "${target[@]}" >"$MK_RM_WORK/shared-dirs.txt" ||
     mk_warn "cannot list the directories under /etc of the packages that stay installed"
+  _mk_rm_purged_dirs "${MK_RM_MOTANKA[@]}" "${target[@]}" >"$MK_RM_WORK/purged-dirs.txt" ||
+    mk_warn "cannot list the directories of the packages the removal purges"
 
   # 11. the Motanka packages
   if ((${#MK_RM_MOTANKA[@]} > 0)); then
@@ -1538,6 +1596,7 @@ _mk_rm_run() {
     mk_die "$MK_EXIT_ERROR" "these packages Motanka installed are still installed: ${left[*]}"
   fi
   _mk_rm_restore_dirs "$MK_RM_WORK/shared-dirs.txt"
+  _mk_rm_prune_dirs "$MK_RM_WORK/purged-dirs.txt"
 
   # 13. the System_Ledger
   MK_RM_ENDED=1
