@@ -66,10 +66,10 @@ finish() {
 }
 
 # deb_of <package>: the .deb of the current version in the test
-# repository, or nothing.
+# repository (pool/<suite>/main/<letter>/<source package>/), or nothing.
 deb_of() {
   local f
-  for f in "$LR_REPO"/pool/*/*/*/"$1"/"${1}_${ver}"_amd64.deb "$LR_REPO"/pool/*/*/*/"$1"/"${1}_${ver}"_all.deb; do
+  for f in "$LR_REPO"/pool/*/*/*/*/"${1}_${ver}"_amd64.deb "$LR_REPO"/pool/*/*/*/*/"${1}_${ver}"_all.deb; do
     if [[ -f $f ]]; then
       printf '%s\n' "$f"
       return 0
