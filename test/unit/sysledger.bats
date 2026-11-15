@@ -189,6 +189,21 @@ write_run() {
   assert_output $'libfoo1\nglycin-loaders'
 }
 
+@test "a pkg-released line leaves the package out until a later line records it again" {
+  MK_RUN_ID=20261114T090000Z-000001
+  mk_sysledger_begin update 0.1.0
+  mk_sysledger_pkg_installed util-linux-extra 2.41.3 auto
+  mk_sysledger_pkg_installed libfoo1 1.2-4 auto
+  mk_sysledger_pkg_released util-linux-extra 2.41.3
+  run mk_sysledger_pkg_released util-linux-extra 2.41.3 auto
+  assert_failure
+  run mk_sysledger_packages
+  assert_output 'libfoo1'
+  mk_sysledger_pkg_adopted util-linux-extra 2.41.3
+  run mk_sysledger_packages
+  assert_output $'util-linux-extra\nlibfoo1'
+}
+
 @test "the ledger folder is created when missing" {
   [[ ! -e $MOTANKA_ROOT/var ]]
   mk_sysledger_begin install 0.1.0

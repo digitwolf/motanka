@@ -292,7 +292,9 @@ ledger_verbs() {
 # 26.04 host, as a release upgrade leaves them, with the 26.04 builds
 # offered; libnew (a new dependency the upgrader installed) and libold
 # (kept only for Motanka) become orphans without Motanka, liborphan is one
-# already, libuser is manual, libledgered is already in the System_Ledger.
+# already, libuser is manual, libledgered is already in the System_Ledger;
+# librec is in the System_Ledger too, and a package outside Motanka now
+# recommends it (the purge simulation keeps it), so the update releases it.
 after_release_upgrade() {
   local p
   : >"$FAKE_DB"
@@ -303,11 +305,11 @@ after_release_upgrade() {
   for p in motanka motanka-core motanka-stack; do
     offer "$p" "$N"
   done
-  for p in libnew libold liborphan libledgered; do
+  for p in libnew libold liborphan libledgered librec; do
     pkg "$p" 1.0 amd64 auto
   done
   pkg libuser 1.0 amd64 manual
-  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tpkg-installed\tlibledgered\t1.0\tauto\n' >"$LEDGER"
+  printf '2026-11-13T09:00:00Z\t20261113T090000Z-abcdef\tpkg-installed\t%s\t1.0\tauto\n' libledgered librec >"$LEDGER"
   printf 'liborphan\n' >"$FAKE_STATE/autoremove"
   printf 'libnew\nlibold\nlibuser\nlibledgered\nmotanka-archive-keyring\n' >"$FAKE_STATE/purge-autoremove"
   export FAKE_AUTOREMOVE=$FAKE_STATE/autoremove FAKE_PURGE_AUTOREMOVE=$FAKE_STATE/purge-autoremove
@@ -326,12 +328,18 @@ after_release_upgrade() {
   refute_line --partial $'pkg-adopted\tlibuser'
   refute_line --partial $'pkg-adopted\tlibledgered'
   refute_line --partial $'pkg-adopted\tmotanka'
+  refute_line --partial $'pkg-adopted\tlibrec'
+  assert_line $'pkg-released\tlibrec\t1.0'
+  refute_line --partial $'pkg-released\tlibledgered'
+  refute_line --partial $'pkg-released\tlibuser'
   assert_equal "${lines[-1]}" $'run-end\tok'
   assert_equal "$(installed_version motanka-core)" "$N"
   # Only simulations: no real autoremove or purge.
   run calls apt-get
   refute_line --regexp '^(-q )?(autoremove|purge|--auto-remove)'
-  assert_line --regexp '-s autoremove$'
+  # Both simulations ignore Suggests, as the release upgrader does.
+  assert_line --regexp '-o APT::AutoRemove::SuggestsImportant=false -s autoremove$'
+  assert_line --regexp '-o APT::AutoRemove::SuggestsImportant=false -s --auto-remove purge '
   # A second update has nothing left to adopt or upgrade.
   run update --yes
   assert_success
@@ -348,6 +356,8 @@ after_release_upgrade() {
   assert_line '  libnew'
   assert_line '  libold'
   refute_line '  libuser'
+  assert_output --partial 'Packages Motanka installed that the system now needs or recommends'
+  assert_line '  librec'
   cmp "$LEDGER" "$T/ledger.before"
 }
 

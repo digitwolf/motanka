@@ -684,6 +684,28 @@ apps_db_and_ledger() {
   assert_equal "$(installed_names)" "bash "
 }
 
+@test "a package the update released after a release upgrade is kept (11.4)" {
+  # Motanka installed util-linux-extra on 24.04; after the release upgrade
+  # sos recommends it, and the next update recorded it as pkg-released.
+  db 'motanka-core installed 0.1 manual util-linux-extra,libfoo1 -' \
+    'util-linux-extra installed 2.41 auto liblastlog2-2 -' \
+    'liblastlog2-2 installed 2.41 auto - -' \
+    'libfoo1 installed 1.0 auto - -' \
+    'sos installed 4.10 manual - - util-linux-extra' \
+    'bash installed 5.2 manual - -'
+  sl 20261113T090000Z-aaaaaa run-begin install 0.1
+  sl 20261113T090000Z-aaaaaa pkg-installed util-linux-extra 2.39 auto
+  sl 20261113T090000Z-aaaaaa pkg-installed libfoo1 1.0 auto
+  sl 20261113T090000Z-aaaaaa run-end ok
+  sl 20261114T090000Z-bbbbbb run-begin update 0.1
+  sl 20261114T090000Z-bbbbbb pkg-released util-linux-extra 2.41
+  sl 20261114T090000Z-bbbbbb run-end ok
+  remove --yes
+  assert_success
+  refute_line --partial 'util-linux-extra 2.41  (installed by Motanka'
+  assert_equal "$(installed_names)" "bash liblastlog2-2 sos util-linux-extra "
+}
+
 @test "a package Motanka installed is purged when only packages purged with it need it" {
   # The 26.04 round trip: pkexec came in as a dependency of motanka-core.
   # A host package suggests it (apport) and another names it as an

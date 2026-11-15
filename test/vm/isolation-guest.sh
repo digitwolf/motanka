@@ -44,7 +44,8 @@
 #   other-out      log out of GNOME (after other-in)
 #   owned          state/owned-packages.txt: the Motanka_Packages and the
 #                  Foreign_Packages the System_Ledger records (pkg-installed,
-#                  pkg-adopted, new installs in plan lines);
+#                  pkg-adopted, new installs in plan lines, less
+#                  pkg-released);
 #                  state/owned-paths.txt: what those packages own (dpkg -L),
 #                  the dconf database motanka-core's postinst compiles,
 #                  /etc/ld.so.cache (ldconfig's cache of the installed
@@ -336,8 +337,10 @@ phase_owned() {
   {
     dpkg-query -W -f='${Package}\n' 'motanka' 'motanka-*' 2>/dev/null || true
     sudo awk -F'\t' '
-      $3 == "pkg-installed" || $3 == "pkg-adopted" { print $4 }
-      $3 == "plan" { n = split($4, w, " "); if (n >= 3 && w[1] == "Inst" && substr(w[3], 1, 1) == "(") { sub(/:[A-Za-z0-9]+$/, "", w[2]); print w[2] } }
+      $3 == "pkg-installed" || $3 == "pkg-adopted" { own[$4] = 1 }
+      $3 == "pkg-released" { delete own[$4] }
+      $3 == "plan" { n = split($4, w, " "); if (n >= 3 && w[1] == "Inst" && substr(w[3], 1, 1) == "(") { sub(/:[A-Za-z0-9]+$/, "", w[2]); own[w[2]] = 1 } }
+      END { for (p in own) print p }
     ' /var/lib/motanka/ledger 2>/dev/null || true
   } | LC_ALL=C sort -u >"$S/owned-packages.txt"
   {

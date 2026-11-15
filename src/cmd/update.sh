@@ -30,10 +30,11 @@
 #      written.
 #  6a. after a release upgrade (an installed Motanka_Package is a build for
 #      another release than VERSION_ID): the packages the release upgrader
-#      installed or kept only for Motanka (_mk_up_plan_adoptions; 11.4);
-#      the dry run lists them
+#      installed or kept only for Motanka, and the recorded
+#      Foreign_Packages a package outside Motanka now needs or recommends
+#      (_mk_up_plan_adoptions; 11.4); the dry run lists both
 #   7. System_Ledger: run-begin update, one plan line per simulated action,
-#      then a pkg-adopted line per package of step 6a
+#      then a pkg-adopted and a pkg-released line per package of step 6a
 #   8. snapshot (src/lib/snapshot.sh): the version and .deb of every
 #      installed Motanka_Package, and an archive of each user's ledgered
 #      files and Namespaced_Paths (9.10); then a snapper pre snapshot when
@@ -110,6 +111,7 @@ MK_UP_PKGS=()
 MK_UP_PENDING=()
 MK_UP_ALLOWED=()
 MK_UP_ADOPT=()
+MK_UP_RELEASE=()
 
 mk_update_usage() {
   cat <<'EOF'
@@ -375,12 +377,25 @@ _mk_up_removed() {
 # simulated "apt-get autoremove" now. They are new dependencies the
 # upgrader installed for packages Motanka installed, and packages that
 # only Motanka's packages still need (the upgrader would have removed them
-# otherwise). apt keeps every package that an installed package's Depends,
-# Recommends or Suggests names, so nothing a package outside Motanka uses
-# is adopted. Simulations only; nothing changes.
+# otherwise). Both simulations ignore Suggests, as the release upgrader
+# does (APT::AutoRemove::SuggestsImportant false in DistUpgradeCache.py):
+# a package that only a Suggests outside Motanka names (libarchive13t64,
+# suggested by e2fsprogs, needed by tesseract-ocr) is one the upgrader
+# removes. apt keeps every package that an installed package's Depends or
+# Recommends names, so nothing a package outside Motanka needs or
+# recommends is adopted.
+# MK_UP_RELEASE gets the recorded Foreign_Packages (mk_sysledger_packages)
+# that are marked automatically installed and that the first simulation
+# keeps: a package outside Motanka depends on them or recommends them now.
+# The release upgrade made them part of the system (it installs a new
+# Recommends, such as util-linux-extra for sos on 26.04, and a system that
+# never had Motanka has them too), so the Remover keeps them.
+# Simulations only; nothing changes.
 _mk_up_plan_adoptions() {
   local d=$MK_UP_DIR os p ver re='~ubuntu([0-9]+\.[0-9]+)\.' other=0
+  local -a sim=(-q -o APT::AutoRemove::SuggestsImportant=false -s)
   MK_UP_ADOPT=()
+  MK_UP_RELEASE=()
   os=$(_mk_up_os_field VERSION_ID)
   if [[ -z $os ]]; then
     return 0
@@ -394,8 +409,8 @@ _mk_up_plan_adoptions() {
     return 0
   fi
   mk_log info "Motanka packages are builds for another release than $os; looking for packages the release upgrade left for Motanka"
-  if ! LC_ALL=C apt-get -q -s autoremove >"$d/autoremove.txt" 2>"$d/autoremove.err" ||
-    ! LC_ALL=C apt-get -q -s --auto-remove purge "${MK_UP_PKGS[@]}" >"$d/purge.txt" 2>"$d/purge.err"; then
+  if ! LC_ALL=C apt-get "${sim[@]}" autoremove >"$d/autoremove.txt" 2>"$d/autoremove.err" ||
+    ! LC_ALL=C apt-get "${sim[@]}" --auto-remove purge "${MK_UP_PKGS[@]}" >"$d/purge.txt" 2>"$d/purge.err"; then
     sed 's/^/  /' "$d/autoremove.err" "$d/purge.err" >&2 2>/dev/null || true
     mk_die "$MK_EXIT_ERROR" "apt cannot simulate the removal of the Motanka packages; nothing was changed"
   fi
@@ -409,18 +424,30 @@ _mk_up_plan_adoptions() {
     fi
   done < <(LC_ALL=C comm -12 "$d/orphans-without.txt" "$d/auto.txt" |
     LC_ALL=C comm -23 - "$d/orphans-now.txt" | LC_ALL=C comm -23 - "$d/ledgered.txt")
+  while IFS= read -r p; do
+    if ! mk_is_motanka_package "$p"; then
+      MK_UP_RELEASE+=("$p")
+    fi
+  done < <(LC_ALL=C comm -12 "$d/ledgered.txt" "$d/auto.txt" | LC_ALL=C comm -23 - "$d/orphans-without.txt")
 }
 
-# _mk_up_record_adoptions: pkg-adopted lines for MK_UP_ADOPT, after the
-# plan lines.
+# _mk_up_record_adoptions: pkg-adopted lines for MK_UP_ADOPT and
+# pkg-released lines for MK_UP_RELEASE, after the plan lines.
 _mk_up_record_adoptions() {
   local p ver
   for p in "${MK_UP_ADOPT[@]}"; do
     ver=$(mk_installed_version "$p") || continue
     mk_sysledger_pkg_adopted "$p" "$ver" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   done
+  for p in "${MK_UP_RELEASE[@]}"; do
+    ver=$(mk_installed_version "$p") || continue
+    mk_sysledger_pkg_released "$p" "$ver" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
+  done
   if ((${#MK_UP_ADOPT[@]} > 0)); then
     mk_info "recorded ${#MK_UP_ADOPT[@]} package(s) the release upgrade installed or kept for Motanka; 'motanka remove' removes them: ${MK_UP_ADOPT[*]}"
+  fi
+  if ((${#MK_UP_RELEASE[@]} > 0)); then
+    mk_info "released ${#MK_UP_RELEASE[@]} package(s) Motanka installed that the system now needs or recommends; 'motanka remove' keeps them: ${MK_UP_RELEASE[*]}"
   fi
 }
 
@@ -472,6 +499,10 @@ _mk_up_print_plan() {
   if ((${#MK_UP_ADOPT[@]} > 0)); then
     printf 'Packages the release upgrade installed or kept for Motanka, recorded in the System_Ledger so that motanka remove removes them:\n'
     printf '  %s\n' "${MK_UP_ADOPT[@]}"
+  fi
+  if ((${#MK_UP_RELEASE[@]} > 0)); then
+    printf 'Packages Motanka installed that the system now needs or recommends, released in the System_Ledger so that motanka remove keeps them:\n'
+    printf '  %s\n' "${MK_UP_RELEASE[@]}"
   fi
   users=$(mk_snapshot_users | grep -c . || true)
   printf 'Snapshot before the upgrade: %d Motanka package(s) with their .debs, and the ledgered files of %d user(s).\n' \
@@ -625,7 +656,7 @@ _mk_up_run() {
   local inst rm version raw
   inst=$(_mk_up_count Inst)
   rm=$(_mk_up_count Remv Purg)
-  if ((inst == 0 && rm == 0 && ${#MK_UP_PENDING[@]} == 0 && ${#MK_UP_ADOPT[@]} == 0)); then
+  if ((inst == 0 && rm == 0 && ${#MK_UP_PENDING[@]} == 0 && ${#MK_UP_ADOPT[@]} == 0 && ${#MK_UP_RELEASE[@]} == 0)); then
     mk_info "Motanka is up to date ($(mk_installed_version motanka-core)); no migration is pending"
     mk_log info "up to date; nothing changed"
     return 0

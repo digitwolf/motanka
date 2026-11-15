@@ -32,7 +32,9 @@
 #        kept only for Motanka, recorded by the next update) and the
 #        packages that plan lines of install and update runs name as new
 #        installs ("Inst <name> (" - this covers an interrupted install,
-#        whose pkg-installed lines were never written). A name is a
+#        whose pkg-installed lines were never written), without the names
+#        a later pkg-released line names (what that update found a package
+#        outside Motanka now needs or recommends). A name is a
 #        candidate only if it is known to dpkg, not recorded as manual and
 #        still marked auto by apt-mark; packages the ledger does not name
 #        are never removed (10.7, 10.8). A ledgered package (not recorded
@@ -444,14 +446,16 @@ _mk_rm_ledger_append() {
 
 # _mk_rm_ledger_candidates: "<name> TAB auto|manual" for every package the
 # System_Ledger records Motanka installing: pkg-installed lines (manual if
-# any of them says so), pkg-adopted lines (auto) and new installs in plan lines of install and update
-# runs (auto unless a pkg-installed line says otherwise).
+# any of them says so), pkg-adopted lines (auto) and new installs in plan
+# lines of install and update runs (auto unless a pkg-installed line says
+# otherwise), less the names of a pkg-released line that no such line
+# follows.
 _mk_rm_ledger_candidates() {
   if [[ -z $MK_RM_LEDGER ]]; then
     return 0
   fi
   mk_sysledger_read "$MK_RM_LEDGER" 2>/dev/null | awk -F'\t' '
-    function add(p) { if (!(p in seen)) { seen[p] = 1; order[++n] = p } }
+    function add(p) { if (!(p in seen)) { seen[p] = 1; order[++n] = p } delete released[p] }
     $3 == "run-begin" { kind[$2] = $4 }
     $3 == "pkg-installed" {
       add($4)
@@ -461,13 +465,19 @@ _mk_rm_ledger_candidates() {
       add($4)
       if (!($4 in mode)) mode[$4] = "auto"
     }
+    $3 == "pkg-released" { released[$4] = 1 }
     $3 == "plan" && (kind[$2] == "install" || kind[$2] == "update") {
       m = split($4, w, " ")
       if (m >= 3 && w[1] == "Inst" && substr(w[3], 1, 1) == "(") {
         p = w[2]; sub(/:[A-Za-z0-9]+$/, "", p); add(p)
       }
     }
-    END { for (i = 1; i <= n; i++) { p = order[i]; print p "\t" ((p in mode) ? mode[p] : "auto") } }'
+    END {
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        if (!(p in released)) print p "\t" ((p in mode) ? mode[p] : "auto")
+      }
+    }'
 }
 
 # _mk_rm_menu_installs: "<uid> TAB <name> TAB apt|binary" per menu install.
