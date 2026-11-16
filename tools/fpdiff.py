@@ -19,7 +19,9 @@ File handling:
 
 System Allowlist: apt caches and lists, /var/log, the journal, the
 backup copies /etc/passwd-, /etc/group-, /etc/shadow- and /etc/gshadow-,
-and cupsd's subscription state /etc/cups/subscriptions.conf{,.O}.
+and cupsd's subscription state /etc/cups/subscriptions.conf{,.O}; a change
+of /etc/fwupd/fwupd.conf's mode to 0640 alone, which fwupd's daemon makes
+whenever it starts (SYSTEM_MODE_ALLOW).
 
 Home-folder Allowlist: ~/.cache, ~/.local/state/motanka-removed-*, and the
 paths of class "desktop" in compat/home-paths.tsv (--home-paths), which
@@ -65,6 +67,16 @@ SYSTEM_ALLOW = (
     "etc/cups/subscriptions.conf",
     "etc/cups/subscriptions.conf.O",
 )
+
+# System files whose daemon resets their mode: path -> the mode it sets. Only
+# that change of mode is allowed; type, owner and content are still compared.
+# fwupd's daemon sets its writable fwupd.conf to 0640 each time it loads it
+# (fu_config_reload, FU_CONFIG_FILE_MODE_SECURE); Ubuntu ships the file 0644,
+# and the daemon first starts when fwupd-refresh.timer or a firmware notifier
+# asks it something, at no fixed time.
+SYSTEM_MODE_ALLOW = {
+    "etc/fwupd/fwupd.conf": "0640",
+}
 
 # Home-folder paths, matched component by component from the home folder.
 # The desktop class of compat/home-paths.tsv is added to these.
@@ -231,6 +243,19 @@ def parse_tree(name, lines, home, homepaths=None):
     return entries, dropped
 
 
+def allow_modes(a, b):
+    """Takes the entry before for a SYSTEM_MODE_ALLOW path whose only change
+    is its mode, to the mode the daemon sets."""
+    for path, mode in SYSTEM_MODE_ALLOW.items():
+        key = "/" + path
+        if key not in a or key not in b:
+            continue
+        fa = a[key][0].split("\t")
+        fb = b[key][0].split("\t")
+        if len(fa) == len(fb) >= 2 and fb[1] == mode and fa[:1] + fa[2:] == fb[:1] + fb[2:]:
+            b[key] = a[key]
+
+
 def drop_holders(a, b, dropped):
     """Leaves out the folders that hold an allowlisted path (see the top)."""
     holders = set()
@@ -331,6 +356,8 @@ def compare_tree(name, a, b, homepaths):
     tb, db = parse_tree(name, b, home, homepaths)
     if home:
         drop_holders(ta, tb, set(da) | set(db))
+    else:
+        allow_modes(ta, tb)
     return diff_keyed(
         name,
         {k: v[0] for k, v in ta.items()},

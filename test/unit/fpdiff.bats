@@ -141,6 +141,28 @@ fpdiff() {
   assert_output --partial 'etc.sha256: changed /etc/group:'
 }
 
+@test "fwupd.conf changed to mode 0640 alone is ignored, any other change is not" {
+  printf '/etc/fwupd/fwupd.conf\tf\t0644\t0:0\t%s\n' "$SHA_A" >>"$BEFORE/etc.sha256"
+  cp "$AFTER/etc.sha256" "$BATS_TEST_TMPDIR/etc.base"
+  printf '/etc/fwupd/fwupd.conf\tf\t0640\t0:0\t%s\n' "$SHA_A" >>"$AFTER/etc.sha256"
+  fpdiff
+  assert_success
+  { cat "$BATS_TEST_TMPDIR/etc.base"; printf '/etc/fwupd/fwupd.conf\tf\t0640\t0:0\t%s\n' "$SHA_B"; } >"$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  assert_output --partial 'etc.sha256: changed /etc/fwupd/fwupd.conf: f 0644 0:0'
+  { cat "$BATS_TEST_TMPDIR/etc.base"; printf '/etc/fwupd/fwupd.conf\tf\t0600\t0:0\t%s\n' "$SHA_A"; } >"$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  { cat "$BATS_TEST_TMPDIR/etc.base"; printf '/etc/fwupd/fwupd.conf\tf\t0640\t0:1\t%s\n' "$SHA_A"; } >"$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  cat "$BATS_TEST_TMPDIR/etc.base" >"$AFTER/etc.sha256"
+  fpdiff
+  assert_failure 1
+  assert_output --partial 'etc.sha256: removed /etc/fwupd/fwupd.conf'
+}
+
 @test "a dconf change is reported with its full key" {
   printf '[org/gnome/desktop/interface]\ncolor-scheme=%s\n' "'prefer-dark'" >"$AFTER/dconf-alice.ini"
   fpdiff
