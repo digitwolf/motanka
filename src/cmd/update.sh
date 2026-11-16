@@ -43,7 +43,9 @@
 #      Motanka_Packages (without --no-remove only when the simulation
 #      removes Motanka_Packages and nothing else); Motanka packages that
 #      were marked automatically installed are marked so again;
-#      pkg-installed lines for new Foreign_Packages (3.7)
+#      account-created lines for the accounts the transaction added
+#      (mk_accounts_begin, mk_accounts_end); pkg-installed lines for new
+#      Foreign_Packages (3.7)
 #  10. the Channel's Upstream_Pin: the vendored tree comes with
 #      motanka-core, so the upgrade moved it; the pin of the Channel in
 #      upstream.pin and the vendored tree are checked and reported
@@ -560,9 +562,11 @@ _mk_up_upgrade() {
   fi
   args+=(--no-install-recommends)
   mk_info "upgrading the Motanka packages"
+  mk_accounts_begin || mk_die "$MK_EXIT_ERROR" "cannot save the account list"
   if ! mk_snapshot_apt "${args[@]}" "${MK_UP_PKGS[@]}"; then
     mk_die "$MK_EXIT_ERROR" "apt-get could not upgrade the Motanka packages"
   fi
+  mk_accounts_end || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   if ((${#auto[@]} > 0)); then
     mk_snapshot_mark_auto "${auto[@]}"
   fi

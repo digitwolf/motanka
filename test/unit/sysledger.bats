@@ -204,6 +204,34 @@ write_run() {
   assert_output $'util-linux-extra\nlibfoo1'
 }
 
+@test "account-created lines record the accounts a transaction added, also across an interrupted run" {
+  mkdir -p "$MOTANKA_ROOT/etc"
+  printf 'root:x:0:0:root:/root:/bin/bash\n' >"$MOTANKA_ROOT/etc/passwd"
+  printf 'root:x:0:\n' >"$MOTANKA_ROOT/etc/group"
+  MK_RUN_ID=20261116T090000Z-000001
+  mk_sysledger_begin install 0.1.0
+  mk_accounts_begin
+  [[ -s $MOTANKA_ROOT/var/lib/motanka/accounts.pre ]]
+  printf 'pipewire:x:990:990::/nonexistent:/usr/sbin/nologin\n' >>"$MOTANKA_ROOT/etc/passwd"
+  printf 'pipewire:x:990:\n' >>"$MOTANKA_ROOT/etc/group"
+  # The run is interrupted here; the next one keeps the first list.
+  mk_accounts_begin
+  printf 'docker:x:991:\n' >>"$MOTANKA_ROOT/etc/group"
+  mk_accounts_end
+  [[ ! -e $MOTANKA_ROOT/var/lib/motanka/accounts.pre ]]
+  run mk_sysledger_accounts
+  assert_output "$(printf '%s\t%s\t%s\n' "$MK_RUN_ID" group docker "$MK_RUN_ID" group pipewire "$MK_RUN_ID" user pipewire)"
+  # Without a saved list, mk_accounts_end records nothing.
+  printf 'later:x:992:\n' >>"$MOTANKA_ROOT/etc/group"
+  mk_accounts_end
+  run mk_sysledger_accounts
+  refute_output --partial later
+  run mk_sysledger_account_created admin root
+  assert_failure
+  run mk_sysledger_account_created user 'Bad Name'
+  assert_failure
+}
+
 @test "the ledger folder is created when missing" {
   [[ ! -e $MOTANKA_ROOT/var ]]
   mk_sysledger_begin install 0.1.0

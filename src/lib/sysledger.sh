@@ -10,6 +10,7 @@
 #   pkg-adopted    <name>  <version>
 #   pkg-released   <name>  <version>
 #   menu-install   <uid>  <name>  apt|binary
+#   account-created  user|group  <name>
 #   apps-answer    yes|no  flag|question|default
 #   run-end        ok|failed
 #
@@ -22,6 +23,16 @@
 # recommends util-linux-extra), so the package is no longer Motanka's. A
 # later pkg-installed or pkg-adopted line, or a new install in a plan line,
 # makes it Motanka's again.
+#
+# account-created is written after an apt transaction of the Installer,
+# the Updater or the Helper for each account in /etc/passwd (user) or
+# /etc/group (group) that the transaction created: a package's sysusers.d
+# file or maintainer script adds a system account, which dpkg never
+# deletes (pipewire 26.04 adds the user pipewire). The account list before
+# the transaction is kept in /var/lib/motanka/accounts.pre until the lines
+# are written, so a run that was interrupted during the transaction leaves
+# it for the next one (mk_accounts_begin, mk_accounts_end). The Remover
+# deletes the accounts after the purge (src/cmd/remove.sh).
 #
 # apps-answer is the answer of one install run to the Motanka_Apps
 # question (3.15): flag for --apps or --no-apps, question for an answer at
@@ -77,6 +88,9 @@ _mk_sysledger_check() {
     apps-answer)
       (($# == 2)) && [[ $1 == yes || $1 == no ]] &&
         [[ $2 == flag || $2 == question || $2 == default ]]
+      ;;
+    account-created)
+      (($# == 2)) && [[ $1 == user || $1 == group ]] && [[ $2 =~ ^[a-z_][a-z0-9_.-]*[$]?$ ]]
       ;;
     run-end)
       (($# == 1)) && [[ $1 == ok || $1 == failed ]]
@@ -154,6 +168,65 @@ mk_sysledger_pkg_adopted() {
 # mk_sysledger_pkg_released <name> <version>
 mk_sysledger_pkg_released() {
   mk_sysledger_append pkg-released "$@"
+}
+
+# mk_sysledger_account_created <user|group> <name>
+mk_sysledger_account_created() {
+  mk_sysledger_append account-created "$@"
+}
+
+readonly MK_ACCOUNTS_PRE=/var/lib/motanka/accounts.pre
+
+# mk_accounts_list: "user <name>" for every line of /etc/passwd and
+# "group <name>" for every line of /etc/group, sorted.
+mk_accounts_list() {
+  {
+    awk -F: 'NF >= 7 && $1 != "" { print "user " $1 }' "$(mk_path /etc/passwd)" 2>/dev/null || true
+    awk -F: 'NF >= 4 && $1 != "" { print "group " $1 }' "$(mk_path /etc/group)" 2>/dev/null || true
+  } | LC_ALL=C sort -u
+}
+
+# mk_accounts_begin: before an apt transaction, saves the account list to
+# /var/lib/motanka/accounts.pre unless an interrupted run left one there.
+mk_accounts_begin() {
+  local f tmp
+  f=$(mk_path "$MK_ACCOUNTS_PRE")
+  if [[ -s $f ]]; then
+    return 0
+  fi
+  if ! mkdir -p -- "${f%/*}"; then
+    mk_error "cannot create ${f%/*}"
+    return 1
+  fi
+  tmp=$f.tmp.$$
+  if ! mk_accounts_list >"$tmp" || ! mv -f -- "$tmp" "$f"; then
+    rm -f -- "$tmp"
+    mk_error "cannot write $f"
+    return 1
+  fi
+}
+
+# mk_accounts_end: after the transaction, an account-created line for each
+# account that is not in /var/lib/motanka/accounts.pre, then deletes it.
+mk_accounts_end() {
+  local f kind name
+  f=$(mk_path "$MK_ACCOUNTS_PRE")
+  if [[ ! -e $f ]]; then
+    return 0
+  fi
+  while read -r kind name; do
+    if [[ -n $name ]]; then
+      mk_sysledger_account_created "$kind" "$name" || return 1
+      mk_info "the transaction created the $kind account $name; 'motanka remove' deletes it"
+    fi
+  done < <(mk_accounts_list | LC_ALL=C comm -13 "$f" -)
+  rm -f -- "$f"
+}
+
+# mk_sysledger_accounts [file]: "<run-id> TAB user|group TAB <name>" for
+# every account-created line, the first line per account.
+mk_sysledger_accounts() {
+  mk_sysledger_read "$@" | awk -F'\t' 'BEGIN { OFS = "\t" } $3 == "account-created" && !seen[$4 " " $5]++ { print $2, $4, $5 }'
 }
 
 # mk_sysledger_menu_install <uid> <name> <apt|binary>

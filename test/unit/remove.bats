@@ -112,6 +112,27 @@ EOF
   for t in curl wget; do
     printf '#!/bin/sh\necho "network: %s $*" >>"$FAKE_LOG"\nexit 7\n' "$t" >"$STUBS/$t"
   done
+  # userdel <name> deletes the user and its group of the same name
+  # (USERGROUPS_ENAB), groupdel <name> the group, in the fake root.
+  cat >"$STUBS/userdel" <<'EOF'
+#!/bin/sh
+echo "userdel $*" >>"$FAKE_LOG"
+for f in passwd group; do
+  awk -F: -v n="$1" '$1 != n' "$MOTANKA_ROOT/etc/$f" >"$MOTANKA_ROOT/etc/$f.new" 2>/dev/null &&
+    mv "$MOTANKA_ROOT/etc/$f.new" "$MOTANKA_ROOT/etc/$f"
+done
+EOF
+  cat >"$STUBS/groupdel" <<'EOF'
+#!/bin/sh
+echo "groupdel $*" >>"$FAKE_LOG"
+awk -F: -v n="$1" '$1 != n' "$MOTANKA_ROOT/etc/group" >"$MOTANKA_ROOT/etc/group.new" &&
+  mv "$MOTANKA_ROOT/etc/group.new" "$MOTANKA_ROOT/etc/group"
+EOF
+  # pgrep -u <uid>: a process runs as the uids in FAKE_PGREP_UIDS.
+  cat >"$STUBS/pgrep" <<'EOF'
+#!/bin/sh
+case " ${FAKE_PGREP_UIDS:-} " in *" $2 "*) echo 4242 ;; *) exit 1 ;; esac
+EOF
   chmod +x "$STUBS"/*
   export PATH="$STUBS:$PATH"
 }
@@ -704,6 +725,67 @@ apps_db_and_ledger() {
   assert_success
   refute_line --partial 'util-linux-extra 2.41  (installed by Motanka'
   assert_equal "$(installed_names)" "bash liblastlog2-2 sos util-linux-extra "
+}
+
+# accounts_fixture: pipewire (a user and its group) and docker (a group)
+# exist; the install run recorded pipewire, the Helper's run for a menu
+# install recorded docker.
+accounts_fixture() {
+  printf 'pipewire:x:990:990:system user for pipewire:/nonexistent:/usr/sbin/nologin\n' >>"$MOTANKA_ROOT/etc/passwd"
+  printf 'root:x:0:\npipewire:x:990:\ndocker:x:991:\n' >"$MOTANKA_ROOT/etc/group"
+  db 'motanka-core installed 0.1 manual - -' 'bash installed 5.2 manual - -'
+  sl 20261113T090000Z-aaaaaa run-begin install 0.1
+  sl 20261113T090000Z-aaaaaa account-created group pipewire
+  sl 20261113T090000Z-aaaaaa account-created user pipewire
+  sl 20261113T090000Z-aaaaaa run-end ok
+  sl 20261114T090000Z-cccccc menu-install "$MYUID" docker.io apt
+  sl 20261114T090000Z-cccccc account-created group docker
+}
+
+@test "the accounts that packages Motanka installed added are deleted after the purge; a menu install's stay (10.1)" {
+  accounts_fixture
+  remove --dry-run
+  assert_success
+  assert_line --regexp '^  delete +user pipewire  \(added by a package Motanka installed'
+  assert_line --regexp '^  keep +group docker  \(added with a package installed from an Omarchy menu; --purge deletes it\)$'
+  run grep -c pipewire "$MOTANKA_ROOT/etc/passwd"
+  assert_output 1
+  remove --yes
+  assert_success
+  assert_line 'Deleted 1 account(s) packages Motanka installed added: user pipewire'
+  assert_line --regexp '^  kept +group docker  \(added with a package installed from an Omarchy menu\)$'
+  run grep -E '^(user|group)del' "$FAKE_LOG"
+  assert_output 'userdel pipewire'
+  run cat "$MOTANKA_ROOT/etc/group"
+  assert_output $'root:x:0:\ndocker:x:991:'
+}
+
+@test "with --purge the account a menu install added is deleted too" {
+  accounts_fixture
+  remove --yes --purge
+  assert_success
+  assert_line 'Deleted 2 account(s) packages Motanka installed added: user pipewire group docker'
+  run cat "$MOTANKA_ROOT/etc/group"
+  assert_output 'root:x:0:'
+}
+
+@test "an account stays when a sysusers.d file declares it, a process runs as it or a file belongs to it" {
+  accounts_fixture
+  printf 'olduser:x:%s:%s::/nonexistent:/usr/sbin/nologin\nbusy:x:992:992::/:/usr/sbin/nologin\n' "$MYUID" "$MYGID" >>"$MOTANKA_ROOT/etc/passwd"
+  mkdir -p "$MOTANKA_ROOT/usr/lib/sysusers.d"
+  printf 'u pipewire - "system user for pipewire" /nonexistent /usr/sbin/nologin\n' >"$MOTANKA_ROOT/usr/lib/sysusers.d/pipewire.conf"
+  sl 20261113T090000Z-aaaaaa account-created user olduser
+  sl 20261113T090000Z-aaaaaa account-created user busy
+  export FAKE_PGREP_UIDS=992
+  remove --yes
+  assert_success
+  assert_line --regexp '^  kept +user pipewire  \(a sysusers.d file of an installed package declares it\)$'
+  assert_line --regexp '^  kept +group pipewire  \(a sysusers.d file of an installed package declares it\)$'
+  assert_line --regexp '^  kept +user busy  \(a process runs as it\)$'
+  assert_line --regexp '^  kept +user olduser  \(/.* belongs to it\)$'
+  refute_line --partial 'Deleted'
+  run grep -E '^(user|group)del' "$FAKE_LOG"
+  assert_output ''
 }
 
 @test "a package Motanka installed is purged when only packages purged with it need it" {

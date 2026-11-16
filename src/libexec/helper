@@ -44,7 +44,10 @@
 # apt-get runs (write-ahead, 3.9): the requested ones as
 # "menu-install <uid> <name> apt", with the uid of the user who asked
 # (PKEXEC_UID), and dependencies as "pkg-installed <name> <version> auto"
-# (7.7). Packages that were already installed are not recorded.
+# (7.7). Packages that were already installed are not recorded. After the
+# transaction, an account-created line for each account it added
+# (mk_accounts_begin, mk_accounts_end); the Remover keeps those accounts
+# with the menu installs unless --purge.
 #
 # remove simulates "apt-get remove" and refuses with exit 5 when it would
 # install or upgrade anything, or remove a package that is neither
@@ -327,10 +330,12 @@ _h_install() {
     fi
   done
   mk_log info "apt-get install --no-remove --no-install-recommends $* (for uid $uid)"
+  mk_accounts_begin || return 1
   if ! _h_apt_get install --no-remove --no-install-recommends "$@"; then
     mk_error "apt-get install failed; the System_Ledger lists the packages it planned"
     return 1
   fi
+  mk_accounts_end || return 1
 }
 
 # _h_remove <package...>

@@ -89,7 +89,15 @@
 #      /etc/apparmor.d/disable on purge), and the directories of the
 #      purged packages, also listed before step 11, that are left empty
 #      and that no installed package lists are deleted (dpkg leaves a
-#      directory behind when packages purged after its owner filled it)
+#      directory behind when packages purged after its owner filled it);
+#      then the accounts that account-created lines record and that still
+#      exist are deleted, users first (userdel, groupdel): dpkg never
+#      deletes the system accounts packages add (pipewire 26.04 adds the
+#      user pipewire). An account stays, and is listed, when a sysusers.d
+#      file declares it, when a process runs as the user, or when a file
+#      on the root filesystem outside /home belongs to it; an account that
+#      the Helper's run for a menu install created stays with that
+#      package unless --purge
 #  13. run-end ok; the System_Ledger is archived to
 #      /var/log/motanka-ledger-<date> and /var/lib/motanka is deleted
 # Other users' home folders are listed and never touched (10.13). The
@@ -162,6 +170,7 @@ MK_RM_USER="" MK_RM_UID="" MK_RM_GID="" MK_RM_HOME=""
 declare -gA MK_RM_STATUS=() MK_RM_VERSION=() MK_RM_AUTO=()
 MK_RM_MOTANKA=() MK_RM_CONFIGURE=() MK_RM_FORCE=()
 MK_RM_FOREIGN=() MK_RM_CHECKED=() MK_RM_KEPT=() MK_RM_BINARIES=() MK_RM_OTHERS=()
+MK_RM_ACCOUNTS=() MK_RM_ACCOUNTS_KEPT=()
 # Filled by _mk_rm_user_read in the user phase.
 _MK_RM_U_MENU=() _MK_RM_U_DIRS=() _MK_RM_U_FLATPAKS=() _MK_RM_U_BLOCKS=()
 # Paths the planned User_Ledger walk deletes or moves (_mk_rm_user_plan).
@@ -838,6 +847,119 @@ _mk_rm_plan_system() {
     mk_warn "apt cannot simulate the removal yet; the Remover first repairs the Motanka packages and then plans the packages it installed"
   fi
   _mk_rm_plan_binaries
+  _mk_rm_plan_accounts
+}
+
+# --- system accounts --------------------------------------------------------
+
+# _mk_rm_account_id <user|group> <name>: the uid or gid of the account in
+# /etc/passwd or /etc/group, or nothing.
+_mk_rm_account_id() {
+  local file=/etc/group
+  if [[ $1 == user ]]; then
+    file=/etc/passwd
+  fi
+  awk -F: -v n="$2" '$1 == n { print $3; exit }' "$(mk_path "$file")" 2>/dev/null || true
+}
+
+# _mk_rm_plan_accounts: MK_RM_ACCOUNTS gets "user|group TAB <name>" for
+# every account an account-created line records and that exists, users
+# first; MK_RM_ACCOUNTS_KEPT gets those that the Helper's run for a menu
+# install created, unless --purge.
+_mk_rm_plan_accounts() {
+  local run kind name
+  local -a users=() groups=()
+  local -A menu_runs=()
+  MK_RM_ACCOUNTS=() MK_RM_ACCOUNTS_KEPT=()
+  if [[ -z $MK_RM_LEDGER ]]; then
+    return 0
+  fi
+  while IFS= read -r run; do
+    menu_runs[$run]=1
+  done < <(mk_sysledger_read "$MK_RM_LEDGER" 2>/dev/null | awk -F'\t' '$3 == "menu-install" && $6 == "apt" { print $2 }')
+  while IFS=$'\t' read -r run kind name; do
+    if [[ -z $(_mk_rm_account_id "$kind" "$name") ]]; then
+      continue
+    fi
+    if ((!MK_PURGE)) && [[ -n ${menu_runs[$run]:-} ]]; then
+      MK_RM_ACCOUNTS_KEPT+=("$kind $name")
+    elif [[ $kind == user ]]; then
+      users+=("$kind"$'\t'"$name")
+    else
+      groups+=("$kind"$'\t'"$name")
+    fi
+  done < <(mk_sysledger_accounts "$MK_RM_LEDGER" 2>/dev/null)
+  MK_RM_ACCOUNTS=("${users[@]}" "${groups[@]}")
+}
+
+# _mk_rm_sysusers_declares <user|group> <name>: 0 if a sysusers.d file
+# declares the account ("u <name>" declares a user and its group too).
+_mk_rm_sysusers_declares() {
+  local d f
+  for d in /etc/sysusers.d /run/sysusers.d /usr/local/lib/sysusers.d /usr/lib/sysusers.d; do
+    for f in "$(mk_path "$d")"/*.conf; do
+      if [[ -f $f ]] && awk -v k="$1" -v n="$2" '
+        ($1 == "u" || $1 == "u!" || (k == "group" && $1 == "g")) && $2 == n { found = 1; exit }
+        END { exit !found }' "$f"; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+# _mk_rm_owned_file <user|group> <id>: the first file on the root
+# filesystem, outside /home, /proc, /sys, /dev, /run, /snap, /media and
+# /mnt, that belongs to the uid or gid, or nothing.
+_mk_rm_owned_file() {
+  local root test=-gid
+  root=$(mk_path /)
+  root=${root%/}
+  if [[ $1 == user ]]; then
+    test=-uid
+  fi
+  find "${root:-/}" -mindepth 1 -xdev \( -path "$root/proc" -o -path "$root/sys" -o -path "$root/dev" \
+    -o -path "$root/run" -o -path "$root/home" -o -path "$root/snap" -o -path "$root/media" \
+    -o -path "$root/mnt" \) -prune -o "$test" "$2" -print -quit 2>/dev/null || true
+}
+
+# _mk_rm_delete_accounts: step 12, after the purge. Appends "<kind>
+# <name> TAB <reason>" to the caller's kept array for an account that
+# stays and "<kind> <name>" to its accounts array for one that goes.
+_mk_rm_delete_accounts() {
+  local entry kind name id file
+  for entry in "${MK_RM_ACCOUNTS[@]}"; do
+    kind=${entry%%$'\t'*} name=${entry#*$'\t'}
+    id=$(_mk_rm_account_id "$kind" "$name")
+    if [[ -z $id ]]; then
+      continue
+    fi
+    if _mk_rm_sysusers_declares "$kind" "$name"; then
+      kept+=("$kind $name"$'\t'"a sysusers.d file of an installed package declares it")
+      continue
+    fi
+    if [[ $kind == user ]] && pgrep -u "$id" >/dev/null 2>&1; then
+      kept+=("$kind $name"$'\t'"a process runs as it")
+      continue
+    fi
+    file=$(_mk_rm_owned_file "$kind" "$id")
+    if [[ -n $file ]]; then
+      kept+=("$kind $name"$'\t'"${file#"${MOTANKA_ROOT:-}"} belongs to it")
+      continue
+    fi
+    if [[ $kind == user ]]; then
+      userdel "$name" >/dev/null 2>&1 || true
+    else
+      groupdel "$name" >/dev/null 2>&1 || true
+    fi
+    if [[ -n $(_mk_rm_account_id "$kind" "$name") ]]; then
+      mk_warn "cannot delete the $kind account $name"
+      kept+=("$kind $name"$'\t'"${kind}del failed")
+    else
+      mk_log info "deleted the $kind account $name"
+      accounts+=("$kind $name")
+    fi
+  done
 }
 
 # --- the user phase (runs as the invoking user) ---------------------------
@@ -1311,6 +1433,15 @@ _mk_rm_print_plan() {
   for entry in "${MK_RM_KEPT[@]}"; do
     _mk_rm_say keep "${entry%%$'\t'*}" "${entry#*$'\t'}"
   done
+  if ((${#MK_RM_ACCOUNTS[@]} + ${#MK_RM_ACCOUNTS_KEPT[@]} > 0)); then
+    printf '\nAccounts:\n'
+    for entry in "${MK_RM_ACCOUNTS[@]}"; do
+      _mk_rm_say delete "${entry%%$'\t'*} ${entry#*$'\t'}" "added by a package Motanka installed; kept if a sysusers.d file declares it, a process runs as it or a file belongs to it"
+    done
+    for entry in "${MK_RM_ACCOUNTS_KEPT[@]}"; do
+      _mk_rm_say keep "$entry" "added with a package installed from an Omarchy menu; --purge deletes it"
+    done
+  fi
   printf '\nFiles:\n'
   for entry in "${MK_RM_BINARIES[@]}"; do
     if ((MK_PURGE)); then
@@ -1515,7 +1646,7 @@ _mk_rm_prune_dirs() {
 
 _mk_rm_run() {
   local version marker p rc=0
-  local -a planned=() target=() final=() left=() kept=() vanished=()
+  local -a planned=() target=() final=() left=() kept=() vanished=() accounts=()
   local -A before=()
   marker=$(mk_path "$MK_RM_MARKER")
   printf '%s\n' "$$" >"$marker" || mk_die "$MK_EXIT_ERROR" "cannot write $marker; nothing was changed"
@@ -1613,6 +1744,11 @@ _mk_rm_run() {
   fi
   _mk_rm_restore_dirs "$MK_RM_WORK/shared-dirs.txt"
   _mk_rm_prune_dirs "$MK_RM_WORK/purged-dirs.txt"
+  _mk_rm_plan_accounts
+  _mk_rm_delete_accounts
+  for p in "${MK_RM_ACCOUNTS_KEPT[@]}"; do
+    kept+=("$p"$'\t'"added with a package installed from an Omarchy menu")
+  done
 
   # 13. the System_Ledger
   MK_RM_ENDED=1
@@ -1622,6 +1758,9 @@ _mk_rm_run() {
   printf '\nMotanka was removed.\n'
   if ((${#final[@]} > 0)); then
     printf 'Purged %d package(s) Motanka installed: %s\n' "${#final[@]}" "${final[*]}"
+  fi
+  if ((${#accounts[@]} > 0)); then
+    printf 'Deleted %d account(s) packages Motanka installed added: %s\n' "${#accounts[@]}" "${accounts[*]}"
   fi
   if ((${#kept[@]} > 0)) || ((!MK_PURGE && ${#MK_RM_BINARIES[@]} > 0)); then
     printf '\nKept:\n'

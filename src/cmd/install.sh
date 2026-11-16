@@ -35,14 +35,16 @@
 #   6. System_Ledger: run-begin, apps-answer (when the run has an answer,
 #      3.15), then one plan line per simulated action, each fsynced before
 #      the next step (3.9)
-#   7. apt-get install of the two verified .debs (skipped for a package
-#      already installed at that version or newer); apt-get update
+#   7. the account list is saved (mk_accounts_begin); apt-get install of
+#      the two verified .debs (skipped for a package already installed at
+#      that version or newer); apt-get update
 #   8. simulate again with the Host's own configuration (with motanka-apps
 #      when the answer is yes); refuse Foreign changes (exit 5); ledger the
 #      actions the first simulation did not show
 #   9. apt-get install --no-remove --no-install-recommends motanka
 #      motanka-source-<suite>, and
-#      motanka-apps when the answer is yes
+#      motanka-apps when the answer is yes; an account-created line for
+#      each account the transactions added (mk_accounts_end)
 #  10. pkg-installed for every Foreign_Package that a plan line of an
 #      install run names as new and that is installed now, unless already
 #      recorded (3.7; this also completes an interrupted earlier run);
@@ -972,6 +974,7 @@ _mk_install_run() {
     mk_sysledger_plan "$raw" || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   done <"$d/plan.txt"
 
+  mk_accounts_begin || mk_die "$MK_EXIT_ERROR" "cannot save the account list; nothing was changed"
   _mk_install_local_debs
   mk_info "apt-get update"
   _mk_install_apt -q update ||
@@ -990,6 +993,7 @@ _mk_install_run() {
   _mk_install_apt install -y --no-remove --no-install-recommends "${MK_INSTALL_PKGS[@]}" ||
     mk_die "$MK_EXIT_ERROR" "apt-get could not install ${MK_INSTALL_PKGS[*]}; the System_Ledger records the plan, and 'sudo motanka install' resumes"
 
+  mk_accounts_end || mk_die "$MK_EXIT_ERROR" "cannot write the System_Ledger"
   _mk_install_record_packages
   _mk_install_close_interrupted
   MK_INSTALL_ENDED=1

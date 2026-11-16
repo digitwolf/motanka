@@ -151,7 +151,8 @@ flowchart TD
   F --> G[dpkg --configure -a for motanka-* only]
   G --> H[apt-get purge motanka motanka-*]
   H --> I[remove ledgered Foreign_Packages: still auto, no other dependents]
-  I --> J[list kept menu installs and other users with ledgers]
+  I --> L[delete ledgered accounts no sysusers.d file, process or file still needs]
+  L --> J[list kept menu installs and other users with ledgers]
   J --> K[archive System_Ledger to /var/log/motanka-ledger-DATE, delete /var/lib/motanka]
 ```
 
@@ -403,6 +404,7 @@ pkg-installed    <name>  <version>  auto|manual
 pkg-adopted      <name>  <version>
 pkg-released     <name>  <version>
 menu-install     <uid>  <name>  apt|binary
+account-created  user|group  <name>
 apps-answer      yes|no  flag|question|default
 run-end          ok|failed
 ```
@@ -410,6 +412,8 @@ run-end          ok|failed
 `pkg-adopted` is written by the first update after a release upgrade (an installed Motanka_Package is a build for another release than the running one) for each package the release upgrader installed or kept only for Motanka: marked automatically installed, named by no `pkg-installed` or `pkg-adopted` line, removed by a simulated `apt-get --auto-remove purge <every Motanka_Package>` and not by a simulated `apt-get autoremove`. Both simulations ignore Suggests (`-o APT::AutoRemove::SuggestsImportant=false`), as the release upgrader's own cleanup does: `libarchive13t64`, which `tesseract-ocr` needs and only `e2fsprogs` suggests, is a package the upgrader removes on a system without Motanka. These are new dependencies the upgrader installed for packages Motanka installed (`glycin-loaders` for `librsvg2-2` on 26.04), and packages that only Motanka's packages still needed, so the upgrader kept them where it would otherwise have removed them. apt keeps every package that an installed package's Depends or Recommends names, so nothing a package outside Motanka needs or recommends is adopted. The Remover treats a `pkg-adopted` name as a Foreign_Package installed as a dependency, so 10.7 and 10.8 hold after a release upgrade (11.4). Without these lines the Remover keeps the libraries Motanka installed, because the unledgered new dependencies depend on them.
 
 `pkg-released` is written by the same update for each recorded Foreign_Package (`pkg-installed` or `pkg-adopted`) that is marked automatically installed and that the first simulation keeps: a package outside Motanka depends on it or recommends it after the release upgrade (`sos` 26.04 recommends `util-linux-extra`, which Motanka installed on 24.04). A system that never had Motanka gets such a package from the upgrader, so the Remover keeps it: `mk_sysledger_packages` and the Remover's candidates leave out a name whose last line is `pkg-released`; a later `pkg-installed` or `pkg-adopted` line, or a new install in a plan line, makes it Motanka's again. A Recommends that was already unmet before the install and is still there after the upgrade also releases the package; that case needs a package removed by hand from a system installed with its Recommends.
+
+`account-created` is written after each apt transaction of the Installer, the Updater and the Helper for every account in `/etc/passwd` (user) or `/etc/group` (group) that was not there before it: a package's sysusers.d file or maintainer script adds system accounts, and dpkg never deletes them (`pipewire` on 26.04 adds the user and group `pipewire`, which a server image does not have). The list before the transaction is saved to `/var/lib/motanka/accounts.pre` and deleted once the lines are written; a run interrupted during its transaction leaves the file, and the next run (a resumed install, an update, a menu install) keeps the older list, so the accounts are still recorded. After its purge the Remover deletes each recorded account that exists, users first (`userdel`, which also deletes the user's group of the same name, then `groupdel`), and keeps and lists one that a sysusers.d file still declares, that a process runs as, or that owns a file on the root filesystem outside `/home`, `/proc`, `/sys`, `/dev`, `/run`, `/snap`, `/media` and `/mnt`. An account recorded by a run that also has `menu-install … apt` lines (the Helper's) stays with the menu-installed package unless `--purge`.
 
 `apps-answer` records an install run's answer to the Motanka_Apps question (3.15): `flag` for `--apps` or `--no-apps`, `question` for an answer given at the question, `default` for no without a question (`--yes` without `--apps`, or no terminal to ask on). The Installer writes it right after `run-begin`, and only when `motanka-apps` was not installed when the run started. A run that ends on the "nothing to change" path of 3.10 writes no line, so its answer is not recorded. The Doctor reports the last `apps-answer` line (12.9).
 
