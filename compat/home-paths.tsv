@@ -140,7 +140,12 @@
 #     ~/.config/update-notifier (update-notifier, from /etc/xdg/autostart),
 #     ~/.config/evolution/**, ~/.local/share/evolution/** and
 #     ~/.config/goa-1.0 (evolution-alarm-notify, from /etc/xdg/autostart,
-#     starts evolution-data-server, which uses GNOME Online Accounts)
+#     starts evolution-data-server, which uses GNOME Online Accounts),
+#     ~/.config/ibus/** and ~/.local/share/ibus-table/** (im-launch, from
+#     /etc/xdg/autostart on 24.04: im-config's automatic choice is IBus,
+#     whose daemon writes its bus address files and starts ibus-table's
+#     engine, which creates its data folder; fcitx5's IBus frontend writes
+#     the address files too)
 #   ~/.gnupg/** (gpg-agent creates ~/.gnupg and private-keys-v1.d when it
 #     starts; on 24.04 its socket is the session's SSH agent, so any SSH
 #     agent client starts it, such as the herdr server that Upstream's
@@ -315,6 +320,13 @@ Videos	desktop
 .config/goa-1.0/**	desktop
 .config/update-notifier	desktop
 .config/update-notifier/**	desktop
+# Started by /etc/xdg/autostart in every session on 24.04 (im-launch, which
+# starts the input method im-config chooses: IBus) and by GNOME's own IBus
+# service.
+.config/ibus	desktop
+.config/ibus/**	desktop
+.local/share/ibus-table	desktop
+.local/share/ibus-table/**	desktop
 
 # --- shared: Shared_Files and other files every session reads
 .bashrc	shared

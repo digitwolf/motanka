@@ -136,13 +136,12 @@ fingerprint() {
 }
 
 # State that any two GNOME logins leave different, with or without Motanka:
-# cupsd rewrites its subscriptions when GNOME's print notifier subscribes,
-# and GNOME keeps its colour profile of the display, its session history,
-# the ibus socket address and nautilus's tag database in the home folder.
-# A line ending in "/" is a tree (test/vm/fpowned.py).
+# GNOME keeps its colour profile of the display, its session history, the
+# ibus socket address and nautilus's tag database in the home folder
+# (cupsd's subscriptions, which GNOME's print notifier changes, are in
+# tools/fpdiff.py's Allowlist). A line ending in "/" is a tree
+# (test/vm/fpowned.py).
 GNOME_LOGIN_STATE=(
-  /etc/cups/subscriptions.conf
-  /etc/cups/subscriptions.conf.O
   "/home/$MV_GUEST_USER/.config/ibus/bus/"
   "/home/$MV_GUEST_USER/.local/share/icc/"
   "/home/$MV_GUEST_USER/.local/share/gnome-shell/session-active-history.json"

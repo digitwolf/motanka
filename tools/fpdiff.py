@@ -17,8 +17,9 @@ File handling:
                   out of every member list (see GDM_GREETER)
   anything else   compared as a set of lines
 
-System Allowlist: apt caches and lists, /var/log, the journal, and the
-backup copies /etc/passwd-, /etc/group-, /etc/shadow- and /etc/gshadow-.
+System Allowlist: apt caches and lists, /var/log, the journal, the
+backup copies /etc/passwd-, /etc/group-, /etc/shadow- and /etc/gshadow-,
+and cupsd's subscription state /etc/cups/subscriptions.conf{,.O}.
 
 Home-folder Allowlist: ~/.cache, ~/.local/state/motanka-removed-*, and the
 paths of class "desktop" in compat/home-paths.tsv (--home-paths), which
@@ -57,6 +58,12 @@ SYSTEM_ALLOW = (
     "etc/group-",
     "etc/shadow-",
     "etc/gshadow-",
+    # cupsd's own state: it rewrites its subscriptions (keeping the previous
+    # copy as .O) when a client subscribes to printer events, as GNOME's
+    # print notifier and the print applet do at any graphical login, and
+    # when a subscription's lease expires.
+    "etc/cups/subscriptions.conf",
+    "etc/cups/subscriptions.conf.O",
 )
 
 # Home-folder paths, matched component by component from the home folder.
