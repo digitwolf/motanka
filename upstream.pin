@@ -8,4 +8,4 @@
 # stable follows Upstream release tags. edge follows Upstream's default
 # branch, quattro; it stays at the stable commit until the first edge bump.
 stable	ac2690cd7be4f47e4a255f5e2e78d904d436b068	v4.5.0	9e50de71792bff128070905a48258171e5a482c540f515e96ced30a50f88ddc6
-edge	ac2690cd7be4f47e4a255f5e2e78d904d436b068	-	9e50de71792bff128070905a48258171e5a482c540f515e96ced30a50f88ddc6
+edge	ff6533ee8f8193bc181751fefb6182e9a7bffb93	-	49de164cadcee37f75149a60b3beb143d7050838a8f650486e929f70c3371975
